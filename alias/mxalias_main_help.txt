@@ -1,0 +1,38 @@
+.!
+.!  File:       MXALIAS_MAIN.HELP
+.!
+.!  Author:     Hunter Goatley
+.!
+.!  Date:       January 20, 1993
+.!
+.!  Abstract:   Source file to build RUNOFF .RNH file for MXALIAS on-line help
+.!
+.!
+<INIT>
+.!
+<MAIN>
+MXALIAS
+
+MXALIAS is a simple database manager for user-defined MX aliases.  It creates
+the MX alias database and lets the user add, remove, and list defined
+aliases.
+
+Using MXALIAS, short, easy-to-remember addresses like JOE can be equated to
+cumbersome e-mail addresses like smithjb@node1.cluster.school.edu.  Once an MX
+alias is defined, mail can be addressed be simply prefixing the alias name with
+MX%:
+
+<LITERAL>
+MAIL> SEND
+To:     MX%JOE
+Subj:   whatever.....
+<LARETIL>
+
+A major advantage of using MXALIAS instead of VMS logical names is that MX
+aliases are only used by MX, whereas logical names are primarily used for file
+specifications.  Using logical names for mail addresses can cause some
+unexpected error messages when trying to create a file whose name matches a
+mail logical name.
+
+To run MXALIAS, just type MXALIAS at the DCL prompt ($). Extensive on-line help
+for MXALIAS is available by typing HELP at the MXalias> prompt.

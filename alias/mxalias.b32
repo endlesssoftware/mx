@@ -1,0 +1,1478 @@
+%TITLE	'MXALIAS'
+MODULE MXALIAS (MAIN = main, IDENT = '01-008') = 
+BEGIN
+!++
+!
+!  Facility:	MXALIAS
+!
+!  Author:	Hunter Goatley
+!
+! Copyright (c) 2008, Hunter Goatley.
+! 
+! All rights reserved.
+! 
+! Redistribution and use in source and binary forms, with or without
+! modification, are permitted provided that the following conditions
+! are met:
+! 
+!     * Redistributions of source code must retain the above
+!       copyright notice, this list of conditions and the following
+!       disclaimer.
+!     * Redistributions in binary form must reproduce the above
+!       copyright notice, this list of conditions and the following
+!       disclaimer in the documentation and/or other materials provided
+!       with the distribution.
+!     * Neither the name of the copyright owner nor the names of any
+!       other contributors may be used to endorse or promote products
+!       derived from this software without specific prior written
+!       permission.
+! 
+! THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
+! "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
+! LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
+! A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
+! OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
+! SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
+! LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
+! DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
+! THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
+! (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
+! OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+!
+!  Date:	December 18, 1992
+!
+!  Abstract:
+!
+!	MXALIAS is the MX alias database manager.  MX aliases can be
+!	ADDed, MODIFYed, REMOVEd, and DIRECTORYed.
+!
+!  Modified by:
+!
+!	01-008		Hunter Goatley		17-DEC-1997 07:26
+!		Use MX_FMT_LCL_ADDR to supply default host name on address.
+!
+!	01-007		Hunter Goatley		17-JUL-1997 11:44
+!		Use CMD_USE, which was unused before.
+!
+!   	01-006	    	Madison	    	    	06-JAN-1997
+!   	    	Eliminate use of MDMLIB routines.
+!
+!	01-005		Hunter Goatley		19-JUN-1996 01:33
+!		Added support for multiple addresses for an alias.
+!		Addresses are stored in the file in the address field,
+!		separated by NULL characters.  The NULL characters are
+!		handled at run-time by MX_MAILSHR to handle multiple
+!		addresses.
+!
+!	01-004		Hunter Goatley		 3-JAN-1994 13:41
+!		$RELEASE records on $GETs.  Modified CMD_ADD to accept
+!		addresses with quotes.  Unlike VMS Mail, MXALIAS expects
+!		double-quote characters in an address---it converts them
+!		to single-quotes for use by MX_MAILSHR.
+!
+!	01-003		Hunter Goatley		25-APR-1993 17:11
+!		Modifed CMD_ADD to not allow aliases to begin with "_"
+!		since VMS Mail strips that off (to prevent forwarding).
+!
+!	01-002		Hunter Goatley		25-MAR-1993 12:17
+!		Added XABPRO so that alias database is created with
+!		(S:RWE,O:RWE,,) to avoid accidental deletions.
+!
+!	01-001		Hunter Goatley		23-FEB-1993 13:46
+!		Modified CMD_ADD to check for the existence of a logical
+!		name that matches the alias and print a warning if so.
+!
+!	01-000		Hunter Goatley		19-JAN-1993 13:18
+!		Original version.
+!
+!--
+
+LIBRARY 'SYS$LIBRARY:STARLET';			!Pull stuff from STARLET
+LIBRARY 'MX_SRC_COMMON:MX';
+LIBRARY 'MX_SRC_COMMON:MX_LCLDEFS';
+
+SWITCHES ADDRESSING_MODE (EXTERNAL = GENERAL, NONEXTERNAL = WORD_RELATIVE);
+
+FORWARD ROUTINE
+	main,					!Main entry point
+	cmd_add,				!Add an alias
+	cmd_remove,				!Remove an alias
+	cmd_dir,				!List defined aliases
+	cmd_help,				!Provide on-line help
+	cmd_exit,				!EXIT/QUIT command
+	cmd_use,				!USE command
+	cmd_show,				!SHOW command
+	display_alias,				!Display alias info
+	open_alias_file,			!Open the alias database file
+	alt_show_output,			!Write to a file
+	main_handler				!Condition handler
+	;
+
+EXTERNAL ROUTINE
+	hg$get_input,
+	PARSE_MBOX,
+	MX_FMT_LCL_ADDR,
+	CLI$DCL_PARSE,
+	CLI$DISPATCH,
+	CLI$GET_VALUE,
+	CLI$PRESENT,
+	LIB$GET_FOREIGN,
+	LIB$GET_INPUT,
+	LIB$PUT_OUTPUT,
+	LIB$SYS_FAO,
+	LBR$OUTPUT_HELP,
+    	STR$APPEND,
+	STR$CONCAT,
+	STR$COPY_DX,
+	STR$COPY_R,
+	STR$FIND_FIRST_NOT_IN_SET,
+	STR$MATCH_WILD,
+	STR$TRIM,
+	STR$UPCASE
+	;
+
+EXTERNAL
+	mxalias_cld_tables;
+
+EXTERNAL LITERAL
+	CLI$_NEGATED,
+	CLI$_PRESENT,
+	STR$_MATCH,
+	MXALIAS__FILCREAT,
+	MXALIAS__ADDED,
+	MXALIAS__MODIFIED,
+	MXALIAS__REMOVED,
+	MXALIAS__ALIASFIL,
+	MXALIAS__ALRDY,
+	MXALIAS__LNMEXISTS,
+	MXALIAS__ADDERR,
+	MXALIAS__MODERR,
+	MXALIAS__REMERR,
+	MXALIAS__NOSUCHID,
+	MXALIAS__SHONONE,
+	MXALIAS__SHOERR,
+	MXALIAS__NOMODS,
+	MXALIAS__ALTOOLONG,
+	MXALIAS__ADTOOLONG,
+	MXALIAS__ALINVCHAR,
+	MXALIAS__COTOOLONG,
+	MXALIAS__INVALIAS,
+	MXALIAS__INVADDR,
+	MXALIAS__NOOPNOUT,
+	MXALIAS__ERROPN,
+	MXALIAS__INVFILE,
+	MXALIAS__INVBGN;
+
+MACRO
+	errchk (variable) =			!Signal any errors
+		IF NOT (.variable) THEN SIGNAL (.variable)
+	%,
+	reterrchk (variable) =			!Return any errors
+		IF NOT (.variable) THEN RETURN (.variable)
+	%,
+	retnosignal (variable) =		!Return an error, inhibiting
+		RETURN (variable OR STS$M_INHIB_MSG)	!... signalling
+	%,
+	seq_rab (rab) =
+		rab [RAB$B_RAC] = RAB$C_SEQ
+	%,
+	key_rab (rab) =
+		rab [RAB$B_RAC] = RAB$C_KEY
+	%,
+	return_if_not_open (fab) =
+		IF (.fab[FAB$W_IFI] EQLU 0) THEN RETURN(.status);
+	%,
+
+	translate_char (str, old, new) =
+		BEGIN
+		LOCAL ptr : REF $BBLOCK;
+		ptr = .str [DSC$A_POINTER];
+		DECR i FROM .str [DSC$W_LENGTH] TO 1 DO
+		    BEGIN
+		    IF (CH$RCHAR (.ptr) EQLU old)
+		    THEN
+			CH$WCHAR (new, .ptr);
+		    ptr = .ptr + 1;
+		    END;
+		END
+	%;
+
+
+OWN
+	alias_buffer	: $BBLOCK[alias_s_maxrec],
+	alias_filename	: $BBLOCK[NAM$C_MAXRSS],
+	alias_rfilename	: $BBLOCK[NAM$C_MAXRSS],
+	alias_xabpro	: $XABPRO (
+		PRO = (RWE,RWE,,)
+		),
+	alias_xabkey	: $XABKEY (		!XAB to describe key for output
+		KREF = 0,			!...  Key 0
+		POS = 0,			!...  Starts at offset 0
+		SIZ = alias_s_alias,		!...  Size is 8 characters
+		NXT = alias_xabpro		!Point to the $XABKEY
+		),
+	alias_nam : $NAM (
+		ESA = alias_filename,
+		ESS = %ALLOCATION(alias_filename),
+		RSA = alias_rfilename,
+		RSS = %ALLOCATION(alias_rfilename)
+		),
+	alias_fab : $FAB (			!FAB for output file
+		FNM = mx_alias_file_spec,	!File name (from MX_LCLDEFS)
+		DNM = mx_alias_file_def,	!Default file spec (MX_LCLDEFS)
+		FAC = (PUT,UPD,DEL,GET),	!Access is put and update
+		FOP = (MXV),			!File operations - maximize ver
+		RFM = VAR,			!Variable length records
+		RAT = CR,			!Carriage return format
+		ORG = IDX,			!File organization - sequential
+		SHR = (GET,PUT,UPD,DEL,MSE),	!Allow other access
+		NAM = alias_nam,		!NAM block to receive filename
+		XAB = alias_xabkey		!XAB for the protection
+		),
+	alias_rab : $RAB (			!Indexed RAB for output file
+		FAB = alias_fab,		!The related FAB
+		RAC = KEY,			!Record access is keyed
+		KRF = 0,			!Referenced via primary key
+		KSZ = alias_s_alias,		!Size of key is 8
+		RBF = alias_buffer,
+		UBF = alias_buffer,
+		USZ = %ALLOCATION(alias_buffer)
+		),
+	output_fab	: $FAB_DECL,
+	output_rab	: $RAB_DECL;
+
+BIND
+	cli_verb	= %ASCID'$VERB',
+	cli_alias	= %ASCID'ALIAS',
+	cli_address	= %ASCID'ADDRESS',
+	cli_description	= %ASCID'DESCRIPTION',
+	cli_confirm	= %ASCID'CONFIRM',
+	cli_output	= %ASCID'OUTPUT',
+	cli_file	= %ASCID'FILE',
+	cli_full	= %ASCID'FULL',
+	mxalias_prompt	= %ASCID'MXalias> ',
+	null_line	= %ASCID'',
+	valid_alias_chars = %ASCID'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-_$.',
+	show_header1	= %ASCID'MX Alias              Description',
+	show_header2	= %ASCID'------------          -----------';
+
+
+%SBTTL	'MAIN'
+ROUTINE main =
+BEGIN
+!+
+!
+!  Routine:	MAIN
+!
+!  Functional Description:
+!
+!	This routine is the main routine for MXALIAS.
+!
+!  Formal parameters:
+!
+!	None.
+!
+!  Implicit inputs:
+!
+!	None.
+!
+!  Outputs:
+!
+!	None.
+!
+!  Returns:
+!
+!	R0	- Status
+!
+!-
+OWN
+	cmdline		: $BBLOCK[DSC$K_S_BLN];
+
+REGISTER
+	status		: UNSIGNED LONG;
+
+    ENABLE main_handler;			!Set up a condition handler
+
+    INIT_DYNDESC(cmdline);
+    status = LIB$GET_FOREIGN (cmdline);		!Get the foreign command line
+
+    IF (.cmdline[DSC$W_LENGTH] GTRU 0)		!Command from the DCL cmd line?
+    THEN					!Yes,
+	BEGIN
+	status = CLI$DCL_PARSE(			!Parse this command (only)
+			cmdline,		!...the foreign command line
+			mxalias_cld_tables,	!...the CLI table
+			hg$get_input,		!...the parameter routine
+			hg$get_input);		!...the prompt routine
+	IF (.status)				!No errors parsing?
+	THEN
+	    status=CLI$DISPATCH();		!Dispatch to the verb routine
+
+	END
+    ELSE
+	WHILE 1 DO				!No, (infinite) CLI loop
+	BEGIN
+	status = CLI$DCL_PARSE(			!Parse the next command
+			0,			!...prompt for the command
+			mxalias_cld_tables,	!...the table to use
+			hg$get_input,		!...the parameter routine
+			hg$get_input,		!...the prompt routine
+			mxalias_prompt);	!...the command prompt
+	IF (.status)				!Did it go ok?
+	THEN
+	    status = CLI$DISPATCH();		!Dispatch to the verb routine
+         IF (.status EQLU RMS$_EOF)		!No, did they press Ctrl-Z?
+	 THEN					!Yes,
+	     BEGIN
+	     IF (.alias_fab[FAB$W_IFI] NEQU 0)	!If the file is open
+	     THEN
+		 $CLOSE (FAB = alias_fab);
+	     $EXIT (CODE = SS$_NORMAL);
+	     END;
+	END;					!End of CLI loop
+
+    IF (.alias_fab[FAB$W_IFI] NEQU 0)		!If the file is open
+    THEN
+	$CLOSE (FAB = alias_fab);
+
+  retnosignal (.status);			!Return status (don't print)
+
+END;						!End of routine
+
+
+%SBTTL	'CMD_ADD'
+GLOBAL ROUTINE cmd_add =
+BEGIN
+!+
+!
+!  Routine:	CMD_ADD
+!
+!  Functional Description:
+!
+!	This routine is called to add an alias to the MX alias file.
+!
+!  Formal parameters:
+!
+!	None.
+!
+!  Implicit inputs:
+!
+!	None.
+!
+!  Outputs:
+!
+!	None.
+!
+!  Returns:
+!
+!	R0	- Status
+!
+!  Side effects:
+!
+!	Causes MX alias database to be opened.
+!
+!-
+LOCAL
+	the_alias	: $BBLOCK[DSC$K_S_BLN],
+	address		: $BBLOCK[DSC$K_S_BLN],
+	address_list	: $BBLOCK[DSC$K_S_BLN],
+	descr		: $BBLOCK[DSC$K_S_BLN],
+	user		: $BBLOCK[DSC$K_S_BLN],
+	domain		: $BBLOCK[DSC$K_S_BLN],
+	ptr		: REF $BBLOCK,
+	modify, modaddr, modcmt;
+
+REGISTER
+	status;
+
+    INIT_DYNDESC(the_alias,address,address_list,descr,user,domain);
+
+    !
+    !  Get the command verb to determine if it's ADD or MODIFY.
+    !
+    status = CLI$GET_VALUE (cli_verb, the_alias);
+    errchk(status);
+    modify = (IF (CH$RCHAR (.the_alias[DSC$A_POINTER]) EQLU %C'M')
+	      THEN 1			!Starts with "M", it's MODIFY
+	      ELSE 0);			!Otherwise, it's ADD
+
+    !
+    !  Get the alias.
+    !
+    status = CLI$GET_VALUE (cli_alias, the_alias);
+    errchk(status);
+    STR$TRIM (the_alias, the_alias);
+    STR$UPCASE (the_alias, the_alias);
+
+    !
+    !  Make sure it's not too long and doesn't have a blank in it.
+    !
+    IF (.the_alias[DSC$W_LENGTH] EQLU 0)
+    THEN
+	SIGNAL (status = MXALIAS__INVALIAS)
+    ELSE
+	IF (.the_alias[DSC$W_LENGTH] GTRU alias_s_alias)
+	THEN
+	    SIGNAL ((status = MXALIAS__ALTOOLONG), 1, alias_s_alias)
+	ELSE
+	    IF (STR$FIND_FIRST_NOT_IN_SET(the_alias, valid_alias_chars) NEQU 0)
+	    THEN
+		SIGNAL (status = MXALIAS__ALINVCHAR)
+	    ELSE
+		IF (CH$RCHAR(.the_alias[DSC$A_POINTER]) EQLU %C'_')
+		THEN
+		    BEGIN
+		    the_alias [DSC$W_LENGTH] = 1;
+		    SIGNAL (status = MXALIAS__INVBGN, 1, the_alias);
+		    END;
+    !
+    !  See if the alias is defined as a logical.  If so, let the user
+    !  know.
+    !
+    IF NOT(.modify) AND ($TRNLNM(TABNAM=%ASCID'LNM$FILE_DEV',
+				 LOGNAM=the_alias))
+    THEN
+	SIGNAL (MXALIAS__LNMEXISTS, 1, the_alias);
+
+    IF (modaddr = (CLI$PRESENT (cli_address) EQLU CLI$_PRESENT))
+    THEN
+	BEGIN
+	WHILE (CLI$GET_VALUE (cli_address, address)) DO
+	    BEGIN
+!	CLI$GET_VALUE (cli_address, address);
+	STR$TRIM(address,address);
+	!
+	!  Make sure it's a valid RFC822 address.
+	!
+	IF CH$FAIL(CH$FIND_CH(.address[DSC$W_LENGTH],
+			.address[DSC$A_POINTER], %C'@'))
+	THEN
+	    MX_FMT_LCL_ADDR (MX__FMT_TO OR FMT_M_LOWERCASE, address, address);
+
+	!
+	!  Convert any "'" quotes to double-quotes so that the address
+	!  can be verified as being a valid RFC822 address.
+	!
+	translate_char (address, %C'''', %C'"');
+	!
+	!  Parse the address to make sure it's in a valid format.
+	!
+	IF (PARSE_MBOX (address, user, domain, 0))
+	THEN
+	    BEGIN
+	    !
+	    !  Convert any double-quotes (") to single-quotes (') so that
+	    !  the address is accepted by MX_MAILSHR OK.
+	    !
+	    translate_char (user, %C'"', %C'''');
+	    !
+	    !  Now put the user and domain back together again.
+	    !
+	    STR$CONCAT (address, user, %ASCID'@', domain);
+	    IF (.address[DSC$W_LENGTH] GTRU alias_s_addr)
+	    THEN
+		SIGNAL ((status = MXALIAS__ADTOOLONG), 1, alias_s_addr);
+	    END
+	ELSE
+	    SIGNAL ((status = MXALIAS__INVADDR), 1, address);
+	IF (.status)
+	THEN
+	    BEGIN
+	    IF (.address_list[DSC$W_LENGTH] EQLU 0)
+	    THEN
+		STR$COPY_DX (address_list, address)
+	    ELSE
+		STR$CONCAT (address_list, address_list, %ASCID %CHAR(0), address);
+	    END;
+	END;
+	END;
+
+    IF (.address_list [DSC$W_LENGTH] GTRU alias_s_addr)
+    THEN
+	SIGNAL ((status = MXALIAS__ADTOOLONG), 1, alias_s_addr);
+
+    IF ((modcmt = CLI$PRESENT(cli_description)) EQLU CLI$_PRESENT)
+    THEN
+	BEGIN
+	CLI$GET_VALUE(cli_description, descr);
+	IF (.descr[DSC$W_LENGTH] GTRU alias_s_desc)
+	THEN
+	    SIGNAL ((status = MXALIAS__COTOOLONG), 1, alias_s_desc);
+	END
+    ELSE
+	IF (.modcmt EQLU CLI$_NEGATED)
+	THEN
+	    modcmt = CLI$_PRESENT;
+
+    IF NOT(.status)
+    THEN
+	BEGIN
+	FREE_STRINGS (the_alias, address, address_list, descr, user, domain);
+	retnosignal (.status);
+	END;
+
+    IF (.modify AND NOT (.modcmt OR .modaddr))
+    THEN
+	BEGIN
+	SIGNAL (MXALIAS__NOMODS, 1, the_alias);
+	RETURN (SS$_NORMAL);
+	END;
+
+    !
+    !  Now we have all the informtion.  Open/create the alias database
+    !  and format the output record.
+    !
+    status = open_alias_file();
+    !
+    !  Return if an error occurred *or* if the database was just created
+    !  and the command was MODIFY.  If it was ADD, then go ahead and add it.
+    !
+    IF NOT(.status) OR ((.status EQLU MXALIAS__FILCREAT) AND (.modify))
+    THEN
+	retnosignal(.status);
+    key_rab (alias_rab);			!Set up for keyed read
+	
+    CH$COPY(.the_alias[DSC$W_LENGTH], .the_alias[DSC$A_POINTER], %C' ',
+		alias_s_alias, alias_buffer);
+    alias_rab [RAB$B_KSZ] = alias_s_alias;
+    alias_rab [RAB$L_KBF] = alias_buffer;
+
+    IF .modify					!If we're modifying, then
+    THEN					!... read the target record
+	BEGIN					!... and set up whichever
+	LOCAL __x;				!... descriptor is null.
+	status = $GET (RAB = alias_rab);	!Get the current record
+	IF NOT(.status)				!If an error occurred,
+	THEN					!... print one of our own
+	    BEGIN				!... error messages and
+	    IF (.status EQLU RMS$_RNF)		!... return the status
+	    THEN
+		SIGNAL (MXALIAS__NOSUCHID, 1, the_alias)
+	    ELSE
+		SIGNAL (MXALIAS__MODERR, 1, the_alias, .status);
+	    FREE_STRINGS (the_alias, address, address_list, descr, user, domain);
+	    retnosignal(.status);
+	    END;
+
+	ptr = CH$PLUS (alias_buffer, alias_s_alias);	!Point to data
+	__x = CH$RCHAR_A (ptr);			!Get the address length
+	IF (.address_list [DSC$W_LENGTH] EQLU 0)	!Address was not modified
+	THEN
+	    STR$COPY_R (address_list, __x, .ptr);
+	ptr = CH$PLUS (.ptr, .__x);
+	__x = CH$RCHAR_A (ptr);
+	IF (.descr[DSC$W_LENGTH] EQLU 0) AND NOT(.modcmt)
+	THEN
+	    STR$COPY_R (descr, __x, .ptr);
+	END;
+
+    !
+    !  The key was copied to the buffer above.  Now copy in the address
+    !  and the description.  These are stored as ASCIC strings behind the
+    !  alias key.
+    !
+    ptr = CH$PLUS (alias_buffer, alias_s_alias);
+    CH$WCHAR_A (.address_list[DSC$W_LENGTH], ptr);
+    CH$MOVE (.address_list[DSC$W_LENGTH], .address_list[DSC$A_POINTER], .ptr);
+    ptr = CH$PLUS (.ptr, .address_list[DSC$W_LENGTH]);
+    CH$WCHAR_A (.descr[DSC$W_LENGTH], ptr);
+    CH$MOVE (.descr[DSC$W_LENGTH], .descr[DSC$A_POINTER], .ptr);
+    ptr = CH$PLUS (.ptr, .descr[DSC$W_LENGTH]);
+    alias_rab [RAB$W_RSZ] = CH$DIFF(.ptr, alias_buffer);
+    alias_rab [RAB$L_RBF] = alias_buffer;
+
+    status = (IF .modify
+	      THEN $UPDATE (RAB = alias_rab)
+	      ELSE $PUT (RAB = alias_rab));
+
+    $RELEASE (RAB = alias_rab);
+
+    IF (.status)
+    THEN
+	SIGNAL ((IF (.modify) THEN MXALIAS__MODIFIED ELSE MXALIAS__ADDED),
+		1, the_alias)
+    ELSE
+	SIGNAL ((IF (.modify) THEN MXALIAS__MODERR ELSE MXALIAS__ADDERR),
+		1, the_alias, (IF (.status EQLU RMS$_DUP)
+			   THEN MXALIAS__ALRDY ELSE .status));
+
+    FREE_STRINGS (the_alias, address, address_list, descr, user, domain);
+    retnosignal (.status);
+
+END;
+
+
+%SBTTL	'CMD_REMOVE'
+GLOBAL ROUTINE cmd_remove =
+BEGIN
+!+
+!
+!  Routine:	CMD_REMOVE
+!
+!  Functional Description:
+!
+!	This routine is called to remove an alias from the database.
+!
+!  Formal parameters:
+!
+!	None.
+!
+!  Implicit inputs:
+!
+!	None.
+!
+!  Outputs:
+!
+!	None.
+!
+!  Returns:
+!
+!	R0	- Status
+!
+!  Side effects:
+!
+!	Causes MX alias database to be opened.
+!
+!-
+LOCAL
+	the_alias	: $BBLOCK[DSC$K_S_BLN],
+	response	: $BBLOCK[DSC$K_S_BLN],
+	confirm, remove_it,
+	status;
+
+    !
+    ! Return if an error occurs opening the database or if it was just created.
+    !
+    IF NOT(status = open_alias_file()) OR (.status EQLU MXALIAS__FILCREAT)
+    THEN
+	retnosignal(.status);
+
+    INIT_DYNDESC (the_alias, response);
+    remove_it = 1;
+
+    CLI$GET_VALUE (cli_alias, the_alias);
+    STR$TRIM (the_alias, the_alias);
+    STR$UPCASE (the_alias, the_alias);
+    confirm = (CLI$PRESENT (cli_confirm) NEQU CLI$_NEGATED);
+
+    !
+    !  Set up the key buffer
+    !
+    CH$COPY (.the_alias[DSC$W_LENGTH], .the_alias[DSC$A_POINTER], %C' ',
+		alias_s_alias, alias_buffer);
+    alias_rab [RAB$B_KSZ] = alias_s_alias;
+    alias_rab [RAB$L_KBF] = alias_buffer;
+    key_rab (alias_rab);
+
+    IF (status = $FIND (RAB = alias_rab))		!If the record exists,
+    THEN						!... then see if we
+	BEGIN						!... should confirm
+	IF (.confirm)					!... before deleting it
+	THEN
+	    BEGIN
+	    LOCAL __prompt : $BBLOCK[DSC$K_S_BLN],
+		  __x, __offset, __addr : REF $BBLOCK, __length;
+	    INIT_DYNDESC (__prompt);
+	    status = $GET (RAB = alias_rab);		!Get the info for prompt
+	    __addr = CH$PLUS (alias_buffer, alias_s_alias);
+	    __length = CH$RCHAR (.__addr);
+	    WHILE ((__offset = CH$FIND_CH (.__length, .__addr, %CHAR(0))) NEQU 0) DO
+			CH$WCHAR (%C',', .__offset);
+	    LIB$SYS_FAO (%ASCID'Remove !AS <!AC> [N]? ', 0, __prompt,
+			the_alias, .__addr);
+	    status = LIB$GET_INPUT (response, __prompt);
+	    STR$UPCASE(response, response);
+	    IF (.status EQLU RMS$_EOF) OR (.response[DSC$W_LENGTH] EQLU 0)
+	    THEN
+		remove_it = 0
+	    ELSE
+		IF (.response[DSC$W_LENGTH] GEQU 1) AND
+		   (CH$RCHAR(.response[DSC$A_POINTER]) NEQU %C'Y')
+		THEN
+		    remove_it = 0;
+	    END;
+
+	status = (IF .remove_it				!Delete the record
+		  THEN					!... if it's OK to do
+		      $DELETE (RAB = alias_rab)		!... so
+		  ELSE					!Otherwise, return
+		      SS$_NORMAL);			!... NORMAL status
+
+	END;	! IF (.status = $FIND.....
+
+    IF (.remove_it)				!If we were to remove it
+    THEN					!... and if we did it OK,
+	IF (.status)				!... then print a message
+	THEN					!... saying so, otherwise
+	    SIGNAL (MXALIAS__REMOVED, 1, the_alias)	!... print the appropriate
+	ELSE					!... error message.
+	    IF (.status EQLU RMS$_RNF)
+	    THEN
+		SIGNAL (MXALIAS__NOSUCHID, 1, the_alias)
+	    ELSE
+		SIGNAL (MXALIAS__REMERR, 1, the_alias, .status);
+
+    FREE_STRINGS (the_alias, response);
+
+    retnosignal (.status);
+
+END;
+
+
+%SBTTL	'CMD_DIR'
+GLOBAL ROUTINE cmd_dir =
+BEGIN
+!+
+!
+!  Routine:	CMD_DIR
+!
+!  Functional Description:
+!
+!	This routine is called to show the defined aliases.
+!
+!  Formal parameters:
+!
+!	None.
+!
+!  Implicit inputs:
+!
+!	None.
+!
+!  Outputs:
+!
+!	None.
+!
+!  Returns:
+!
+!	R0	- Status
+!
+!  Side effects:
+!
+!	Causes MX alias database to be opened.
+!
+!-
+LOCAL
+	temp_desc	: $BBLOCK[DSC$K_S_BLN],
+	the_alias	: $BBLOCK[DSC$K_S_BLN],
+	the_key		: $BBLOCK[DSC$K_S_BLN],
+	ptr		: REF $BBLOCK,
+	outrtn, full,
+	wildcard, wildstar, wildpcnt,
+	count,
+	status;
+
+    INIT_DYNDESC (the_alias, the_key);
+    INIT_SDESC (temp_desc, 0, 0);
+
+    !
+    ! Return if an error occurs opening the database or if it was just created.
+    !
+    IF (NOT(status = open_alias_file()) OR (.status EQLU MXALIAS__FILCREAT))
+    THEN
+	retnosignal (.status);
+
+    !
+    !  Use LIB$PUT_OUTPUT to write to SYS$OUTPUT unless /OUTPUT is given,
+    !  in which case we need to create the output file.
+    !
+    outrtn = LIB$PUT_OUTPUT;
+    IF (CLI$PRESENT (cli_output) EQLU CLI$_PRESENT)
+    THEN
+	BEGIN
+	CLI$GET_VALUE (cli_output, the_alias);	!Re-use alias descriptor
+	$FAB_INIT (FAB = output_fab, FNA = .the_alias[DSC$A_POINTER],
+			FNS = MIN(.the_alias[DSC$W_LENGTH], NAM$C_MAXRSS),
+			DNM = 'SYS$DISK:[].LIS', FAC = PUT, FOP = SQO, RAT=CR);
+	status = $CREATE (FAB = output_fab);
+	IF .status
+	THEN
+	    BEGIN
+	    $RAB_INIT (RAB = output_rab, FAB = output_fab, ROP = WBH);
+	    status = $CONNECT (RAB = output_rab);
+	    IF (.status)
+	    THEN
+		outrtn = alt_show_output
+	    ELSE
+		SIGNAL (MXALIAS__NOOPNOUT, 1, the_alias, .status,
+				.output_rab[RAB$L_STV]);
+	    END
+	ELSE
+	    SIGNAL (MXALIAS__NOOPNOUT, 1, the_alias, .status,
+			.output_fab[FAB$L_STV]);
+	END;
+
+    IF NOT(.status) THEN retnosignal (.status);
+
+    full = CLI$PRESENT (cli_full);
+
+    IF CLI$PRESENT (cli_alias)			!If an alias was given, then
+    THEN					!... get it from the CLI
+	BEGIN
+	CLI$GET_VALUE (cli_alias, the_alias);
+	STR$UPCASE (the_alias, the_alias);	!Make sure it's uppercase
+	STR$TRIM (the_alias, the_alias);	!Trim any blanks
+	END
+    ELSE					!Otherwise, just display
+	STR$COPY_DX (the_alias, %ASCID'*');	!... all of the aliases
+
+    !
+    !  Determine whether or not any wildcard characters were given.
+    !
+    wildstar = CH$FIND_CH(.the_alias[DSC$W_LENGTH], .the_alias[DSC$A_POINTER],
+			  %C'*');
+    wildpcnt = CH$FIND_CH(.the_alias[DSC$W_LENGTH], .the_alias[DSC$A_POINTER],
+			  %C'%');
+    IF (wildcard = .wildstar OR .wildpcnt) NEQA 0	!They're both zero
+    THEN
+	wildcard = (IF (.wildstar NEQA 0) AND (.wildpcnt NEQA 0)
+		    THEN
+	    		MIN (.wildstar, .wildpcnt)
+		    ELSE
+	    		MAX (.wildstar, .wildpcnt));
+    !
+    ! Here, wildcard is either null or it points to the first wildcard
+    ! character in the given alias name.
+    !
+    IF (.wildcard EQLA 0)			!If no wildcard, then set
+    THEN					!... up the RAB for a keyed
+	BEGIN					!... read
+	alias_rab [RAB$B_KSZ] = alias_s_alias;
+	alias_rab [RAB$L_KBF] = alias_buffer;
+	CH$COPY (.the_alias[DSC$W_LENGTH], .the_alias[DSC$A_POINTER], %C' ',
+		alias_s_alias, alias_buffer);
+	END
+    ELSE					!Otherwise, use the chars
+	BEGIN					!... before wild char as key
+	alias_rab [RAB$B_KSZ] = CH$DIFF(.wildcard, .the_alias[DSC$A_POINTER]);
+	alias_rab [RAB$L_KBF] = .the_alias[DSC$A_POINTER];
+	END;
+
+    IF (.alias_rab [RAB$B_KSZ] EQLU 0)		!First char was wildcard
+    THEN
+	BEGIN
+	seq_rab (alias_rab);			!Do sequential reads
+	status = $REWIND (RAB = alias_rab);	!Rewind to beginning of file
+	END
+    ELSE
+	BEGIN
+	key_rab (alias_rab);
+	status = $FIND (RAB = alias_rab);
+	END;
+
+    IF (.status EQLU RMS$_RNF)			!If record not found, then
+    THEN					!... signal an error stating
+	BEGIN					!... that the record didn't
+	SIGNAL ((IF (.wildcard EQLA 0)
+		 THEN MXALIAS__NOSUCHID
+		 ELSE MXALIAS__SHONONE), 1, the_alias);	!... exist
+	retnosignal (.status);
+	END;
+
+    status = $GET (RAB = alias_rab);		!Read the record
+    IF (.wildcard EQLA 0)			!If no wildcard, then just
+    THEN					!... display the one matching
+	BEGIN					!... record
+	$RELEASE (RAB = alias_rab);		!Release the record
+	IF NOT(.full)				!If not full, then also
+	THEN					!... display the brief
+	    BEGIN				!... headers
+	    (.outrtn) (null_line);		!Display the headers
+	    (.outrtn) (show_header1);		!...
+	    (.outrtn) (show_header2);		!...
+	    END;
+	display_alias (.outrtn, alias_buffer, full);	!And the alias info
+	count = 1;				!Set flag indicating a match
+	END
+    ELSE					!Here, a wildcard was given
+	BEGIN					!... in the alias name
+	$RELEASE (RAB = alias_rab);		!Release the record
+	count = 0;				!Assume no matches
+	seq_rab (alias_rab);			!Read sequentially from here
+	WHILE (.status) DO			!While a record was read,
+	    BEGIN				!... see if it matches
+	    ptr = CH$FIND_CH (alias_s_alias,	!Find the end of the alias name
+			alias_buffer, %C' ');	!... and build a descriptor
+	    temp_desc[DSC$A_POINTER] = alias_buffer;
+	    temp_desc[DSC$W_LENGTH] = (IF CH$FAIL(.ptr)
+					THEN alias_s_alias
+					ELSE CH$DIFF(.ptr, alias_buffer));
+	    !
+	    !  See if this alias matches the given wildcard alias.
+	    !
+	    IF (STR$MATCH_WILD (temp_desc, the_alias) EQLU STR$_MATCH)
+	    THEN
+		BEGIN				!Here we have a match
+		IF (.count EQLU 0)		!If first match, print headers
+		THEN
+		    BEGIN
+		    IF NOT(.full) THEN		!If not /FULL, then also print
+		        BEGIN			!... brief headers
+		        (.outrtn) (null_line);	!Print null line
+			(.outrtn) (show_header1);
+			(.outrtn) (show_header2);
+			END;
+		    count = 1;
+		    END;
+		display_alias (.outrtn, alias_buffer, full); !Display alias info
+		END;
+
+	    !
+	    !  If the given alias 
+	    !
+	    IF (.alias_rab[RAB$B_KSZ] NEQU 0) AND
+	   	CH$NEQ (.alias_rab[RAB$B_KSZ], alias_buffer,
+			   .alias_rab[RAB$B_KSZ], .the_alias[DSC$A_POINTER])
+	    THEN
+		EXITLOOP;
+
+	    status = $GET (RAB = alias_rab);
+	    END;
+	END;
+
+    IF (.status EQLU RMS$_EOF) THEN status = RMS$_NORMAL;
+
+    IF (.count)
+    THEN
+	(.outrtn) (null_line)
+    ELSE
+	IF (.status) THEN SIGNAL (MXALIAS__SHONONE, 1, the_alias);
+
+    IF NOT(.status)
+    THEN
+	SIGNAL (MXALIAS__SHOERR, 1, the_alias, .status);
+
+    IF (.outrtn NEQA LIB$PUT_OUTPUT) THEN $CLOSE(FAB = output_fab);
+
+    FREE_STRINGS (the_alias, the_key);
+
+    retnosignal (.status);
+
+END;
+
+
+%SBTTL	'CMD_HELP'
+GLOBAL ROUTINE cmd_help =
+BEGIN
+!+
+!
+!  Routine:	CMD_HELP
+!
+!  Functional Description:
+!
+!	This routine is called to display the MXALIAS on-line help.
+!
+!  Formal parameters:
+!
+!	None.
+!
+!  Implicit inputs:
+!
+!	None.
+!
+!  Outputs:
+!
+!	None.
+!
+!  Returns:
+!
+!	R0	- Status
+!
+!  Side effects:
+!
+!
+!-
+LOCAL
+    	topic		: $BBLOCK[DSC$K_S_BLN],
+    	status;
+
+    INIT_DYNDESC (topic);
+    status = CLI$GET_VALUE (%ASCID'HELP_REQUEST', topic);
+    LBR$OUTPUT_HELP (LIB$PUT_OUTPUT, 0, topic, %ASCID'MX_ALIAS_HELPLIB',
+    	%REF (HLP$M_PROMPT OR HLP$M_HELP), hg$get_input);
+
+    FREE_STRINGS (topic);
+    RETURN (SS$_NORMAL);
+
+END;
+
+
+%SBTTL	'CMD_EXIT'
+GLOBAL ROUTINE cmd_exit =
+BEGIN
+!+
+!
+!  Routine:	CMD_EXIT
+!
+!  Functional Description:
+!
+!	This routine is called to exit back to VMS.
+!
+!  Formal parameters:
+!
+!	None.
+!
+!  Implicit inputs:
+!
+!	None.
+!
+!  Outputs:
+!
+!	None.
+!
+!  Returns:
+!
+!	R0	- Status
+!
+!  Side effects:
+!
+!
+!-
+    RETURN (RMS$_EOF);
+
+END;
+
+
+%SBTTL	'CMD_SHOW'
+GLOBAL ROUTINE cmd_show =
+BEGIN
+!+
+!
+!  Routine:	CMD_SHOW
+!
+!  Functional Description:
+!
+!	This routine is called to process the SHOW command.
+!
+!  Formal parameters:
+!
+!	None.
+!
+!  Implicit inputs:
+!
+!	None.
+!
+!  Outputs:
+!
+!	None.
+!
+!  Returns:
+!
+!	R0	- Status
+!
+!  Side effects:
+!
+!
+!-
+LOCAL
+	status;
+
+    status = open_alias_file();
+    IF (.status)
+    THEN
+	BEGIN
+	LOCAL	s : $BBLOCK[DSC$K_S_BLN];
+	INIT_SDESC (s, .alias_nam[NAM$B_RSL], .alias_nam[NAM$L_RSA]);
+	SIGNAL (MXALIAS__ALIASFIL, 1, s);
+	END;
+
+    retnosignal (.status);
+
+END;
+
+
+%SBTTL	'CMD_USE'
+GLOBAL ROUTINE cmd_use =
+BEGIN
+!+
+!
+!  Routine:	CMD_USE
+!
+!  Functional Description:
+!
+!	This routine is called to open another MX alias database.
+!
+!  Formal parameters:
+!
+!	None.
+!
+!  Implicit inputs:
+!
+!	None.
+!
+!  Outputs:
+!
+!	None.
+!
+!  Returns:
+!
+!	R0	- Status
+!
+!  Side effects:
+!
+!
+!-
+LOCAL
+	str		: $BBLOCK[DSC$K_S_BLN],
+	status;
+
+    INIT_DYNDESC (str);
+
+    CLI$GET_VALUE (cli_file, str);
+    IF (.alias_fab [FAB$W_IFI] NEQU 0)		!If there's a database open,
+    THEN					!... go on and close it
+	$CLOSE (FAB = alias_fab);
+
+    alias_fab[FAB$B_FNS] = .str[DSC$W_LENGTH];	!Store the given name as the
+    alias_fab[FAB$L_FNA] = .str[DSC$A_POINTER];	!... file name to open
+
+    status = open_alias_file();
+    IF (.status)
+    THEN
+	BEGIN
+	LOCAL	s : $BBLOCK[DSC$K_S_BLN];
+	INIT_SDESC (s, .alias_nam[NAM$B_RSL], .alias_nam[NAM$L_RSA]);
+	SIGNAL (MXALIAS__ALIASFIL, 1, s);
+	END;
+
+    FREE_STRINGS (str);
+    retnosignal (.status);
+
+END;
+
+
+%SBTTL	'DISPLAY_ALIAS'
+ROUTINE display_alias (outrtn_a, buffer_a, full_a) =
+BEGIN
+!+
+!
+!  Routine:	DISPLAY_ALIAS
+!
+!  Functional Description:
+!
+!	This routine displays alias information.
+!
+!  Formal parameters:
+!
+!	None.
+!
+!  Implicit inputs:
+!
+!	None.
+!
+!  Outputs:
+!
+!	None.
+!
+!  Returns:
+!
+!	R0	- Status
+!
+!  Side effects:
+!
+!
+!-
+BIND
+	buffer	= .buffer_a	: $BBLOCK,
+	full	= .full_a;
+
+BIND
+	hdr_ad		= %ASCID'!20AD  !AC',
+	hdr_a_no_d	= %ASCID'!AD',
+	hdr_alias	= %ASCID'Alias:    !AD',
+	hdr_address	= %ASCID'Address:  !AC',
+	hdr_desc	= %ASCID'Desc:     !AC';
+
+LOCAL
+	fao_buffer	: $BBLOCK[512],
+	fao_out		: $BBLOCK[DSC$K_S_BLN],
+	addr		: REF $BBLOCK,
+	desc		: REF $BBLOCK,
+	alias_length, length, offset,
+	status;
+
+    INIT_SDESC (fao_out, 512, fao_buffer);
+
+    !
+    !  Set up pointers to ASCIC address and description.
+    !
+    addr = CH$FIND_CH (alias_s_alias, buffer, %C' ');	!Look for a blank
+    alias_length = (IF CH$FAIL(.addr)			!Calculate length
+		    THEN alias_s_alias			!... based on whether
+		    ELSE CH$DIFF(.addr, buffer));	!... a blank was found
+    addr = CH$PLUS(buffer, alias_s_alias);
+    length = CH$RCHAR (.addr);
+
+    WHILE ((offset = CH$FIND_CH (.length, .addr+1, %CHAR(0))) NEQU 0) DO
+	CH$WCHAR (%C',', .offset);
+
+    desc = CH$PLUS (.addr, .length) + 1;
+
+    IF NOT(.full)
+    THEN
+	BEGIN
+	!
+	!  Format the string with just the alias and the description.
+	!
+	status = $FAO ((IF CH$RCHAR(.desc) EQLU 0 THEN hdr_a_no_d ELSE hdr_ad),
+			fao_out, fao_out, .alias_length, buffer, .desc);
+	(.outrtn_a) (fao_out);
+	END
+    ELSE
+	BEGIN
+
+	(.outrtn_a) (null_line);		!Print null line
+	status = $FAO (hdr_alias, fao_out, fao_out, .alias_length, buffer);
+	(.outrtn_a) (fao_out);
+
+	fao_out[DSC$W_LENGTH] = 512;
+	status = $FAO (hdr_desc, fao_out, fao_out, .desc);
+	(.outrtn_a) (fao_out);
+
+	fao_out[DSC$W_LENGTH] = 512;
+	status = $FAO (hdr_address, fao_out, fao_out, .addr);
+	(.outrtn_a) (fao_out);
+
+	END;
+			
+    RETURN (.status);
+
+END;
+
+
+%SBTTL	'OPEN_ALIAS_FILE'
+ROUTINE open_alias_file =
+BEGIN
+!+
+!
+!  Routine:	OPEN_ALIAS_FILE
+!
+!  Functional Description:
+!
+!	This routine is called to open/create the MX Alias file.
+!
+!  Formal parameters:
+!
+!	None.
+!
+!  Implicit inputs:
+!
+!	None.
+!
+!  Outputs:
+!
+!	None.
+!
+!  Returns:
+!
+!	R0	- Status
+!
+!  Side effects:
+!
+!
+!-
+LOCAL
+	tmpstr		: $BBLOCK[DSC$K_S_BLN],
+	create_it	: INITIAL(1),
+	created		: INITIAL(0),
+	status2,
+	status;
+
+    IF (.alias_fab[FAB$W_IFI] EQLU 0)		!If the file is not already
+    THEN					!... open, then open it.  If
+	BEGIN					!... the file is not found,
+	$PARSE (FAB = alias_fab);
+	INIT_SDESC (tmpstr, .alias_nam[NAM$B_ESL], .alias_nam[NAM$L_ESA]);
+	IF ((status = $OPEN (FAB = alias_fab)) EQLU RMS$_FNF)
+	THEN					!... then create it.
+	    BEGIN
+	    LOCAL response : $BBLOCK[DSC$K_S_BLN];
+	    INIT_DYNDESC (response);
+	    SIGNAL (MXALIAS__ERROPN, 1, tmpstr, 0,.status);
+	    status2 = LIB$GET_INPUT (response,
+		%ASCID'Do you want to create a new database <Y>? ');
+	    STR$UPCASE(response, response);
+	    IF (.status2 EQLU RMS$_EOF)
+	    THEN
+		create_it = 0
+	    ELSE
+		IF (.response[DSC$W_LENGTH] GEQU 1) AND
+		   (CH$RCHAR(.response[DSC$A_POINTER]) NEQU %C'Y')
+		THEN
+		    create_it = 0;
+	    IF (.create_it)			!If user said yes, then
+	    THEN				!... create the file
+		BEGIN
+		status = $CREATE (FAB = alias_fab);
+		IF (.status)			!If successful, signal an
+		THEN				!... information message
+		    BEGIN			!... saying so
+		    LOCAL s : $BBLOCK[DSC$K_S_BLN];
+		    INIT_SDESC (tmpstr, .alias_nam[NAM$B_RSL], alias_rfilename);
+		    SIGNAL (MXALIAS__FILCREAT, 1, tmpstr);
+		    created = 1;
+		    END;
+		END;
+
+	    FREE_STRINGS (response);		!Free string
+	    END;
+	!
+	!  Connect RAB only if opened/created OK.
+	!
+	IF (.status) AND (.create_it)		!If the $OPEN or $CREATE was
+	THEN					!... successful, then connect
+	    status = $CONNECT (RAB = alias_rab);!... the RAB
+	END
+    ELSE
+	status = RMS$_NORMAL;
+
+    IF NOT(.status) AND (.create_it)
+    THEN
+	BEGIN
+	LOCAL s : $BBLOCK[DSC$K_S_BLN];
+	INIT_SDESC (tmpstr, .alias_nam[NAM$B_ESL], .alias_nam[NAM$L_ESA]);
+	SIGNAL (MXALIAS__ERROPN, 1, tmpstr, .status,
+			(IF (.alias_fab[FAB$W_IFI] EQLU 0)
+			THEN .alias_fab[FAB$L_STV] ELSE .alias_rab[RAB$L_STV]));
+	END;
+
+    IF (.created) AND (.status)			!If we created a file now,
+    THEN					!... then return a special
+	status = MXALIAS__FILCREAT;		!... success status
+
+    !
+    !  The file was successfully opened, but it isn't necessarily a
+    !  a valid MX database.  Check out some file and key values to make
+    !  sure it's a valid alias database.
+    !
+    IF (.status) AND NOT(.created) AND (		!File was opened OK
+	(.alias_fab[FAB$B_ORG] NEQU FAB$C_IDX)	OR	!Not indexed?
+	NOT(.alias_fab[FAB$V_CR])		OR	!Not CR record attr.
+	(.alias_fab[FAB$B_RFM] NEQU FAB$C_VAR)	OR	!Not variable-len recs.
+	(.alias_xabkey[XAB$B_REF] NEQU 0)	OR	!Primary key is not 0
+	(.alias_xabkey[XAB$W_POS0] NEQU 0)	OR	!Primary not at 0
+	(.alias_xabkey[XAB$B_SIZ0] NEQU 20))		!Key is not 20 chars
+    THEN
+	BEGIN
+	LOCAL s : $BBLOCK[DSC$K_S_BLN];
+	INIT_SDESC (tmpstr, .alias_nam[NAM$B_ESL], .alias_nam[NAM$L_ESA]);
+	SIGNAL (MXALIAS__INVFILE, 1, tmpstr);
+	$CLOSE (FAB = alias_fab);
+	status = MXALIAS__INVFILE;
+	END;
+
+    RETURN(.status);
+
+END;
+
+
+%SBTTL	'ALT_SHOW_OUTPUT'
+ROUTINE ALT_SHOW_OUTPUT (str_a) =
+BEGIN
+!+
+!
+!  Routine:	OPEN_ALIAS_FILE
+!
+!  Functional Description:
+!
+!	This routine is called to open/create the MX Alias file.
+!
+!  Formal parameters:
+!
+!	None.
+!
+!  Implicit inputs:
+!
+!	None.
+!
+!  Outputs:
+!
+!	None.
+!
+!  Returns:
+!
+!	R0	- Status
+!
+!  Side effects:
+!
+!
+!-
+BIND
+	str = .str_a : $BBLOCK;
+
+    output_rab[RAB$W_RSZ] = .str[DSC$W_LENGTH];
+    output_rab[RAB$L_RBF] = .str[DSC$A_POINTER];
+
+    RETURN ($PUT (RAB = output_rab));
+
+END;
+
+
+%SBTTL	'MAIN_HANDLER'
+ROUTINE main_handler(	sig_a,
+			mechanism_a,
+			enabl_a)=
+BEGIN
+!+
+!
+!  Routine:	MAIN_HANDLER
+!
+!  Functional Description:
+!
+!	This routine is a condition handler for the main routine.  
+!
+!  Formal Parameters:
+!
+!	sig_a		- the address of the signal vector.
+!	mechanism_a	- the address of the mechanism vector.
+!	enabl_a		- the address of the enable vector.
+!
+!  Implicit Inputs:
+!
+!	None.
+!
+!  Outputs:
+!
+!	None.
+!
+!  Returns:
+!
+!	R0	- Status,
+!		SS$_CONTINUE, ready to continue with execution from the point
+!			at which the error condition was signalled.
+!		SS$_RESIGNAL, resignal the error condition to the next higher
+!			handler, in this case one of VMS's handlers
+!		SS$_UNWIND, unwind the call frame and continue execution at
+!			some point higher up in the call frame.
+!
+!  Side effects:
+!
+!	None.
+!
+!-
+BIND
+	sig	= .sig_a	: VECTOR,
+	mech	= .mechanism_a	: VECTOR,
+	enabl	= .enabl_a	: VECTOR,
+	cond	= sig[1]	: $BBLOCK[4],
+	ret_val = mech[1]
+	;
+
+!
+! Note: STS$V_INHIB_MSG is usually used to inhibit signalling upon exit.  In
+! this case, it is not being used for anything, so it has been adapted to cover
+! all types of signalling.
+!
+   IF (NOT .cond[STS$V_INHIB_MSG])		!Don't inhibit this message?
+   THEN BEGIN					!Yes,
+
+	sig[0]=.sig[0]-2;			!Ignore the PC and PSL
+	$PUTMSG(MSGVEC=sig);			!Output the message text
+
+	END;					!End of output message
+
+   RETURN(SS$_CONTINUE);			!Continue as normal
+   
+END;						!end of main_handler
+
+END						!End of module BEGIN
+ELUDOM						!End of module

@@ -1,0 +1,107 @@
+MODULE	MXALIAS_CLD_TABLES
+IDENT	'01-001'
+!++
+!
+!  Facility:	MXALIAS_CLD.CLD
+!
+!  Author:	Hunter Goatley
+!
+!  Date:	January 16, 1993
+!
+! Copyright (c) 2008, Hunter Goatley.
+! 
+! All rights reserved.
+! 
+! Redistribution and use in source and binary forms, with or without
+! modification, are permitted provided that the following conditions
+! are met:
+! 
+!     * Redistributions of source code must retain the above
+!       copyright notice, this list of conditions and the following
+!       disclaimer.
+!     * Redistributions in binary form must reproduce the above
+!       copyright notice, this list of conditions and the following
+!       disclaimer in the documentation and/or other materials provided
+!       with the distribution.
+!     * Neither the name of the copyright owner nor the names of any
+!       other contributors may be used to endorse or promote products
+!       derived from this software without specific prior written
+!       permission.
+! 
+! THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
+! "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
+! LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
+! A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
+! OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
+! SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
+! LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
+! DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
+! THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
+! (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
+! OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+!
+!  Functional Description:
+!
+!	This module contains the command definitions for MXALIAS commands.
+!
+!  Modification History:
+!
+!	01-001		Hunter Goatley		17-JUL-1997 11:42
+!		Uncommented the USE command.
+!
+!	01-000		Hunter Goatley		16-JAN-1993 21:58
+!		Genesis.
+!
+!--
+DEFINE VERB ADD
+	ROUTINE		cmd_add
+	PARAMETER	P1, LABEL=alias, VALUE(REQUIRED), Prompt="Alias"
+	PARAMETER	P2, LABEL=address, VALUE(LIST,REQUIRED),
+			prompt="E-mail address"
+	PARAMETER	P3, LABEL=description, prompt="Description"
+
+DEFINE VERB MODIFY
+	ROUTINE		cmd_add
+	PARAMETER	P1, LABEL=alias, VALUE(REQUIRED), prompt="Alias"
+	QUALIFIER	address, NONNEGATABLE, VALUE(LIST,REQUIRED)
+	QUALIFIER	description, NEGATABLE, VALUE(REQUIRED)
+
+DEFINE VERB REMOVE
+	ROUTINE		cmd_remove
+	PARAMETER	P1, LABEL=alias, VALUE(REQUIRED), prompt="Alias"
+	QUALIFIER	CONFIRM
+
+DEFINE VERB DIRECTORY
+	ROUTINE		cmd_dir
+	PARAMETER	P1, LABEL=alias
+	QUALIFIER	OUTPUT, VALUE (TYPE=$FILE, REQUIRED)
+	QUALIFIER	FULL
+
+DEFINE SYNTAX DIR_SYNTAX
+	ROUTINE		cmd_dir
+	PARAMETER	P1, LABEL=show_option
+	PARAMETER	P2, LABEL=alias
+	QUALIFIER	OUTPUT, VALUE (TYPE=$FILE, REQUIRED)
+	QUALIFIER	FULL
+
+DEFINE TYPE SHOW_TYPES
+	KEYWORD		DATABASE, NONNEGATABLE
+	KEYWORD		ALIAS, SYNTAX=DIR_SYNTAX
+
+DEFINE VERB SHOW
+	ROUTINE		cmd_show
+	PARAMETER	P1, LABEL=showopt, VALUE (TYPE=SHOW_TYPES, REQUIRED),
+			PROMPT="SHOW option"
+
+DEFINE VERB USE
+	ROUTINE		cmd_use
+	PARAMETER	P1, LABEL=file, VALUE (TYPE=$FILE, REQUIRED),
+			PROMPT="MX Alias file"
+
+DEFINE VERB HELP
+	ROUTINE		cmd_help
+	PARAMETER	P1, LABEL=help_request, VALUE(TYPE=$REST_OF_LINE)
+
+DEFINE VERB EXIT
+	ROUTINE		cmd_exit
+	SYNONYM		QUIT

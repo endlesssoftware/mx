@@ -1,0 +1,487 @@
+.!
+.!  File:       MXALIAS.HELP
+.!
+.!  Author:     Hunter Goatley
+.! Copyright (c) 2008, Hunter Goatley.
+.! 
+.! All rights reserved.
+.! 
+.! Redistribution and use in source and binary forms, with or without
+.! modification, are permitted provided that the following conditions
+.! are met:
+.! 
+.!     * Redistributions of source code must retain the above
+.!       copyright notice, this list of conditions and the following
+.!       disclaimer.
+.!     * Redistributions in binary form must reproduce the above
+.!       copyright notice, this list of conditions and the following
+.!       disclaimer in the documentation and/or other materials provided
+.!       with the distribution.
+.!     * Neither the name of the copyright owner nor the names of any
+.!       other contributors may be used to endorse or promote products
+.!       derived from this software without specific prior written
+.!       permission.
+.! 
+.! THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
+.! "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
+.! LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
+.! A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
+.! OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
+.! SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
+.! LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
+.! DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
+.! THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
+.! (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
+.! OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+.!
+.!  Date:       January 20, 1993
+.!
+.!  Abstract:   Source file to build RUNOFF .RNH file for MXALIAS on-line help
+.!
+.!
+<INIT>
+.!
+<MAIN>
+Using_Aliases
+
+Once an MX alias has been added to the MX alias database, it can be used on the
+VMS Mail "To:" line by simply prefixing the alias name with MX%.  MX will check
+every address that does not include the "@" character to see if it is an MX
+alias. For example, if JOE is defined as an alias, the following "To:" line
+would be specified:
+
+<LITERAL>
+|MAIL> SEND
+|To:     MX%JOE
+|Subj:	....
+<LARETIL>
+
+Sending to MX%"JOE@localhost" will prevent MX from performing the alias
+translation.
+
+<TOPIC>
+Displaying_Translations
+
+To see the resulting addresses used by MX for all MX% addresses,
+define the logical MX_VMSMAIL_SHOW_ADDR as TRUE:
+
+<LITERAL>
+|$ define mx_vmsmail_show_addr true
+|$ mail
+|
+|MAIL> SEND
+|To:     MX%JOE, MX%"MX-List@WKUVX1.BITNET", SYSTEM
+|  MX rewrote alias JOE as <SYSTEM@WKUVX1.BITNET>
+|  MX rewrote MX-List@WKUVX1.BITNET as <MX-List@WKUVX1.BITNET>
+|Subj:   ....
+<LARETIL>
+
+The MX_VMSMAIL_SHOW_ADDR works regardless of whether or not MX aliases are
+specified.
+
+<TOPIC>
+Setting_MX_as_Default_Mail_Transport
+
+The undocumented VMS Mail command SET TRANSPORT can be used to make MX
+the default transport for all mail messages.  The format of the command is:
+
+<LITERAL>
+MAIL> SET TRANSPORT MX%
+<LARETIL>
+
+The MX% prefix can be omitted from MX aliases when the default transport
+has been set.  Note that non-alias "user@domain" addresses must still be
+prefixed.
+
+The MAIL command SET NOTRANSPORT can be used to disable the default
+transport.
+
+<NOTE>
+The SET TRANSPORT command is undocumented; its behavior could change
+in a future release of VMS.
+<ETON>
+
+.!
+<MAIN>
+ADD
+
+The ADD command is used to add an MX alias to the MX alias database.
+
+Format:
+<FORMAT>
+MXalias> ADD alias address[,...] [description]
+
+<TOPIC>
+Parameters
+
+<PARAMETER>
+alias
+
+<PTEXT>
+Specifies the alias to be defined.  The alias is a string of up to 20
+alphanumeric characters (plus $, -, _, and .) that is equated to the given
+e-mail address. The alias is the address given to MX from the VMS Mail "To:"
+line using a format like MX%alias.  All aliases are converted to uppercase.
+<TXETP>
+
+<PARAMETER>
+address
+
+<PTEXT>
+Specifies the e-mail address to which the alias is equated.  The address must
+be a valid RFC-822 address in the format "user@domain".  If the domain is
+omitted, it defaults to the local host name (as defined by the
+MX_VMSMAIL_LOCALHOST logical name).  The maximum length of the address is 255
+characters.  To maintain the case of an address, double-quotes must
+surround the address.  Double-quotes must also be used if the address
+contains the "bang" character (!).
+
+If the address includes quotes, the address should be quoted and the inside
+quotes doubled: """node::user""@domain".
+
+You can supply multiple addresses by separating the addresses with commas.
+The maximum length of a comma-separated list of addresses is 255 characters,
+including the commas.
+<TXETP>
+
+<PARAMETER>
+description
+
+<PTEXT>
+Specifies a description for the alias and address.  A text string of up to 255
+characters may be given.  Double-quotes must surround the string if it contains
+any blanks.  The description is displayed by the DIRECTORY command; it is not
+included in the RFC-822 headers of any mail messages.
+<TXETP>
+
+<TOPIC>
+Examples
+
+The following examples demonstrate how an address is added to the MX alias
+database.
+
+<LITERAL>
+|1.  MXalias> ADD JOE SYSTEM "Local system manager"
+|    Added alias JOE to MX alias database
+|    MXalias>
+<LARETIL>
+
+<ETEXT>
+This example defines JOE as an alias for the local SYSTEM account.  VMS Mail
+addressed "To:" MX%JOE will be delivered to <system@local-host>.
+<TXETE>
+
+<LITERAL>
+|2.  MXalias> add mx-list mx-list@wkuvx1.bitnet "MX support list"
+|    Added alias MX-LIST to MX alias database
+|    MXalias>
+<LARETIL>
+
+<ETEXT>
+This example defines MX-LIST as an alias for the MX support mailing list on
+WKUVX1.BITNET.  VMS Mail addressed "To:" MX%MX-LIST will be sent to
+<MX-LIST@WKUVX1.BITNET>.
+<TXETE>
+
+<LITERAL>
+|3.  MXalias> ADD YYZ """NODE1::JOE""@YYZ.COM"
+|    Added alias YYZ to MX alias database
+|    MXalias>
+<LARETIL>
+
+<ETEXT>
+This example defines YYZ as an alias for an address that includes quotes.
+<TXETE>
+
+<LITERAL>
+|4.  MXalias> ADD THEM "Joe@YYZ.COM","Rick@SWAN.Com","X@Y"
+|    Added alias THEM to MX alias database
+|    MXalias>
+<LARETIL>
+
+<ETEXT>
+This example equates three addresses with the alias THEM.  Mail addressed to
+THEM will be forwarded to all three addresses.
+<TXETE>
+
+.!
+<MAIN>
+DIRECTORY
+
+The DIRECTORY command provides a list of aliases or information about
+an alias or a group of aliases.  The default alias directory listing
+includes the alias and the description.  Wildcards can be used to display
+aliases matching a particular string.
+
+Format:
+<FORMAT>
+MXalias> DIRECTORY [alias] [/qualifiers]
+
+<TOPIC>
+Parameter
+
+<PARAMETER>
+alias
+
+<PTEXT>
+Specifies the alias or group of aliases to be displayed.  The alias is optional
+and can include wildcards (* and %).
+<TXETP>
+
+<QUALIFIERS>
+<QUALIFIER>
+/FULL
+
+/FULL
+
+Displays the alias, the description, and the e-mail address for each alias
+shown.
+<QUALIFIER>
+/OUTPUT
+
+/OUTPUT=file.ext
+
+Specifies the name of a text file to which the directory listing is written.
+
+<TOPIC>
+Examples
+
+The following examples show sample output from the DIRECTORY command.
+
+<LITERAL>
+|1.  MXalias> dir
+|
+|    MX Alias              Description
+|    ------------          -----------
+|    JOE                   Local system manager
+|
+|    MXalias>
+<LARETIL>
+
+<ETEXT>
+This example shows the default brief directory listing.
+<TXETE>
+
+<LITERAL>
+|2.  MXalias> dir/full joe
+|
+|    Alias:    JOE
+|    Desc:     Local system manager
+|    Address:  SYSTEM@WKUVX1.BITNET
+|
+|    MXalias>
+<LARETIL>
+
+<ETEXT>
+This example shows a full directory listing.
+<TXETE>
+
+.!
+<MAIN>
+EXIT
+
+The EXIT command leaves MXALIAS.  QUIT is a synonym for EXIT.
+
+.!
+<MAIN>
+HELP
+
+MXALIAS is a simple database manager for user-defined MX aliases.  It creates
+the MX alias database and lets the user add, remove, and list defined
+aliases.
+
+The MX alias database filename defaults to MX_ALIAS_DATABASE.DAT in SYS$LOGIN:.
+The logical MX_ALIAS_DATABASE can be defined to point to another directory
+or file specification.
+
+MXALIAS will automatically create the MX alias database the first time an
+alias is added.  The user is prompted for confirmation before a new database
+is created.
+.!
+<MAIN>
+MODIFY
+
+The MODIFY command is used to change the address or description associated with
+an MX alias.
+
+Format:
+<FORMAT>
+MXalias> MODIFY alias [/qualifier]
+
+<TOPIC>
+Parameters
+
+<PARAMETER>
+alias
+
+<PTEXT>
+Specifies the alias to be modified.  The alias must already be in the MX alias
+database.
+<TXETP>
+
+<QUALIFIERS>
+<QUALIFIER>
+/ADDRESS
+
+/ADDRESS=text
+
+Specifies the new e-mail address to which the alias is equated.  The address
+must be a valid RFC-822 address in the format "user@domain".  If the domain is
+omitted, it defaults to the local host name (as defined by the
+MX_VMSMAIL_LOCALHOST logical name).  The maximum length of the address is 255
+characters.  Double-quotes must surround the address to maintain its case.
+
+You can supply multiple addresses by separating the addresses with
+commas and surrounding them with parentheses. The maximum length of a
+comma-separated list of addresses is 255 characters, including the
+commas.
+<QUALIFIER>
+/DESCRIPTION
+
+/DESCRIPTION=text
+/NODESCRIPTION
+
+Specifies a new description for the alias and address.  A text string of up to
+255 characters may be given.  Double-quotes must surround the string if it
+contains any blanks.  The description is displayed by the DIRECTORY command; it
+is not included in the RFC-822 headers of any mail messages.
+
+<TOPIC>
+Examples
+
+The following examples demonstrate how an address is modified in the MX alias
+database.
+
+<LITERAL>
+|1.  MXalias> MODIFY JOE/DESCRIPTION="Local system manager"
+|    Modified alias JOE
+|    MXalias>
+<LARETIL>
+
+<ETEXT>
+This example modifies the description for alias JOE.
+<TXETE>
+
+<LITERAL>
+|2.  MXalias> modify joe/address="SmithJB@SomeWhere.Com"/nodescription
+|    Modified alias JOE
+|    MXalias>
+<LARETIL>
+
+<ETEXT>
+This example changes the e-mail address and removes the description for
+alias JOE.
+<TXETE>
+
+<LITERAL>
+|3.  MXalias> modify me/address=("goathunter@MadGoat.com","goathunter@YYZ.COM")
+|    Modified alias ME
+|    MXalias>
+<LARETIL>
+
+<ETEXT>
+This example supplies two e-mail addresses for alias ME.
+<TXETE>
+
+.!
+<MAIN>
+REMOVE
+
+The REMOVE command is used to delete an alias from the MX alias database.
+By default, the REMOVE prompts for confirmation before removing the alias.
+
+Format:
+<FORMAT>
+MXalias> REMOVE alias [/qualifier]
+
+<TOPIC>
+Parameter
+
+<PARAMETER>
+alias
+
+<PTEXT>
+Specifies the alias to be removed from the database.  Wildcards are not
+permitted.
+<TXETP>
+
+<QUALIFIERS>
+<QUALIFIER>
+/CONFIRM
+
+/[NO]CONFIRM
+
+Specifies whether or not REMOVE should prompt the user for confirmation before
+removing the alias.  By default, REMOVE does prompt; use /NOCONFIRM to disable
+the prompt.
+
+<TOPIC>
+Example
+
+The following example shows how alias JOE can be removed from the MX alias
+database.
+
+<LITERAL>
+MXalias> remove joe
+Remove JOE <SYSTEM@WKUVX1.BITNET> [N]? y
+Removed alias JOE
+MXalias>
+<LARETIL>
+
+.!
+<MAIN>
+SHOW
+
+Displays information about or from the MX alias database.
+
+Format:
+<FORMAT>
+MXalias> SHOW option [...]
+
+<TOPIC>
+ALIAS
+
+SHOW ALIAS is a synonym for DIRECTORY.  See the DIRECTORY listing for more
+information.
+
+Format:
+<FORMAT>
+MXalias> SHOW ALIAS [alias] [/qualifiers]
+
+<TOPIC>
+DATABASE
+
+SHOW DATABASE displays the current MX alias database.
+
+<TOPIC>
+Example
+
+The following example shows sample output from the SHOW DATABASE command:
+
+<LITERAL>
+MXalias> show database
+Current MX alias database is DUA0:[JOE]MX_ALIAS_DATABASE.DAT;1
+MXalias>
+<LARETIL>
+.!
+<MAIN>
+USE
+
+The USE command is used to close the open MX alias database file and
+open a specified database file.
+
+Format:
+<FORMAT>
+MXalias> USE database-file
+
+<TOPIC>
+Parameters
+
+<PARAMETER>
+database-file
+
+<PTEXT>
+Specifies the name of the database file to open.  The device, directory, and
+type default to SYS$LOGIN:.DAT.  Used primarily by system management personnel
+to access a global alias database.
+<TXETP>

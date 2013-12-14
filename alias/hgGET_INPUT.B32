@@ -1,0 +1,127 @@
+%TITLE	'HG$GET_INPUT'
+MODULE HG_INPUT (IDENT = '01-002') = 
+!++
+!
+!  Facility:	HG$GET_INPUT
+!
+!  Author:	Hunter Goatley
+!
+!  Date:	May 20, 1991
+!
+!  Functional Description:
+!
+!	This routine implements an easy-to-call interface to the SMG$ routines
+!	to provide command recall when reading from SYS$INPUT.	It takes
+!	the same arguments as LIB$GET_INPUT and may be substituted directly
+!	in any call to LIB$GET_INPUT.
+!
+!	Example:
+!
+!		CALL LIB$GET_INPUT (buffer, prompt, buffer)
+!			to
+!		CALL HG$GET_INPUT (buffer, prompt, buffer)
+!
+!
+!  Modified by:
+!
+!	01-002		Hunter Goatley		19-JAN-1992 22:04
+!		Changed call to SMG$READ_COMPOSED_LINE.
+!
+!	01-001		Hunter Goatley		20-MAY-1991 11:21
+!		Original version.
+!
+!--
+BEGIN
+
+LIBRARY 'SYS$LIBRARY:STARLET';			!Pull stuff from STARLET
+
+SWITCHES ADDRESSING_MODE (EXTERNAL = GENERAL, NONEXTERNAL = WORD_RELATIVE);
+
+FORWARD ROUTINE
+	HG$GET_INPUT				!Main entry point
+	;
+
+EXTERNAL ROUTINE
+	SMG$CREATE_KEY_TABLE,			!Create a key definition table
+	SMG$CREATE_VIRTUAL_KEYBOARD,		!Create a virtual keyboard
+	SMG$READ_COMPOSED_LINE			!Read line with recall, etc.
+	;
+
+EXTERNAL LITERAL
+	SMG$_EOF;
+
+OWN
+	key_table_id	: LONG,			!ID of key table created
+	keyboard_id	: LONG;			!ID of virtual keyboard created
+
+
+!+
+!
+!  Routine:	HG$GET_INPUT  get-str [,prompt-str] [,out-len]
+!
+!  Inputs:
+!
+!	4(AP)	- String which is read from SYS$INPUT.
+!		  Address of string descriptor.   Write-only.
+!	8(AP)	- Prompt message that is displayed.
+!		  Address of string descriptor.  Read-only.
+!	12(AP)	- Number of bytes written into @4(AP).
+!		  Address of word.  Write-only.
+!
+!  Implicit inputs:
+!
+!	KEY_TABLE_ID	- ID of SMG$ key table
+!	KEYBOARD_ID	- ID of SMG$ virtual keyboard ID
+!
+!  Returns:
+!
+!	String in 4(AP) and status in R0.
+!
+!  Effects:
+!
+!	On first call, a key table and a virtual keyboard are created.
+!
+!-
+GLOBAL ROUTINE hg$get_input (bufadr_a, prompt_a, buflen_a) =
+   BEGIN
+
+   BUILTIN
+	ACTUALCOUNT;				!Number of actual parameters
+
+   REGISTER
+	status;					!Use a register for the status
+
+   IF (.key_table_id EQLU 0)				!If no key table yet...
+   THEN BEGIN						!... then create one
+	status = SMG$CREATE_KEY_TABLE (key_table_id);	!... Call SMG routine
+	IF (.status)					!If successful,
+	THEN						!... create a virtual KB
+	    status = SMG$CREATE_VIRTUAL_KEYBOARD (keyboard_id);
+	IF NOT (.status)				!If not successful
+	THEN						!... return the error
+	    RETURN .status;				!...
+   END;
+
+   status = ACTUALCOUNT();				!Get # of parameters
+   !
+   !  Now call SMG$ routine to read line, providing command recall, editing,
+   !  etc.
+   !
+   status = SMG$READ_COMPOSED_LINE (keyboard_id, key_table_id,
+			.bufadr_a,
+			(IF (.status GEQU 2)
+			 THEN .prompt_a
+			 ELSE 0),
+			(IF (.status GEQU 3)
+			 THEN .buflen_a
+			 ELSE 0));
+
+   IF (.status EQLU SMG$_EOF)			!If user entered ^Z, then
+   THEN						!...  change it to an RMS
+	status = RMS$_EOF;			!...  End of File status
+
+   RETURN .status;				!Return status
+   END;						!End of routine
+
+END						!End of module BEGIN
+ELUDOM						!End of module
