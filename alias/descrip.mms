@@ -2,7 +2,7 @@ MX_FACILITY = ALIAS
 .INCLUDE [-]MMSDEFS.MMS
 
 MXALIAS_MODULES = MXALIAS,MXALIAS_CLD_TABLES=$(BINDIR)MXALIAS_CLD,-
-		MXALIAS_MSG,HG_INPUT=$(BINDIR)HG$GET_INPUT
+		MXALIAS_MSG,HG_INPUT=$(BINDIR)HG_GET_INPUT
 
 mxalias :	$(bindir)mxalias.EXE, $(KITDIR)mx_alias_helplib.hlb, $(KITDIR)mxalias_main.hlp
 	@ write sys$output "MXALIAS build complete"
