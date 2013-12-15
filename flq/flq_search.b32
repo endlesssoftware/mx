@@ -1,0 +1,351 @@
+%TITLE 'FLQ_SEARCH'
+MODULE FLQ_SEARCH (IDENT='V2.3',
+	ADDRESSING_MODE(EXTERNAL=LONG_RELATIVE)) =
+BEGIN
+!++
+! FACILITY:     FLQ
+!
+! ABSTRACT:     Scans a queue.
+!
+! MODULE DESCRIPTION:
+!
+!   This module contains routine FLQ_SEARCH, which scans a queue for
+!   entries meeting specific criteria.
+!
+! AUTHOR:	    M. Madison
+!
+! Copyright (c) 2008, Matthew Madison.
+! 
+! All rights reserved.
+! 
+! Redistribution and use in source and binary forms, with or without
+! modification, are permitted provided that the following conditions
+! are met:
+! 
+!     * Redistributions of source code must retain the above
+!       copyright notice, this list of conditions and the following
+!       disclaimer.
+!     * Redistributions in binary form must reproduce the above
+!       copyright notice, this list of conditions and the following
+!       disclaimer in the documentation and/or other materials provided
+!       with the distribution.
+!     * Neither the name of the copyright owner nor the names of any
+!       other contributors may be used to endorse or promote products
+!       derived from this software without specific prior written
+!       permission.
+! 
+! THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
+! "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
+! LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
+! A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
+! OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
+! SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
+! LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
+! DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
+! THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
+! (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
+! OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+!
+! CREATION DATE:    17-JUL-1991
+!
+! MODIFICATION HISTORY:
+!
+!   17-JUL-1991	V1.0	Madison	    Initial coding for FLQ V2.
+!    9-FEB-1994 V2.0	Goatley     Finish it.
+!   24-MAR-1994 V2.0-1	Goatley     Add search based on origin agent.
+!    6-MAY-1994	V2.1	Altmayer    Re-structure lsv (add IPC library)
+!   28-JAN-2002 V2.1-2  Madison     Remove exitloops from dst/org prc check.
+!   30-DEC-2004 V2.2    Madison     Queue is no longer a linked list.
+!--
+
+    LIBRARY 'SYS$LIBRARY:STARLET';
+    LIBRARY 'MX_SRC_COMMON:FIELDS';
+    LIBRARY 'MX_SRC_COMMON:IPC';
+    LIBRARY 'FLQ_DEFS';
+    LIBRARY 'FLQ_PRIVATE_DEFS';
+
+    _DEF (ITM)
+	ITM_W_CODE	= _WORD,
+	ITM_W_RESERVED	= _WORD,
+	ITM_L_LW2	= _LONG,
+	ITM_L_LW3	= _LONG
+    _ENDDEF (ITM);
+
+    _DEF (SCTX)
+	SCTX_L_ENTNUM	= _LONG,
+        SCTX_X_BITMAP   = _BYTES (FLQ_K_BMAPSIZE)
+    _ENDDEF (SCTX);
+
+    EXTERNAL LITERAL
+	FLQ__NOSUCHENT;
+
+    EXTERNAL ROUTINE
+	FLQ___LOCKENTRY, FLQ___UNLKENTRY,
+        FLQ___GETBITMAP, FLQ___FREEBITMAP,
+	G_HAT (LIB$GET_VM_PAGE, LIB$FREE_VM_PAGE, LIB$SUB_TIMES);
+
+%SBTTL 'FLQ_SEARCH'
+GLOBAL ROUTINE FLQ_SEARCH (CTX_A_A, ITMLST_A, SRCHCTX_A_A, QENT_A, NOLOCK) =
+BEGIN
+!++
+! FUNCTIONAL DESCRIPTION:
+!
+!   Scans a queue for entries matching the search criteria passed in
+!   ITMLST.
+!
+! RETURNS:	cond_value, longword (unsigned), write only, by value
+!
+! PROTOTYPE:
+!
+!   FLQ_SEARCH	ctx, itmlst, srchctx, qent [,nolock]
+!
+! ctx:	  longword_unsigned, longword (unsigned), modify, by reference
+! itmlst: item_list_3, longword (unsigned), read only, by reference
+! srchctx:longword_unsigned, longword (unsigned), modify, by reference
+! qent:	  queue_entry, longword (unsigned), modify, by reference
+! nolock: boolean, longword (unsigned), read only, by value
+!
+! IMPLICIT INPUTS:  None.
+!
+! IMPLICIT OUTPUTS: None.
+!
+! COMPLETION CODES:
+!
+!   SS$_NORMAL:		normal successful completion.
+!
+! SIDE EFFECTS:
+!
+!   None.
+!--
+    BUILTIN
+	ACTUALCOUNT;
+
+    MACRO
+	ERROR_RETURN (status) =
+	BEGIN
+	    FLQ___UNLKENTRY (.ctx);	!Unlock any entry that might be locked
+	    LIB$FREE_VM_PAGE (%REF ((SCTX_S_SCTXDEF+511)/512), sctx);
+	    sctx = 0;
+	    RETURN status;
+	END %;
+
+    MACRO
+	TIME_BETWEEN (itmp, dtfld) =
+	BEGIN
+	    LOCAL junk	: VECTOR [2,LONG];
+	    EXTERNAL LITERAL LIB$_NORMAL;
+	    IF .itmp [FLQS_L_AFTER] NEQA 0 AND
+			CH$NEQ (8, dtfld, 8, UPLIT (0,0)) THEN
+	    BEGIN
+		match = LIB$SUB_TIMES (dtfld, .itmp [FLQS_L_AFTER], junk)
+			    EQL LIB$_NORMAL;
+	    END
+	    ELSE match = 1;
+	    IF .match AND .itmp [FLQS_L_BEFORE] NEQA 0 AND
+		    CH$NEQ (8, dtfld, 8, UPLIT (0,0)) THEN
+	    BEGIN
+		match = LIB$SUB_TIMES (.itmp [FLQS_L_BEFORE], dtfld, junk)
+			    EQL LIB$_NORMAL;
+	    END;
+	END%;
+
+    BIND
+	ctx	= .ctx_a_a		: REF QCTXDEF,
+	rab	= ctx [QCTX_X_RAB]	: $RAB_DECL,
+	itmlst	= .itmlst_a		: $BBLOCK,
+	sctx	= .srchctx_a_a		: REF SCTXDEF,
+	qent	= .qent_a		: QENTDEF;
+
+    LOCAL
+	ip	: REF BLOCK [,BYTE],
+	entnum,
+	match,
+	status;
+
+    !
+    !  If there is no search context, then create one.
+    !
+    IF .sctx EQLA 0 THEN
+    BEGIN
+        status = LIB$GET_VM_PAGE (%REF ((SCTX_S_SCTXDEF+511)/512), sctx);
+        IF NOT .status THEN
+            RETURN .status;
+
+        CH$FILL (%CHAR (0), SCTX_S_SCTXDEF, .sctx);
+        status = FLQ___GETBITMAP (.ctx);
+        IF .status THEN
+        BEGIN
+            CH$MOVE (FLQ_K_BMAPSIZE, .ctx [QCTX_A_BITMAP], sctx [SCTX_X_BITMAP]);
+            FLQ___FREEBITMAP (.ctx);
+        END;
+    END
+    ELSE
+        status = SS$_NORMAL;
+
+
+    IF NOT .status THEN
+        ERROR_RETURN (.status);
+
+    entnum = .sctx [SCTX_L_ENTNUM];
+
+    WHILE 1 DO
+    BEGIN
+        BIND
+            bmap = sctx [SCTX_X_BITMAP] : BITVECTOR [];
+
+        ! Find next valid entry, per the bitmap
+        status = RMS$_EOF;
+        INCR i FROM .entnum+1 TO .ctx [QCTX_L_MAXENT] DO
+            IF .bmap [.i-1] THEN
+            BEGIN
+                entnum = .i;
+                status = SS$_NORMAL;
+                EXITLOOP;
+            END;
+        IF NOT .status THEN
+            EXITLOOP;
+
+        ! Confirm entry is really valid, in case bitmap is out of sync with reality
+        status = FLQ_READ (ctx, .entnum, qent);
+        IF .status AND .qent [QENT_V_VALID] THEN
+        BEGIN
+            ip = itmlst;
+            match = 1;
+
+            WHILE (.ip [FLQS_L_CODE] NEQ 0 AND .match) DO
+            BEGIN
+                SELECTONE .ip [FLQS_L_CODE] OF
+                SET
+
+                [FLQS__SIZE] :
+                BEGIN
+		    IF .ip [FLQS_L_MINSIZE] GTRU .qent [QENT_L_SIZE] OR
+			(.ip [FLQS_L_MAXSIZE] NEQ 0 AND
+			    .ip [FLQS_L_MAXSIZE] LSSU .qent [QENT_L_SIZE]) THEN
+			match = 0;
+		END;
+
+                [FLQS__STATUS] :
+                BEGIN
+		    IF .ip [FLQS_L_COUNT] LEQ 4 THEN
+		    BEGIN
+			BIND statv = ip [FLQS_L_STATUS] : VECTOR [,BYTE];
+			match = 0;
+			INCR j FROM 0 TO .ip [FLQS_L_COUNT]-1 DO
+			    IF .statv [.j] EQL .qent [QENT_L_STATUS] THEN
+			    BEGIN
+				match = 1;
+				EXITLOOP;
+			    END;
+		    END
+		    ELSE
+		    BEGIN
+			BIND statv = .ip [FLQS_L_STATUS] : VECTOR [,BYTE];
+			MATCH = 0;
+			INCR j FROM 0 TO .ip [FLQS_L_COUNT]-1 DO
+			    IF .statv [.j] EQL .qent [QENT_L_STATUS] THEN
+			    BEGIN
+				match = 1;
+				EXITLOOP;
+			    END;
+		    END;
+		END;
+
+                [FLQS__FLAGS] :
+                    match = .ip [FLQS_B_FLAGS] EQLU
+		        (.qent [QENT_L_FLAGS] AND .ip [FLQS_B_MASK]);
+
+                [FLQS__CREDT] : TIME_BETWEEN (ip, qent [QENT_Q_CREDT]);
+                [FLQS__MODDT] : TIME_BETWEEN (ip, qent [QENT_Q_MODDT]);
+                [FLQS__EXPDT] : TIME_BETWEEN (ip, qent [QENT_Q_EXPDT]);
+                [FLQS__DLYDT] : TIME_BETWEEN (ip, qent [QENT_Q_DLYDT]);
+
+                [FLQS__DSTPRC] :
+                    match = .ip [FLQS_L_DSTPRC] EQLU .qent [QENT_L_DSTPRC];
+
+                [FLQS__ORIGIN] :
+                    match = .ip [FLQS_L_ORIGIN] EQLU .qent [QENT_L_ORIGIN];
+
+                [OTHERWISE] :
+                    ERROR_RETURN (SS$_BADPARAM);
+                TES;
+
+                ip = CH$PLUS (.ip, FLQS_S_SRCHITM);
+
+            END;  ! INNER LOOP
+
+	!
+	!  If this entry is a match, then save the entry number for next time
+	!  and return this entry.
+	!
+            IF .match THEN
+            BEGIN
+                sctx [SCTX_L_ENTNUM] = .entnum;
+                RETURN RMS$_NORMAL;
+            END;
+
+        END; ! if entry valid
+
+    END;
+
+    FLQ___UNLKENTRY (.ctx);
+
+    !
+    !  This is always the error return path, so free up the
+    !  search context.
+    !
+    LIB$FREE_VM_PAGE (%REF ((SCTX_S_SCTXDEF+511)/512), sctx);
+    sctx = 0;
+
+    .status
+
+END; ! FLQ_SEARCH
+
+%SBTTL 'FLQ_SEARCH_END'
+GLOBAL ROUTINE FLQ_SEARCH_END (ctx_a_a, srchctx_a_a) =
+BEGIN
+!++
+! FUNCTIONAL DESCRIPTION:
+!
+!   Scans a queue for entries matching the search criteria passed in
+!   ITMLST.
+!
+! RETURNS:	cond_value, longword (unsigned), write only, by value
+!
+! PROTOTYPE:
+!
+!   FLQ_SEARCH_END	ctx, srchctx
+!
+! ctx:	  longword_unsigned, longword (unsigned), modify, by reference
+! srchctx:longword_unsigned, longword (unsigned), modify, by reference
+!
+! IMPLICIT INPUTS:  None.
+!
+! IMPLICIT OUTPUTS: None.
+!
+! COMPLETION CODES:
+!
+!   SS$_NORMAL:		normal successful completion.
+!
+! SIDE EFFECTS:
+!
+!   None.
+!--
+    BIND
+	ctx	= .ctx_a_a		: REF QCTXDEF,
+	sctx	= .srchctx_a_a		: REF SCTXDEF;
+
+    FLQ___UNLKENTRY (.ctx);
+
+    IF .sctx NEQA 0 THEN
+    BEGIN
+        LIB$FREE_VM_PAGE (%REF ((SCTX_S_SCTXDEF+511)/512), sctx);
+        sctx = 0;
+    END;
+
+    SS$_NORMAL
+
+END;
+
+END
+ELUDOM

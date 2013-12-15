@@ -1,0 +1,650 @@
+%TITLE 'FLQ___ROUTINES'
+MODULE FLQ___ROUTINES (IDENT='V3.0',
+	ADDRESSING_MODE(EXTERNAL=LONG_RELATIVE,NONEXTERNAL=LONG_RELATIVE)) =
+BEGIN
+!++
+! FACILITY:     FLQ___ROUTINES
+!
+! ABSTRACT:     Miscellaneous internal FLQ routines
+!
+! MODULE DESCRIPTION:
+!
+!   description
+!
+! AUTHOR:	    M. Madison
+!
+! Copyright (c) 2008, Matthew Madison.
+! Copyright (c) 2011, Endless Software Solutions.
+! 
+! All rights reserved.
+! 
+! Redistribution and use in source and binary forms, with or without
+! modification, are permitted provided that the following conditions
+! are met:
+! 
+!     * Redistributions of source code must retain the above
+!       copyright notice, this list of conditions and the following
+!       disclaimer.
+!     * Redistributions in binary form must reproduce the above
+!       copyright notice, this list of conditions and the following
+!       disclaimer in the documentation and/or other materials provided
+!       with the distribution.
+!     * Neither the name of the copyright owner nor the names of any
+!       other contributors may be used to endorse or promote products
+!       derived from this software without specific prior written
+!       permission.
+! 
+! THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
+! "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
+! LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
+! A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
+! OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
+! SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
+! LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
+! DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
+! THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
+! (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
+! OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+!
+! CREATION DATE:    15-JUL-1991
+!
+! MODIFICATION HISTORY:
+!
+!   15-JUL-1991	V1.0	Madison	    Initial coding.
+!    9-FEB-1994 V2.0	Goatley     Finish it.
+!   15-MAR-1994 V2.0-1	Goatley     Use FLQ_K_BMAPBLKS for bitmap size.
+!   16-MAR-1994 V2.0-2	Goatley     Use longword entnum in entry lock number.
+!    7-APR-1994 V2.1	Goatley     Make FLQ___LOCK specify user mode on $ENQ.
+!    6-MAY-1994	V2.2	Altmayer    Re-structure lock value block
+!   11-MAY-1994 V2.3	Altmayer    Add GRPW lock
+!   13-MAY-1994 V2.3-1	Altmayer    Send MX_K_CMD_DELENT if status = STCAN
+!   15-MAY-1994 V2.3-2	Altmayer    Add MX_LSV agent
+!    1-JUN-1994 V2.3-3	Goatley     Add ACMODE=PSL$C_USER to GRPW locks.
+!   30-AUG-1997	V2.4	Madison	    Judicious use of NODLCKWT flag.
+!   31-AUG-1997	V2.5	Madison	    Transactional queue modification.
+!   26-AUG-1998	V2.6	Madison	    Add holding queues.
+!   29-JAN-2000	V2.6-1	Madison	    More holding queues.
+!   30-DEC-2004 V3.0    Madison     Queue is no longer a linked list.
+!--
+
+    LIBRARY 'SYS$LIBRARY:STARLET';
+    LIBRARY 'MX_SRC_COMMON:FIELDS';
+    LIBRARY 'MX_SRC_COMMON:IPC';
+    LIBRARY 'FLQ_DEFS';
+    LIBRARY 'FLQ_PRIVATE_DEFS';
+
+    FORWARD ROUTINE
+	FLQ___GETBITMAP,
+	FLQ___FREEBITMAP,
+        FLQ___ALLOCENT,
+        FLQ___ENTFREED,
+	FLQ___LOCKENTRY,
+	FLQ___UNLKENTRY,
+	FLQ___LOCK;
+
+    EXTERNAL ROUTINE
+	G_HAT (LIB$GET_VM_PAGE, LIB$FREE_VM_PAGE, LIB$GET_EF, LIB$FREE_EF),
+	G_HAT (LIB$CVT_HTB);
+
+    EXTERNAL LITERAL
+        FLQ__QUEFULL;
+
+    TABLE (MX_AGENTS,
+	'MX_ROUTER',
+	'MX_LOCAL',
+	'MX_MLF',
+	'MX_SITE',
+	'MX_DNSMTP',
+	'MX_SMTP',
+	'MX_XSMTP',
+	'MX_UUCP',
+	'',
+	'MX_LSV',
+    	'MX_HOLD!UL');
+
+    $ASSUME (MX_AGENTS_COUNT, EQL, FLQ_K_MX_HOLDQ_BASE+1)
+
+
+%SBTTL 'FLQ___GETBITMAP'
+GLOBAL ROUTINE FLQ___GETBITMAP (ctx_a, bmap_a_a) =
+BEGIN
+!++
+! FUNCTIONAL DESCRIPTION:
+!
+!   Retrieves the in-use bitmap for the queue.
+!
+! RETURNS:	cond_value, longword (unsigned), write only, by value
+!
+! PROTOTYPE:
+!
+!   FLQ___GETBITMAP  ctx [,bmapptr]
+!
+! ctx:	    qctxdef, longword (unsigned), modify, by reference
+! bmapptr:  pointer to bitmap, longword (unsigned), write only, by reference
+!
+! IMPLICIT INPUTS:  None.
+!
+! IMPLICIT OUTPUTS: None.
+!
+! COMPLETION CODES:
+!
+!   SS$_NORMAL:		normal successful completion.
+!
+! SIDE EFFECTS:
+!
+!   None.
+!--
+    BUILTIN
+        ACTUALCOUNT;
+
+    BIND
+	ctx     = .ctx_a	    : QCTXDEF,
+	rab     = ctx [QCTX_X_RAB]   : $RAB_DECL;
+
+    LOCAL
+	lsb : LSBDEF,
+	status;
+
+    IF .ctx [QCTX_A_BITMAP] EQLA 0 THEN
+    BEGIN
+        status = LIB$GET_VM_PAGE (%REF (FLQ_K_BMAPBLKS), ctx [QCTX_A_BITMAP]);
+        IF NOT .status THEN
+            RETURN .status;
+    END;
+
+    lsb [LSB_L_LKID] = .ctx [QCTX_L_BMAPLKID];
+    status = $ENQW (LKMODE=LCK$K_EXMODE, LKSB=lsb, FLAGS=LCK$M_CONVERT);
+    IF .status THEN
+        status = .lsb [LSB_W_STATUS];
+    IF .status THEN
+    BEGIN
+        rab [RAB$L_UBF] = .ctx [QCTX_A_BITMAP];
+        rab [RAB$W_USZ] = FLQ_K_BMAPSIZE;
+        rab [RAB$L_BKT] = FLQ_K_BMAPBASE;
+        status = $READ (RAB=RAB);
+        IF .status THEN
+        BEGIN
+            IF ACTUALCOUNT () GTRU 1 AND .bmap_a_a NEQA 0 THEN
+                .bmap_a_a = .ctx [QCTX_A_BITMAP]
+        END
+        ELSE
+	    $ENQW (LKMODE=LCK$K_NLMODE, LKSB=LSB, FLAGS=LCK$M_CONVERT);
+    END;
+
+    IF NOT .status THEN
+    BEGIN
+        LIB$FREE_VM_PAGE (%REF (FLQ_K_BMAPBLKS), ctx [QCTX_A_BITMAP]);
+        ctx [QCTX_A_BITMAP] = 0;
+    END;
+
+    .status
+
+END; ! FLQ___GETBITMAP
+
+%SBTTL 'FLQ___FREEBITMAP'
+GLOBAL ROUTINE FLQ___FREEBITMAP (ctx_a, update) =
+BEGIN
+!++
+! FUNCTIONAL DESCRIPTION:
+!
+!   Updates the in-use bitmap for the queue.  MUST HAVE BEEN READ
+!   WITH FLQ___GETBITMAP FIRST!
+!
+! RETURNS:	cond_value, longword (unsigned), write only, by value
+!
+! PROTOTYPE:
+!
+!   FLQ___FREEBITMAP  ctx, bmap [,update]
+!
+! ctx:	    qctxdef, longword (unsigned), modify, by reference
+! bmap:	    bitmap, longword (unsigned), write only, by reference
+! update:   boolean, longword (unsigned), read only, by value
+!
+! IMPLICIT INPUTS:  None.
+!
+! IMPLICIT OUTPUTS: None.
+!
+! COMPLETION CODES:
+!
+!   SS$_NORMAL:		normal successful completion.
+!
+! SIDE EFFECTS:
+!
+!   None.
+!--
+    BUILTIN
+	ACTUALCOUNT;
+
+    BIND
+	ctx = .ctx_a	        : QCTXDEF,
+	rab = ctx [QCTX_X_RAB]  : $RAB_DECL;
+
+    LOCAL
+	lsb : LSBDEF,
+	status;
+
+    IF .ctx [QCTX_A_BITMAP] EQLA 0 THEN
+        RETURN SS$_NORMAL;
+
+    IF ACTUALCOUNT () GTR 1 THEN
+	IF .update THEN
+	BEGIN
+	    rab [RAB$L_RBF] = .ctx [QCTX_A_BITMAP];
+	    rab [RAB$W_RSZ] = FLQ_K_BMAPSIZE;
+	    rab [RAB$L_BKT] = FLQ_K_BMAPBASE;
+	    status = $WRITE (RAB=rab);
+	    $FLUSH (RAB=rab);
+	END;
+    lsb [LSB_L_LKID] = .ctx [QCTX_L_BMAPLKID];
+    status = $ENQW (LKMODE=LCK$K_NLMODE, LKSB=lsb, FLAGS=LCK$M_CONVERT);
+    IF .status THEN
+        status = .lsb [LSB_W_STATUS];
+
+    LIB$FREE_VM_PAGE (%REF (FLQ_K_BMAPBLKS), ctx [QCTX_A_BITMAP]);
+    ctx [QCTX_A_BITMAP] = 0;
+
+    .STATUS
+
+END; ! FLQ___FREEBITMAP
+
+%SBTTL 'FLQ___LOCKENTRY'
+GLOBAL ROUTINE FLQ___LOCKENTRY (CTX_A, ENTNUM : LONG) =
+BEGIN
+!++
+! FUNCTIONAL DESCRIPTION:
+!
+!   Locks the specified queue entry and records that fact in the
+!   queue context block.
+!
+! RETURNS:	cond_value, longword (unsigned), write only, by value
+!
+! PROTOTYPE:
+!
+!   FLQ___LOCKENTRY  ctx, entnum
+!
+! ctx:	    qctxdef, longword (unsigned), modify, by reference
+! entnum:   longword_unsigned, longword (unsigned), read only, by value
+!
+! IMPLICIT INPUTS:  None.
+!
+! IMPLICIT OUTPUTS: None.
+!
+! COMPLETION CODES:
+!
+!   SS$_NORMAL:		normal successful completion.
+!
+! SIDE EFFECTS:
+!
+!   None.
+!--
+    BIND
+	ctx = .ctx_a    : QCTXDEF;
+
+    LOCAL
+	lsb	: LSBDEF,
+	dsc	: BLOCK [DSC$K_S_BLN, BYTE],
+	resbuf	: VECTOR [31, BYTE],
+	status;
+
+    !
+    !  Build the lock name.
+    !
+    CH$COPY (.ctx [QCTX_W_LCKPFX], ctx [QCTX_T_LCKPFX], 3, UPLIT ('_E#'),
+		4, entnum, %C' ', 31, resbuf);
+    INIT_SDESC (dsc, .ctx [QCTX_W_LCKPFX] + 7, resbuf);
+    !
+    !  And lock it.
+    !
+    status = $ENQW (LKMODE=LCK$K_EXMODE,
+	  	    LKSB=lsb,
+		    FLAGS=LCK$M_SYSTEM,
+		    ACMODE=PSL$C_USER,
+		    RESNAM=dsc);
+    IF .status THEN
+        status = .lsb [LSB_W_STATUS];
+    IF .status THEN
+    BEGIN
+	ctx [QCTX_L_ENTLKID] = .lsb [LSB_L_LKID];
+	ctx [QCTX_L_ENTNUM] = .entnum;
+    END
+    ELSE
+    BEGIN
+	ctx [QCTX_L_ENTNUM] = 0;
+	ctx [QCTX_L_ENTLKID] = 0;
+    END;
+
+    .status
+
+END; ! FLQ___LOCKENTRY
+
+%SBTTL 'FLQ___UNLKENTRY'
+GLOBAL ROUTINE FLQ___UNLKENTRY (ctx_a) =
+BEGIN
+!++
+! FUNCTIONAL DESCRIPTION:
+!
+!   Unlocks the currently locked queue entry, if there is one.
+!
+! RETURNS:	cond_value, longword (unsigned), write only, by value
+!
+! PROTOTYPE:
+!
+!   FLQ___UNLKENTRY  ctx
+!
+! ctx:	    qctxdef, longword (unsigned), modify, by reference
+!
+! IMPLICIT INPUTS:  None.
+!
+! IMPLICIT OUTPUTS: None.
+!
+! COMPLETION CODES:
+!
+!   SS$_NORMAL:		normal successful completion.
+!
+! SIDE EFFECTS:
+!
+!   None.
+!--
+    BIND
+	ctx = .ctx_a    : QCTXDEF;
+
+    LOCAL
+	status;
+
+    IF .ctx [QCTX_L_ENTLKID] EQLU 0 THEN
+        status = SS$_NORMAL
+    ELSE
+        status = $DEQ (LKID=.ctx [QCTX_L_ENTLKID]);
+    ctx [QCTX_L_ENTNUM] = 0;
+    ctx [QCTX_L_ENTLKID] = 0;
+
+    .status
+
+END; ! FLQ___UNLKENTRY
+
+
+%SBTTL 'FLQ___ALLOCENT'
+GLOBAL ROUTINE FLQ___ALLOCENT (ctx_a, entnum_a) =
+BEGIN
+!++
+! FUNCTIONAL DESCRIPTION:
+!
+!   Finds a free entry and locks it.
+!
+! RETURNS:	cond_value, longword (unsigned), write only, by value
+!
+! PROTOTYPE:
+!
+!   FLQ___ALLOCENT ctx, entnum
+!
+! ctx:	    qctxdef, longword (unsigned), modify, by reference
+! entnum:   unsigned longword, longword (unsigned), write only, by reference
+!
+! IMPLICIT INPUTS:  None.
+!
+! IMPLICIT OUTPUTS: None.
+!
+! COMPLETION CODES:
+!
+!   SS$_NORMAL:		normal successful completion.
+!
+! SIDE EFFECTS:
+!
+!   None.
+!--
+    BIND
+	ctx     = .ctx_a            : QCTXDEF,
+        rab     = ctx [QCTX_X_RAB]   : $RAB_DECL,
+        entnum  = .entnum_a         : LONG;
+
+    LOCAL
+        bmap    : REF BITVECTOR [],
+        qent    : QENTDEF,
+	status;
+
+    FLQ___UNLKENTRY (ctx);
+
+    status = FLQ___GETBITMAP (ctx, bmap);
+
+    IF NOT .status THEN
+        RETURN .status;
+
+    rab [RAB$L_UBF] = qent;
+    rab [RAB$W_USZ] = QENT_S_QENTDEF;
+
+    INCR i FROM 1 TO .ctx [QCTX_L_MAXENT] DO
+    BEGIN
+        IF NOT .bmap [.i-1] THEN
+        BEGIN
+            status = FLQ___LOCKENTRY (ctx, .i);
+            IF .status THEN
+            BEGIN
+                rab [RAB$L_BKT] = FLQ_K_QENTBASE + .i;
+                status = $READ (RAB=rab);
+                IF .status THEN
+                    status = NOT .qent [QENT_V_VALID];
+                IF .status THEN
+                BEGIN
+                    entnum = .i;
+                    bmap [.i-1] = 1;
+                    FLQ___FREEBITMAP (ctx, 1);
+                    RETURN SS$_NORMAL;
+                END;
+                FLQ___UNLKENTRY (ctx);
+            END;
+        END;
+    END;
+
+    FLQ___FREEBITMAP (ctx);
+
+    FLQ__QUEFULL
+
+END; ! FLQ___ALLOCENT
+
+
+%SBTTL 'FLQ___ENTFREED'
+GLOBAL ROUTINE FLQ___ENTFREED (ctx_a, entnum) =
+BEGIN
+!++
+! FUNCTIONAL DESCRIPTION:
+!
+!   Marks an entry as freed in the bitmap.
+!
+! RETURNS:	cond_value, longword (unsigned), write only, by value
+!
+! PROTOTYPE:
+!
+!   FLQ___ENTFREED ctx, entnum
+!
+! ctx:	    qctxdef, longword (unsigned), modify, by reference
+! entnum:   unsigned longword, longword (unsigned), read only, by value
+!
+! IMPLICIT INPUTS:  None.
+!
+! IMPLICIT OUTPUTS: None.
+!
+! COMPLETION CODES:
+!
+!   SS$_NORMAL:		normal successful completion.
+!
+! SIDE EFFECTS:
+!
+!   None.
+!--
+    BIND
+	ctx     = .ctx_a            : QCTXDEF;
+
+    LOCAL
+        bmap    : REF BITVECTOR [],
+        do_update,
+	status;
+
+    IF .entnum LSSU 1 OR .entnum GTRU .ctx [QCTX_L_MAXENT] THEN
+        RETURN SS$_BADPARAM;
+
+    status = FLQ___GETBITMAP (ctx, bmap);
+
+    IF NOT .status THEN
+        RETURN .status;
+
+    do_update = .bmap [.entnum-1];
+
+    bmap [.entnum-1] = 0;
+
+    FLQ___FREEBITMAP (ctx, .do_update);
+
+    SS$_NORMAL
+
+END; ! FLQ___ENTFREED
+
+
+%SBTTL 'FLQ___LOCK'
+GLOBAL ROUTINE FLQ___LOCK (CTX_A, QENT_A) =
+BEGIN
+!++
+! FUNCTIONAL DESCRIPTION:
+!
+!   Notify an MX agent via the agent-specific lock.
+!
+! RETURNS:	cond_value, longword (unsigned), write only, by value
+!
+! PROTOTYPE:
+!
+!   FLQ___LOCK  ctx, qent
+!
+! ctx:	    qctxdef, longword (unsigned), read only, by reference
+! qent:	    qentdef, longword (unsigned), read only, by reference
+!
+! IMPLICIT INPUTS:  None.
+!
+! IMPLICIT OUTPUTS: None.
+!
+! COMPLETION CODES:
+!
+!   SS$_NORMAL:		normal successful completion.
+!
+! SIDE EFFECTS:
+!
+!   None.
+!--
+
+    BIND
+	ctx	= .ctx_a		: QCTXDEF,
+	fab	= ctx [QCTX_X_FAB]	: $FAB_DECL,
+	rab	= ctx [QCTX_X_RAB]	: $RAB_DECL,
+	QENT	= .QENT_A		: QENTDEF;
+
+    LOCAL
+	lsb1	: LSBDEF,
+	lsb2	: LSBDEF,
+	grpwsb	: LSBDEF,
+	prvvec	: BLOCK [8,BYTE],
+	oldprv	: BLOCK [8,BYTE],
+	rsrc	: $BBLOCK [DSC$K_S_BLN],
+	resbuf	: VECTOR [64,BYTE],
+	rsrc2	: $BBLOCK [DSC$K_S_BLN],
+	res2bf	: VECTOR [64, BYTE],
+	grpw	: $BBLOCK [DSC$K_S_BLN],
+	grpwbf	: VECTOR [64, BYTE],
+    	agndsc	: BLOCK [DSC$K_S_BLN,BYTE],
+    	agnbuf	: VECTOR [16,BYTE],
+	efn,
+	status;
+
+    IF NOT .qent [QENT_V_LOCK] THEN
+    	RETURN SS$_NORMAL;
+
+    IF .qent [QENT_L_DSTPRC] GEQU FLQ_K_MX_AGENT_COUNT THEN
+    	RETURN SS$_NORMAL;
+
+
+    !+
+    !	Format the lock names based on the agent name.
+    !   Holding queue agent names must be $FAO'd.
+    !-
+    IF .qent [QENT_L_DSTPRC] LSSU MX_AGENTS_COUNT-1 THEN
+    BEGIN
+    	BIND
+    	    agntmp = .mx_agents [.qent [QENT_L_DSTPRC]] : BLOCK [,BYTE];
+    	INIT_SDESC (agndsc, .agntmp [DSC$W_LENGTH], .agntmp [DSC$A_POINTER]);
+    END
+    ELSE
+    BEGIN
+    	INIT_SDESC (agndsc, %ALLOCATION (agnbuf), agnbuf);
+    	$FAO (.mx_agents [FLQ_K_MX_HOLDQ_BASE], agndsc [DSC$W_LENGTH],
+    	      agndsc, (.qent [QENT_L_DSTPRC]-FLQ_K_MX_HOLDQ_BASE)+1);
+    END;
+
+    INIT_SDESC (rsrc, .ctx [QCTX_W_NODE]+.agndsc [DSC$W_LENGTH]+10,
+			resbuf);
+    IF (.rsrc [DSC$W_LENGTH] GTR %ALLOCATION (resbuf)) THEN
+	rsrc [DSC$W_LENGTH] = %ALLOCATION (resbuf);
+    CH$COPY (9, UPLIT ('FLQ_LOCK_'), .ctx [QCTX_W_NODE], ctx [QCTX_T_NODE],
+    	     1, UPLIT('_'), .agndsc [DSC$W_LENGTH], .agndsc [DSC$A_POINTER],
+    	     %C' ', .rsrc [DSC$W_LENGTH], resbuf);
+
+    INIT_SDESC (rsrc2, .ctx [QCTX_W_NODE]+.agndsc [DSC$W_LENGTH]+10, res2bf);
+    IF (.rsrc2 [DSC$W_LENGTH] GTR %ALLOCATION (res2bf)) THEN
+	rsrc2 [DSC$W_LENGTH] = %ALLOCATION (res2bf);
+    CH$COPY (9, UPLIT ('FLQ_LCK2_'), .ctx [QCTX_W_NODE], ctx [QCTX_T_NODE],
+    	     1, UPLIT('_'), .agndsc [DSC$W_LENGTH], .agndsc [DSC$A_POINTER],
+    	     %C' ', .rsrc2 [DSC$W_LENGTH], res2bf);
+
+    INIT_SDESC (grpw, .ctx [QCTX_W_NODE]+.agndsc [DSC$W_LENGTH]+9, grpwbf);
+    IF (.grpw [DSC$W_LENGTH] GTR %ALLOCATION (grpwbf)) THEN
+    	grpw [DSC$W_LENGTH] = %ALLOCATION (grpwbf);
+    CH$COPY (3, UPLIT ('MX_'), .ctx [QCTX_W_NODE], ctx [QCTX_T_NODE],
+    	     6, UPLIT('_GRPW_'), .agndsc [DSC$W_LENGTH], .agndsc [DSC$A_POINTER],
+    	     %C' ', .grpw [DSC$W_LENGTH], grpwbf);
+
+    status = LIB$GET_EF (efn);
+    IF NOT .status THEN RETURN .status;
+    prvvec [0,0,32,0] = prvvec [4,0,32,0] = 0;
+    prvvec [PRV$V_SYSLCK] = 1;
+    status = $SETPRV (ENBFLG=1, PRVADR=prvvec, PRVPRV=oldprv);
+    IF NOT .status THEN
+    BEGIN
+    	LIB$FREE_EF (efn);
+    	RETURN .status;
+    END;
+    status = $ENQW (EFN=.efn, LKMODE=LCK$K_EXMODE, LKSB=grpwsb,
+		    FLAGS=LCK$M_SYSTEM OR LCK$M_NODLCKWT, RESNAM=grpw,
+    	    	    ACMODE=PSL$C_USER);
+    IF .status THEN status = .grpwsb [LSB_W_STATUS];
+    IF .status THEN
+    BEGIN
+	status = $ENQW (EFN=.efn, LKMODE=LCK$K_EXMODE, LKSB=lsb2,
+		    	FLAGS=LCK$M_SYSTEM, RESNAM=rsrc2, ACMODE=PSL$C_USER);
+    	IF .status THEN status = .lsb2 [LSB_W_STATUS];
+	IF .status THEN
+	BEGIN
+	    status = $ENQW (EFN=.efn, LKMODE=LCK$K_EXMODE, LKSB=lsb1,
+		    	    FLAGS=LCK$M_SYSTEM OR LCK$M_NODLCKWT, RESNAM=rsrc,
+		    	    ACMODE=PSL$C_USER);
+	    IF (.QENT [QENT_L_STATUS] EQLU FLQ_K_STCAN) THEN
+		lsb1 [LSB_B_CMD]    = MX_K_CMD_DELENT
+	    ELSE
+		lsb1 [LSB_B_CMD]    = MX_K_CMD_NEWENT;
+	    lsb1 [LSB_L_ENTNUM] = .qent [QENT_L_ENTNUM];
+	    lsb1 [LSB_L_SIZE]   = .qent [QENT_L_SIZE];
+	    lsb1 [LSB_V_DELAY]	= .qent [QENT_V_DELAY];
+	    IF .status THEN status = .lsb1 [LSB_W_STATUS];
+    	    IF .status THEN
+		status = $DEQ (LKID=.lsb1 [LSB_L_LKID],
+			       VALBLK=lsb1 [LSB_X_VALBLK],
+			       ACMODE=PSL$C_USER);
+	    status = $DEQ (LKID=.lsb2 [LSB_L_LKID], ACMODE=PSL$C_USER);
+	END;
+	status = $DEQ (LKID=.grpwsb [LSB_L_LKID], ACMODE=PSL$C_USER);
+    END;
+
+    LIB$FREE_EF (efn);
+
+    IF NOT .oldprv [PRV$V_SYSLCK] THEN $SETPRV (ENBFLG=0, PRVADR=prvvec);
+
+    .status
+
+END; ! FLQ___LOCK
+
+END
+ELUDOM

@@ -1,0 +1,112 @@
+%TITLE 'FLQ_CLOSE'
+MODULE FLQ_CLOSE (IDENT='V2.1') =
+BEGIN
+!++
+! FACILITY:     FLQ
+!
+! ABSTRACT:     Closes a queue.
+!
+! MODULE DESCRIPTION:
+!
+!   This module contains routine FLQ_CLOSE, which closes an FLQ context stream.
+!
+! AUTHOR:	    M. Madison
+!
+! Copyright (c) 2008, Matthew Madison.
+! 
+! All rights reserved.
+! 
+! Redistribution and use in source and binary forms, with or without
+! modification, are permitted provided that the following conditions
+! are met:
+! 
+!     * Redistributions of source code must retain the above
+!       copyright notice, this list of conditions and the following
+!       disclaimer.
+!     * Redistributions in binary form must reproduce the above
+!       copyright notice, this list of conditions and the following
+!       disclaimer in the documentation and/or other materials provided
+!       with the distribution.
+!     * Neither the name of the copyright owner nor the names of any
+!       other contributors may be used to endorse or promote products
+!       derived from this software without specific prior written
+!       permission.
+! 
+! THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
+! "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
+! LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
+! A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
+! OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
+! SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
+! LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
+! DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
+! THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
+! (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
+! OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+!
+! CREATION DATE:    17-JUL-1991
+!
+! MODIFICATION HISTORY:
+!
+!   17-JUL-1991	V1.0	Madison	    Initial coding for FLQ V2.
+!    9-FEB-1994 V2.0	Goatley     Finish it.
+!   30-DEC-2004 V2.1    Madison     Queue no longer a linked list.
+!--
+
+    LIBRARY 'SYS$LIBRARY:STARLET';
+    LIBRARY 'FLQ_DEFS';
+    LIBRARY 'FLQ_PRIVATE_DEFS';
+
+    EXTERNAL ROUTINE
+        FLQ___FREEBITMAP,
+	G_HAT (LIB$FREE_VM_PAGE);
+
+%SBTTL 'FLQ_CLOSE'
+GLOBAL ROUTINE FLQ_CLOSE (ctx_a_a) =
+BEGIN
+!++
+! FUNCTIONAL DESCRIPTION:
+!
+!   Closes the queue currently open in the specified context.
+!
+! RETURNS:	cond_value, longword (unsigned), write only, by value
+!
+! PROTOTYPE:
+!
+!   FLQ_CLOSE  ctx
+!
+! ctx:	  longword_unsigned, longword (unsigned), modify, by reference
+!
+! IMPLICIT INPUTS:  None.
+!
+! IMPLICIT OUTPUTS: None.
+!
+! COMPLETION CODES:
+!
+!   SS$_NORMAL:		normal successful completion.
+!
+! SIDE EFFECTS:
+!
+!   None.
+!--
+    BIND
+	ctx = .ctx_a_a	: REF QCTXDEF;
+
+    IF .ctx [QCTX_L_ENTNUM] NEQ 0 THEN
+        $DEQ (LKID=.CTX [QCTX_L_ENTLKID]);
+
+    FLQ___FREEBITMAP (.ctx);
+
+    $DEQ (LKID=.ctx [QCTX_L_BMAPLKID]);
+        $CLOSE (FAB=ctx [QCTX_X_FAB]);
+
+    LIB$FREE_VM_PAGE (%REF (QCTX_K_PAGECNT), ctx);
+
+    CTX = 0;
+
+    SS$_NORMAL
+
+END; ! FLQ_CLOSE
+
+END
+ELUDOM

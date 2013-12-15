@@ -1,0 +1,162 @@
+!++
+!
+! FLQ_PRIVATE_DEFS.R32
+!
+!   REQUIRED file definining structures needed internally by FLQ.
+!
+! AUTHOR:   M. Madison
+!
+! Copyright (c) 2008, Matthew Madison.
+! 
+! All rights reserved.
+! 
+! Redistribution and use in source and binary forms, with or without
+! modification, are permitted provided that the following conditions
+! are met:
+! 
+!     * Redistributions of source code must retain the above
+!       copyright notice, this list of conditions and the following
+!       disclaimer.
+!     * Redistributions in binary form must reproduce the above
+!       copyright notice, this list of conditions and the following
+!       disclaimer in the documentation and/or other materials provided
+!       with the distribution.
+!     * Neither the name of the copyright owner nor the names of any
+!       other contributors may be used to endorse or promote products
+!       derived from this software without specific prior written
+!       permission.
+! 
+! THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
+! "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
+! LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
+! A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
+! OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
+! SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
+! LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
+! DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
+! THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
+! (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
+! OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+!
+! CREATION DATE:    11-JUL-1991
+!
+! MODIFICATION HISTORY:
+!
+!   11-JUL-1991	V1.0	Madison		Initial coding.
+!    9-FEB-1994	V2.0	Goatley		Finish it.
+!   15-MAR-1994 V2.0-1	Goatley		Increase queue size to 128K
+!    6-MAY-1994 V2.1	Altmayer	Re-structure lvb (remove LSBDEF)
+!   21-MAY-1994 V2.1-1	Goatley		Add QCTX_V_AUTOPURGE.
+!   30-DEC-2004 V2.2    Madison         Queue is no longer a linked list.
+!                                       No more QHDR, just the bitmap.
+!--
+
+    LIBRARY 'MX_SRC_COMMON:FIELDS';
+    LIBRARY 'SYS$LIBRARY:STARLET';
+
+    MACRO
+	FLQ_T_QUEFNM	= 'MX_SYSTEM_QUEUE'%,
+	FLQ_T_QUEDNM	= 'MX_FLQ_DIR:MX_SYSTEM_QUEUE.FLQ_CTL'%,
+	FLQ_T_SYSQDIR	= 'MX_FLQ_DIR:'%;
+
+    LITERAL
+	FLQ_K_MAXENT	= 128 * 1024,		!Maximum entries (128K)
+	FLQ_K_BMAPSIZE	= FLQ_K_MAXENT / 8,	!Size of bitmap in bytes
+	FLQ_K_BMAPBLKS	= (FLQ_K_BMAPSIZE+511)/512,	!Size in blocks
+	FLQ_K_BMAPBASE	= 1,
+	FLQ_K_QHDRBASE__obsolete = FLQ_K_BMAPBASE + (FLQ_K_BMAPSIZE + 511) / 512,
+	FLQ_K_QENTBASE	= FLQ_K_QHDRBASE__obsolete + 1; ! old queue heder took up one block
+
+    !
+    !  Make sure we're all even....
+    !
+    $ASSUME (((FLQ_K_BMAPBLKS*512)*8), EQLU, FLQ_K_MAXENT);
+
+    LITERAL
+	QCTX_S_NODE     = 32,
+	QCTX_S_QUENAM	= 255,
+	QCTX_S_LCKPFX	= 26;
+
+    _DEF (QCTX)
+	QCTX_Q_EXPDELTA	= _QUAD,
+	QCTX_L_BMAPLKID	= _LONG,	!Lock ID for bitmap
+	QCTX_L_ENTLKID	= _LONG,	!Lock ID for locked entry
+	QCTX_L_ENTNUM	= _LONG,	!Locked entry number
+        QCTX_A_BITMAP   = _LONG,        !Queue bitmap
+	QCTX_L_FLAGS	= _LONG,	!Flags
+	_OVERLAY (QCTX_L_FLAGS)
+	    QCTX_V_RDONLY   	= _BIT,
+	    QCTX_V_AUTOPURGE 	= _BIT,	!Automatically purge FINished entries
+	_ENDOVERLAY
+	QCTX_L_MAXENT	= _LONG,	!Maximum entries in queue
+	QCTX_W_NODE = _WORD,		!The node name (MX_FLQ_NODE)
+	QCTX_T_NODE = _BYTES (QCTX_S_NODE),
+	_ALIGN (LONG)
+	QCTX_W_QUENAM	= _WORD,
+	QCTX_T_QUENAM	= _BYTES (QCTX_S_QUENAM),
+	_ALIGN (LONG)
+	QCTX_W_LCKPFX	= _WORD,
+	QCTX_T_LCKPFX	= _BYTES (QCTX_S_LCKPFX),
+	_ALIGN (QUAD)
+	QCTX_X_FAB	= _BYTES (FAB$C_BLN),
+	_ALIGN (QUAD)
+	QCTX_X_RAB	= _BYTES (RAB$C_BLN)
+    _ENDDEF (QCTX);
+
+    LITERAL
+	QCTX_K_PAGECNT	= (QCTX_S_QCTXDEF + 511) / 512;
+
+!++
+! Useful macros
+!--
+
+    MACRO
+	INIT_DYNDESC (STR) [] =
+	    BEGIN
+		__INIT_DYNDESC1 (STR
+		    %IF NOT %NULL (%REMAINING) %THEN , %REMAINING %FI)
+	    END%,
+	__INIT_DYNDESC1 (STR) [] =
+	    BLOCK [STR, DSC$W_LENGTH;	DSC$K_S_BLN,BYTE] = 0;
+	    BLOCK [STR, DSC$B_CLASS;	DSC$K_S_BLN,BYTE] = DSC$K_CLASS_D;
+	    BLOCK [STR, DSC$B_DTYPE;	DSC$K_S_BLN,BYTE] = DSC$K_DTYPE_T;
+	    BLOCK [STR, DSC$A_POINTER;	DSC$K_S_BLN,BYTE] = 0;
+	    %IF NOT %NULL (%REMAINING) %THEN ; __INIT_DYNDESC1 (%REMAINING) %FI%,
+
+	FREE_STRINGS (STR) [] =
+	    BEGIN
+		EXTERNAL ROUTINE STR$FREE1_DX : BLISS ADDRESSING_MODE (GENERAL);
+		__FREE_STRING1 (STR
+		    %IF NOT %NULL (%REMAINING) %THEN , %REMAINING %FI)
+	    END%,
+	__FREE_STRING1 (STR) [] =
+	    STR$FREE1_DX (STR);
+	    %IF NOT %NULL (%REMAINING) %THEN ; __FREE_STRING1 (%REMAINING) %FI%,
+
+	INIT_SDESC (STR, LEN, PTR) =
+	    BEGIN
+		BIND __STR = STR : BLOCK [DSC$K_S_BLN,BYTE];
+		__STR [DSC$B_DTYPE] = DSC$K_DTYPE_T;
+		__STR [DSC$B_CLASS] = DSC$K_CLASS_S;
+		__STR [DSC$W_LENGTH] = LEN;
+		__STR [DSC$A_POINTER] = PTR;
+	    END%,
+
+	G_HAT (RTN) [] =
+	    RTN : BLISS ADDRESSING_MODE (GENERAL)
+	    %IF NOT %NULL (%REMAINING) %THEN , G_HAT (%REMAINING) %FI
+	%;
+
+    MACRO
+    	TABLE (TABNAM, ITEM1) [] =
+    	    %IF %LENGTH EQL 1 %THEN %EXITMACRO %FI
+    	    LITERAL %NAME (TABNAM, '_COUNT') = %LENGTH - 1;
+    	    PSECT OWN = $PLIT$;
+    	    OWN TABNAM : VECTOR [%NAME (TABNAM, '_COUNT'),LONG] INITIAL (
+    	    	%ASCID ITEM1
+    	    	%IF NOT %NULL (%REMAINING) %THEN FILLTAB (%REMAINING) %FI);
+    	    PSECT OWN = $OWN$;
+    	%,
+    	FILLTAB (X) [] =
+    	    , %ASCID X %IF NOT %NULL (%REMAINING) %THEN FILLTAB (%REMAINING) %FI
+    	%;

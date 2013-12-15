@@ -1,0 +1,176 @@
+%TITLE 'FLQ_REMOVE'
+MODULE FLQ_REMOVE (IDENT='V2.3',
+	ADDRESSING_MODE(EXTERNAL=LONG_RELATIVE)) =
+BEGIN
+!++
+! FACILITY:     FLQ
+!
+! ABSTRACT:     Removes a queue entry.
+!
+! MODULE DESCRIPTION:
+!
+!   This module contains routine FLQ_REMOVE, which removes a queue entry.
+!
+! AUTHOR:	    M. Madison
+!
+! Copyright (c) 2008, Matthew Madison.
+! 
+! All rights reserved.
+! 
+! Redistribution and use in source and binary forms, with or without
+! modification, are permitted provided that the following conditions
+! are met:
+! 
+!     * Redistributions of source code must retain the above
+!       copyright notice, this list of conditions and the following
+!       disclaimer.
+!     * Redistributions in binary form must reproduce the above
+!       copyright notice, this list of conditions and the following
+!       disclaimer in the documentation and/or other materials provided
+!       with the distribution.
+!     * Neither the name of the copyright owner nor the names of any
+!       other contributors may be used to endorse or promote products
+!       derived from this software without specific prior written
+!       permission.
+! 
+! THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
+! "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
+! LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
+! A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
+! OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
+! SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
+! LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
+! DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
+! THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
+! (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
+! OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+!
+! CREATION DATE:    17-JUL-1991
+!
+! MODIFICATION HISTORY:
+!
+!   17-JUL-1991	V1.0	Madison	    Initial coding for FLQ V2.
+!    9-FEB-1994 V2.0	Goatley     Finish it.
+!    6-MAY-1994	V2.1	Altmayer    Re-structure lsb (add IPC library)
+!   31-AUG-1997	V2.2	Madison	    Transactional removes.  Also, use
+!   	    	    	    	    EXMODE lock on queue header to ensure
+!   	    	    	    	    we're the only one writing it!!!
+!   20-JUN-1999	V2.2-1	Madison	    Fix unlocking of queue header after
+!   	    	    	    	    failed $READ during validation.
+!   08-NOV-2004 V2.2-2  Madison     I64 port.
+!   30-DEC-2004 V2.3    Madison     Queue is no longer a linked list.
+!--
+
+    LIBRARY 'SYS$LIBRARY:STARLET';
+    LIBRARY 'MX_SRC_COMMON:IPC';
+    LIBRARY 'FLQ_DEFS';
+    LIBRARY 'FLQ_PRIVATE_DEFS';
+
+%IF %BLISS (BLISS32V) %THEN
+    MACRO ALIAS = %;
+%FI
+
+    EXTERNAL ROUTINE
+	FLQ___LOCKENTRY, FLQ___UNLKENTRY,
+	FLQ___ENTFREED;
+
+    EXTERNAL LITERAL
+	FLQ__NOSUCHENT;
+
+%SBTTL 'FLQ_REMOVE'
+GLOBAL ROUTINE FLQ_REMOVE (ctx_a_a, entnum) =
+BEGIN
+!++
+! FUNCTIONAL DESCRIPTION:
+!
+!   Removes a queue entry.
+!
+! RETURNS:	cond_value, longword (unsigned), write only, by value
+!
+! PROTOTYPE:
+!
+!   FLQ_REMOVE	ctx, qent
+!
+! ctx:	  longword_unsigned, longword (unsigned), modify, by reference
+! qent:	  queue_entry, longword (unsigned), modify, by reference
+!
+! IMPLICIT INPUTS:  None.
+!
+! IMPLICIT OUTPUTS: None.
+!
+! COMPLETION CODES:
+!
+!   SS$_NORMAL:		normal successful completion.
+!
+! SIDE EFFECTS:
+!
+!   None.
+!--
+    BUILTIN
+    	ACTUALCOUNT;
+
+    BIND
+	ctx	= .ctx_a_a		: REF QCTXDEF,
+	rab	= ctx [QCTX_X_RAB]	: $RAB_DECL;
+
+    LOCAL
+	tmpent	: QENTDEF,
+	status;
+
+    IF .ctx [QCTX_V_RDONLY] THEN
+	RETURN FLQ__RDONLY;
+
+
+    !
+    !  Unlock the locked entry if it's not the one to be removed.
+    !
+    IF .entnum NEQU .ctx [QCTX_L_ENTNUM] THEN
+    BEGIN
+        FLQ___UNLKENTRY (.ctx);
+        FLQ___LOCKENTRY (.ctx, .entnum);
+    END;
+
+    !
+    !  Read the desired queue entry.
+    !
+    rab [RAB$L_UBF] = rab [RAB$L_RBF] = tmpent;
+    rab [RAB$L_BKT] = FLQ_K_QENTBASE + .ctx [QCTX_L_ENTNUM];
+    rab [RAB$W_USZ] = QENT_S_QENTDEF;
+    status = $READ (RAB=rab);
+    IF NOT .status THEN
+    BEGIN
+        FLQ___UNLKENTRY (.ctx);
+        RETURN .status;
+    END;
+    !
+    !  If the entry is not valid, return an error.
+    !
+    IF NOT .tmpent [QENT_V_VALID] THEN
+    BEGIN
+        FLQ___UNLKENTRY (.CTX);
+        RETURN FLQ__NOSUCHENT;
+    END;
+
+    !  Step 1.  Mark the entry invalid.
+
+    tmpent [QENT_V_VALID] = 0;
+    status = $WRITE (RAB=rab);
+    IF NOT .status THEN
+    BEGIN
+        FLQ___UNLKENTRY (.ctx);
+        RETURN .status;
+    END;
+
+    $FLUSH (RAB=rab);
+
+    !	Step 2.  Mark it free in the bitmap.
+
+    FLQ___ENTFREED (.ctx, .entnum);
+    FLQ___UNLKENTRY (.ctx);
+
+    SS$_NORMAL
+
+END; ! FLQ_REMOVE
+
+END
+ELUDOM

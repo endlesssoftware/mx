@@ -1,0 +1,158 @@
+%TITLE 'FLQ_ADD'
+MODULE FLQ_ADD (IDENT='V2.1',
+	ADDRESSING_MODE(EXTERNAL=LONG_RELATIVE,NONEXTERNAL=LONG_RELATIVE)) =
+
+BEGIN
+!++
+! FACILITY:     FLQ
+!
+! ABSTRACT:     Adds an entry to a queue.
+!
+! MODULE DESCRIPTION:
+!
+!   This module contains routine FLQ_ADD, which adds an entry to a queue.
+!
+! AUTHOR:	    M. Madison
+!
+! Copyright (c) 2008, Matthew Madison.
+! 
+! All rights reserved.
+! 
+! Redistribution and use in source and binary forms, with or without
+! modification, are permitted provided that the following conditions
+! are met:
+! 
+!     * Redistributions of source code must retain the above
+!       copyright notice, this list of conditions and the following
+!       disclaimer.
+!     * Redistributions in binary form must reproduce the above
+!       copyright notice, this list of conditions and the following
+!       disclaimer in the documentation and/or other materials provided
+!       with the distribution.
+!     * Neither the name of the copyright owner nor the names of any
+!       other contributors may be used to endorse or promote products
+!       derived from this software without specific prior written
+!       permission.
+! 
+! THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
+! "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
+! LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
+! A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
+! OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
+! SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
+! LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
+! DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
+! THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
+! (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
+! OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+!
+! CREATION DATE:    15-JUL-1991
+!
+! MODIFICATION HISTORY:
+!
+!   15-JUL-1991	V1.0	Madison	    Initial coding for FLQ V2.
+!    8-FEB-1994 V2.0	Goatley     Finish it.
+!   16-MAR-1994 V2.0-1	Goatley     Add error check on entry lock.
+!   17-MAR-1994 V2.0-2	Goatley     Fix incorrect error check.
+!   25-MAR-1994 V2.0-3	Goatley     When added STINP, save the process's PID.
+!   30-DEC-2004 V2.1    Madison     Queue no longer a linked list.
+!--
+
+    LIBRARY 'SYS$LIBRARY:STARLET';
+    LIBRARY 'FLQ_DEFS';
+    LIBRARY 'FLQ_PRIVATE_DEFS';
+
+    EXTERNAL ROUTINE
+	FLQ___ALLOCENT,
+        FLQ___ENTFREED,
+	FLQ___UNLKENTRY,
+        FLQ___LOCK;
+
+    EXTERNAL LITERAL
+	FLQ__QUEFULL;
+
+%SBTTL 'FLQ_ADD'
+GLOBAL ROUTINE FLQ_ADD (ctx_a_a, qent_a) =
+BEGIN
+!++
+! FUNCTIONAL DESCRIPTION:
+!
+!   Adds an entry to a queue.
+!
+! RETURNS:	cond_value, longword (unsigned), write only, by value
+!
+! PROTOTYPE:
+!
+!   FLQ_ADD  ctx, qent
+!
+! ctx:	  longword_unsigned, longword (unsigned), modify, by reference
+! qent:	  queue_entry, longword (unsigned), modify, by reference
+!
+! IMPLICIT INPUTS:  None.
+!
+! IMPLICIT OUTPUTS: None.
+!
+! COMPLETION CODES:
+!
+!   SS$_NORMAL:		normal successful completion.
+!
+! SIDE EFFECTS:
+!
+!   None.
+!--
+    BUILTIN
+        SUBM;
+
+    BIND
+	ctx =   .ctx_a_a            : REF QCTXDEF,
+	rab =    ctx [QCTX_X_RAB]   : $RAB_DECL,
+	qent =  .qent_a             : QENTDEF;
+
+    LOCAL
+	itmlst	: $ITMLST_DECL (ITEMS=1),
+	POS,
+	ENTNUM,
+	STATUS;
+
+    IF .CTX [QCTX_V_RDONLY] THEN RETURN FLQ__RDONLY;
+
+    status = FLQ___ALLOCENT (.ctx, entnum);
+    IF NOT .status THEN
+        RETURN FLQ__QUEFULL;
+
+    qent [QENT_L_ENTNUM] = .entnum;
+    $GETTIM (TIMADR=qent [QENT_Q_CREDT]);
+    CH$MOVE (8, qent [QENT_Q_CREDT], qent [QENT_Q_MODDT]);
+    IF CH$EQL (8, UPLIT (0,0), 8, qent [QENT_Q_EXPDT]) THEN
+        SUBM (2, ctx [QCTX_Q_EXPDELTA], qent [QENT_Q_CREDT], qent [QENT_Q_EXPDT]);
+
+    IF .qent [QENT_L_STATUS] EQLU FLQ_K_STINP THEN
+    BEGIN
+        $ITMLST_INIT (ITMLST = itmlst,
+            (ITMCOD=JPI$_PID, BUFSIZ=4, BUFADR=qent [QENT_L_INPPID]));
+        $GETJPIW (ITMLST=itmlst);
+    END
+    ELSE
+        qent [QENT_L_INPPID] = 0;
+
+    qent [QENT_L___obs1] = qent [QENT_L___obs2] = 0;
+    qent [QENT_V_VALID] = 1;
+
+    rab [RAB$L_RBF] = qent;
+    rab [RAB$W_RSZ] = QENT_S_QENTDEF;
+    rab [RAB$L_BKT] = FLQ_K_QENTBASE + .entnum;
+    status = $WRITE (RAB=rab);
+    FLQ___UNLKENTRY (.ctx);
+    IF NOT .status THEN
+        FLQ___ENTFREED (.ctx, .entnum);
+
+    IF .status AND .qent [QENT_V_LOCK] AND
+            .qent [QENT_L_STATUS] EQLU FLQ_K_STRDY THEN
+        FLQ___LOCK (.ctx, .qent_a);
+
+    .status
+
+END; ! FLQ_ADD
+
+END
+ELUDOM

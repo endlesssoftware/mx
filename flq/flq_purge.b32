@@ -1,0 +1,137 @@
+%TITLE 'FLQ_PURGE'
+MODULE FLQ_PURGE (IDENT='V1.2',
+	ADDRESSING_MODE(EXTERNAL=LONG_RELATIVE,NONEXTERNAL=LONG_RELATIVE)) =
+BEGIN
+!++
+! FACILITY: 	FLQ
+!
+! ABSTRACT: 	Purges a queue entry by deleting the related files
+!		and calling FLQ_REMOVE to remove the entry.
+!
+! MODULE DESCRIPTION:
+!
+!   This module contains routine FLQ_PURGE, which purges a queue entry.
+!
+! AUTHOR:	Hunter Goatley
+!
+! Copyright (c) 2008, Matthew Madison and Hunter Goatley.
+! 
+! All rights reserved.
+! 
+! Redistribution and use in source and binary forms, with or without
+! modification, are permitted provided that the following conditions
+! are met:
+! 
+!     * Redistributions of source code must retain the above
+!       copyright notice, this list of conditions and the following
+!       disclaimer.
+!     * Redistributions in binary form must reproduce the above
+!       copyright notice, this list of conditions and the following
+!       disclaimer in the documentation and/or other materials provided
+!       with the distribution.
+!     * Neither the name of the copyright owner nor the names of any
+!       other contributors may be used to endorse or promote products
+!       derived from this software without specific prior written
+!       permission.
+! 
+! THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
+! "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
+! LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
+! A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
+! OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
+! SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
+! LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
+! DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
+! THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
+! (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
+! OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+!
+! CREATION DATE:    May 21, 1994
+!
+! MODIFICATION HISTORY:
+!
+!   21-MAY-1994 V1.0	Goatley		Initial coding as an FLQ_ routine.
+!   20-SEP-1996 V1.1	Goatley		Ooops!  LIB$FILE_SCAN_END takes 2 args
+!   31-AUG-1997	V1.2	Madison	    	Add VALIDATING arg for use during 
+!   	    	    	    	    	queue validation.
+!--
+    LIBRARY 'SYS$LIBRARY:STARLET';
+    LIBRARY 'MX_SRC_COMMON:IPC';
+    LIBRARY 'FLQ_DEFS';
+    LIBRARY 'FLQ_PRIVATE_DEFS';
+
+    EXTERNAL ROUTINE
+    	FLQ___LOCKENTRY,
+    	FLQ___UNLKENTRY,
+	FLQ_MAKE_FSPEC,
+	FLQ_REMOVE,
+	G_HAT (LIB$DELETE_FILE, LIB$FILE_SCAN_END);
+
+
+%SBTTL 'FLQ_PURGE'
+GLOBAL ROUTINE FLQ_PURGE (CTX_A_A, QENT_A, VALIDATING) =
+BEGIN
+!++
+! FUNCTIONAL DESCRIPTION:
+!
+!   Removes a queue entry and related files.
+!
+! RETURNS:  	cond_value, longword (unsigned), write only, by value
+!
+! PROTOTYPE:
+!
+!  FLQ_PURGE  qctx, qent
+!
+! IMPLICIT INPUTS:  None.
+!
+! IMPLICIT OUTPUTS: None.
+!
+! COMPLETION CODES:
+!
+!   SS$_NORMAL:	    	normal successful completion.
+!
+! SIDE EFFECTS:
+!
+!   None.
+!--
+    BUILTIN
+    	ACTUALCOUNT;
+
+    BIND
+    	ctx	= .ctx_a_a		: REF QCTXDEF,
+    	qent	= .qent_a		: QENTDEF;
+
+    LOCAL
+    	fspec	: $BBLOCK [DSC$K_S_BLN],
+    	delctx, status;
+
+    INIT_DYNDESC (fspec);
+
+    !
+    !  Unlock the locked entry if it's not the one to be removed.
+    !
+    IF (.qent [QENT_L_ENTNUM] NEQU .ctx [QCTX_L_ENTNUM])
+    THEN
+	BEGIN
+	FLQ___UNLKENTRY (.ctx);			!Unlock existing entry, if there
+	FLQ___LOCKENTRY (.ctx, .qent [QENT_L_ENTNUM]);	!Lock entry to be removed
+	END;
+
+    FLQ_MAKE_FSPEC (.qent [QENT_L_ENTNUM], %ASCID'*;*', fspec);
+
+    delctx = 0;
+
+    WHILE LIB$DELETE_FILE (fspec, 0, 0, 0, 0, 0, 0, 0, delctx) DO;
+    LIB$FILE_SCAN_END (0, delctx);		!Deallocate context
+
+    FLQ_REMOVE (ctx, .qent [QENT_L_ENTNUM],
+    	    	(IF ACTUALCOUNT () GEQ 3 THEN .VALIDATING ELSE 0));
+
+    FREE_STRINGS (fspec);
+
+    SS$_NORMAL
+
+END; ! FLQ_PURGE
+
+END
+ELUDOM

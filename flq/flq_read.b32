@@ -1,0 +1,146 @@
+%TITLE 'FLQ_READ'
+MODULE FLQ_READ (IDENT='V2.2',
+	ADDRESSING_MODE(EXTERNAL=LONG_RELATIVE)) =
+BEGIN
+!++
+! FACILITY:     FLQ
+!
+! ABSTRACT:     Reads a specific queue entry.
+!
+! MODULE DESCRIPTION:
+!
+!   This module contains routine FLQ_READ, which reads in a queue entry
+!   by entry number.
+!
+! AUTHOR:	    M. Madison
+!
+! Copyright (c) 2008, Matthew Madison.
+! 
+! All rights reserved.
+! 
+! Redistribution and use in source and binary forms, with or without
+! modification, are permitted provided that the following conditions
+! are met:
+! 
+!     * Redistributions of source code must retain the above
+!       copyright notice, this list of conditions and the following
+!       disclaimer.
+!     * Redistributions in binary form must reproduce the above
+!       copyright notice, this list of conditions and the following
+!       disclaimer in the documentation and/or other materials provided
+!       with the distribution.
+!     * Neither the name of the copyright owner nor the names of any
+!       other contributors may be used to endorse or promote products
+!       derived from this software without specific prior written
+!       permission.
+! 
+! THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
+! "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
+! LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
+! A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
+! OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
+! SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
+! LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
+! DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
+! THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
+! (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
+! OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+!
+! CREATION DATE:    17-JUL-1991
+!
+! MODIFICATION HISTORY:
+!
+!   17-JUL-1991	V1.0	Madison	    Initial coding for FLQ V2.
+!    9-FEB-1994 V2.0	Goatley     Finish it.
+!   22-MAR-1994 V2.0-1	Goatley     Add check for bad entry number.
+!    6-MAY-1994	V2.1	Altmayer    Re-structure lsv (add IPC library)
+!   30-DEC-2004 V2.2    Madison     Queue is no longer a linked list.
+!--
+
+    LIBRARY 'SYS$LIBRARY:STARLET';
+    LIBRARY 'MX_SRC_COMMON:IPC';
+    LIBRARY 'FLQ_DEFS';
+    LIBRARY 'FLQ_PRIVATE_DEFS';
+
+    EXTERNAL ROUTINE
+	FLQ___LOCKENTRY, FLQ___UNLKENTRY;
+
+    EXTERNAL LITERAL
+	FLQ__NOSUCHENT, FLQ__INVDENTNO;
+
+%SBTTL 'FLQ_READ'
+GLOBAL ROUTINE FLQ_READ (CTX_A_A, ENTNUM, QENT_A, NOLOCK) =
+BEGIN
+!++
+! FUNCTIONAL DESCRIPTION:
+!
+!   Reads an entry from a queue.
+!
+! RETURNS:	cond_value, longword (unsigned), write only, by value
+!
+! PROTOTYPE:
+!
+!   FLQ_READ  ctx, entnum, qent [,nolock]
+!
+! ctx:	  longword_unsigned, longword (unsigned), modify, by reference
+! entnum: word_unsigned, word (unsigned), read only, by value
+! qent:	  queue_entry, longword (unsigned), modify, by reference
+! nolock: boolean, longword (unsigned), read only, by value
+!
+! IMPLICIT INPUTS:  None.
+!
+! IMPLICIT OUTPUTS: None.
+!
+! COMPLETION CODES:
+!
+!   SS$_NORMAL:		normal successful completion.
+!
+! SIDE EFFECTS:
+!
+!   None.
+!--
+    BUILTIN
+	ACTUALCOUNT;
+
+    BIND
+	ctx	= .ctx_a_a		: REF QCTXDEF,
+	rab	= ctx [QCTX_X_RAB]	: $RAB_DECL,
+	qent	= .qent_a		: QENTDEF;
+
+    LOCAL
+	dolock,
+	status;
+
+    IF .entnum EQLU 0 THEN
+	RETURN FLQ__INVDENTNO;
+
+    FLQ___UNLKENTRY (.ctx);  ! in case one is currently locked
+
+    dolock = (IF NOT .ctx [QCTX_V_RDONLY] THEN
+		IF ACTUALCOUNT () LSS 4 THEN 1
+		ELSE NOT .nolock
+	      ELSE 0);
+
+    IF .dolock THEN
+	FLQ___LOCKENTRY (.ctx, .entnum);
+
+    rab [RAB$L_UBF] = qent;
+    rab [RAB$L_BKT] = FLQ_K_QENTBASE + .entnum;
+    rab [RAB$W_USZ] = QENT_S_QENTDEF;
+    status = $READ (RAB = rab);
+    IF .status THEN
+        IF NOT .qent [QENT_V_VALID] THEN
+        BEGIN
+            status = FLQ__NOSUCHENT;
+            qent [QENT_L_ENTNUM] = 0;
+        END;
+    
+    IF NOT .status AND .dolock THEN
+        FLQ___UNLKENTRY (.CTX);
+
+    .status
+
+END; ! FLQ_READ
+
+END
+ELUDOM

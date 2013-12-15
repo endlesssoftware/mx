@@ -1,0 +1,341 @@
+!++
+! FLQ.R32
+! FLQ definitions for BLISS-32
+!
+! Copyright (c) 2008, Matthew Madison.
+! Copyright (c) 2011, Endless Software Solutions.
+! 
+! All rights reserved.
+! 
+! Redistribution and use in source and binary forms, with or without
+! modification, are permitted provided that the following conditions
+! are met:
+! 
+!     * Redistributions of source code must retain the above
+!       copyright notice, this list of conditions and the following
+!       disclaimer.
+!     * Redistributions in binary form must reproduce the above
+!       copyright notice, this list of conditions and the following
+!       disclaimer in the documentation and/or other materials provided
+!       with the distribution.
+!     * Neither the name of the copyright owner nor the names of any
+!       other contributors may be used to endorse or promote products
+!       derived from this software without specific prior written
+!       permission.
+! 
+! THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
+! "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
+! LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
+! A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
+! OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
+! SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
+! LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
+! DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
+! THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
+! (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
+! OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+! 11-JUL-1991  V2.0 New, streamlined FLQ library
+!  9-FEB-1994  V2.1	Finish it.
+! 14-MAY-1994  V2.2	Add FLQ_K_MX_LSV
+! 22-MAY-1994  V2.2-1	Add FLQ_PURGE.
+! 29-JAN-2000  V2.2-2   More holding queues.
+! 30-DEC-2004  V2.3     Eliminate obsolete fields.
+!--
+
+    LIBRARY 'MX_SRC_COMMON:FIELDS';
+
+    LITERAL
+	FLQ__RDONLY	= 1,
+	FLQ__FULL	= 15,
+
+	FLQ_K_VER	= 4,
+
+	FLQ_K_STRDY	= 1,
+	FLQ_K_STUHO	= 2,
+	FLQ_K_STOPH	= 3,
+	FLQ_K_STINP	= 4,
+	FLQ_K_STFIN	= 5,
+	FLQ_K_STCAN	= 6,
+
+	FLQ_K_MX_ROUTER	= 0,		!The agents.  Note that the order
+	FLQ_K_MX_LOCAL	= 1,		!... here *MUST* match the order of
+	FLQ_K_MX_MLF	= 2,		!... the table of names defined in
+	FLQ_K_MX_SITE	= 3,		!... FLQ___ROUTINES.B32 *AND* the
+	FLQ_K_MX_DNSMTP	= 4,	    	!... the table in [MX.COMMON]AGENT.B32.
+	FLQ_K_MX_SMTP	= 5,
+	FLQ_K_MX_XSMTP	= 6,
+	FLQ_K_MX_UUCP	= 7,
+	FLQ_K_MX_UNUSED0= 8,
+	FLQ_K_MX_LSV	= 9,
+        FLQ_K_MX_HOLDQ_BASE = 10,   	! HOLD1 is 10...HOLD32 is 41
+    	FLQ_K_MX_HOLDQ_MAX  = 32,
+    	FLQ_K_MX_AGENT_COUNT = (FLQ_K_MX_HOLDQ_BASE+FLQ_K_MX_HOLDQ_MAX),
+
+	FLQS__SIZE	= 1,
+        FLQS__STATUS	= 2,
+	FLQS__FLAGS	= 3,
+	FLQS__CREDT	= 4,
+	FLQS__MODDT	= 5,
+	FLQS__EXPDT	= 6,
+	FLQS__DLYDT	= 7,
+	FLQS__ORG	= 8,
+	FLQS__DEST	= 9,
+	FLQS__DSTPRC	= 10,
+	FLQS__ORIGIN	= 11;
+
+    LITERAL
+	FLQ_K_QENTSIZE	= 512,
+	QENT_S_ORGADR	= 62,
+	QENT_S_ORGUSR	= 32,
+	QENT_S_ORGHST	= 16,
+	QENT_S_DSTUSR	= 32,
+	QENT_S_DSTHST	= 16,
+	QENT_S_USRDAT	= 256,
+	QENT_S_REFARR	= 128;	 ! 64 words; allows up to 64 coordinated queues
+
+    _DEF (QENT)
+	QENT_L___obs1	= _LONG,	!Forward link to next entry in queue (obsolete)
+	QENT_L___obs2	= _LONG,	!Backward link to previous entry (obsolete
+	QENT_L_ENTNUM	= _LONG,	!The entry number
+	QENT_L_FLQVER	= _LONG,	!The FLQ version number
+	QENT_L_SIZE	= _LONG,	!The size of the message in bytes
+	QENT_L_INPPID	= _LONG,	!The PID of the processing process
+	QENT_Q_CREDT	= _QUAD,	!The creation date for the entry
+	QENT_Q_MODDT	= _QUAD,	!The modification date
+	QENT_Q_DLYDT	= _QUAD,	!The delay date for the entry
+	QENT_Q_EXPDT	= _QUAD,	!The expiration date for the entry
+	QENT_L_STATUS	= _LONG,	!The status for the entry (INP, etc.)
+	QENT_L_FLAGS	= _LONG,	!Various flags for the entry
+	_OVERLAY (QENT_L_FLAGS)
+	    QENT_V_VALID   = _BIT,	!Valid FLQ entry
+	    QENT_V_LOCK    = _BIT,	!Notify a process using locks
+	    QENT_V_DELAY   = _BIT,	!Delay processing for this entry
+	_ENDOVERLAY
+	QENT_L_ORIGIN	= _LONG,	!The originating agent
+	QENT_L_DSTPRC	= _LONG,	!The destination process (agent)
+	QENT_W_ORGADR	= _WORD,	!The originating address
+	QENT_T_ORGADR	= _BYTES (QENT_S_ORGADR),
+	QENT_W_ORGUSR	= _WORD,	!The originating user (Jnet)
+	QENT_T_ORGUSR	= _BYTES (QENT_S_ORGUSR),
+	QENT_W_ORGHST	= _WORD,	!The originating host (Jnet)
+	QENT_T_ORGHST	= _BYTES (QENT_S_ORGHST),
+	QENT_W_DSTUSR	= _WORD,	!The destination user (Jnet)
+	QENT_T_DSTUSR	= _BYTES (QENT_S_DSTUSR),
+	QENT_W_DSTHST	= _WORD,	!The destination host (Jnet)
+	QENT_T_DSTHST	= _BYTES (QENT_S_DSTHST),
+	QENT_X_PADDING	= _BYTES (FLQ_K_QENTSIZE-256-_FLD_CUR_BYT),
+	QENT_T_USRDAT	= _BYTES (FLQ_K_QENTSIZE-_FLD_CUR_BYT)
+    _ENDDEF (QENT);
+
+    %MESSAGE ('Structure QENTDEF size: ',
+	%SIZE (BLOCK[QENT_S_QENTDEF,BYTE]), ' bytes')
+
+    MACRO
+	FLQ_INIT_QENT (QE) =
+	BEGIN
+		BIND ent = qe : QENTDEF;
+		CH$FILL (%CHAR(0), QENT_S_QENTDEF, ent);
+		ent [QENT_L_FLQVER] = FLQ_K_VER;
+	END%;
+
+    EXTERNAL ROUTINE
+	FLQ_ADD		: ADDRESSING_MODE (GENERAL),
+	FLQ_CLOSE	: ADDRESSING_MODE (GENERAL),
+	FLQ_OPEN	: ADDRESSING_MODE (GENERAL),
+	FLQ_PURGE	: ADDRESSING_MODE (GENERAL),
+	FLQ_READ	: ADDRESSING_MODE (GENERAL),
+	FLQ_REMOVE	: ADDRESSING_MODE (GENERAL),
+	FLQ_SEARCH	: ADDRESSING_MODE (GENERAL),
+	FLQ_UPDATE	: ADDRESSING_MODE (GENERAL),
+	FLQ_MAKE_FSPEC	: ADDRESSING_MODE (GENERAL),
+    	FLQ_GET_MAXSIZE	: ADDRESSING_MODE (GENERAL);
+
+    MACRO
+	FLQS_S_SRCHITM	= 12%,
+	FLQS_L_CODE	= 0,0,32,0%,
+	FLQS_L_COUNT	= 4,0,32,0%,
+	FLQS_L_MINSIZE	= 4,0,32,0%,
+	FLQS_L_MAXSIZE	= 8,0,32,0%,
+	FLQS_L_STATUS	= 8,0,32,0%,
+	FLQS_B_MASK	= 4,0, 8,0%,
+	FLQS_B_FLAGS	= 8,0, 8,0%,
+	FLQS_L_AFTER	= 4,0,32,0%,
+	FLQS_L_BEFORE	= 8,0,32,0%,
+	FLQS_L_DSTPRC	= 8,0,32,0%,
+	FLQS_L_ORIGIN	= 8,0,32,0%;
+
+    STRUCTURE
+	_FLQSRCHBLK [I, O, P, S, E; N, BS=FLQS_S_SRCHITM, UNIT=1] =
+	[N*BS*UNIT+4]
+	(_FLQSRCHBLK+(I*BS+O)*UNIT)<P,S,E>;
+
+    KEYWORDMACRO
+	_FLQSRCHLST_DECL (ITEMS=1) = _FLQSRCHBLK [ITEMS] %;
+
+    MACRO
+    	_FLQSRCHLST_INIT (SRCHLST) [ITEM_VALUES] =
+    	    %IF %COUNT EQL 0 %THEN
+    	    	__FLQSRCH_INITIATE (SRCHLST, NUMITM=%LENGTH-1)
+    	    %FI
+
+    	    __FLQSRCH_INIT (%REMOVE (ITEM_VALUES))
+
+    	    %IF %COUNT EQL %LENGTH-2 %THEN
+    	    	__FLQSRCHPTR [0,0,32,0] = 0;
+    	    	__FLQSRCHPTR = .__FLQSRCHPTR + 4;
+    	    	END
+    	    %FI
+    	%;
+
+    KEYWORDMACRO
+    	__FLQSRCH_INITIATE (SRCHLST, NUMITM) =
+    	    %IF %ALLOCATION (SRCHLST) LSSU ((NUMITM)*FLQS_S_SRCHITM+4) %THEN
+    	    	%ERRORMACRO ('search list ', SRCHLST, ' not large enough')
+    	    %FI
+
+    	    BEGIN
+    	    LOCAL __FLQSRCHPTR : REF BLOCK [,BYTE];
+    	    __FLQSRCHPTR = (SRCHLST);
+    	%,
+
+    	__FLQSRCH_INIT (CODE, COUNT, CLASS, MINSIZE, MAXSIZE, STATUS, MASK,
+    	    	FLAGS, AFTER, BEFORE, DSTPRC, ORIGIN) =
+    	    %IF %NULL (CODE) %THEN
+    	    	%ERRORMACRO ('CODE must be specified')
+    	    %FI
+
+    	    __FLQSRCHPTR [FLQS_L_CODE] = (CODE);
+    	    %IF %IDENTICAL (CODE, FLQS__SIZE) %THEN
+    	    	__FLQSRCHPTR [FLQS_L_MINSIZE] =
+    	    	    %IF %NULL (MINSIZE) %THEN 0 %ELSE (MINSIZE) %FI;
+    	    	__FLQSRCHPTR [FLQS_L_MAXSIZE] =
+    	    	    %IF %NULL (MAXSIZE) %THEN 0 %ELSE (MAXSIZE) %FI;
+    	    %ELSE %IF %IDENTICAL (CODE, FLQS__STATUS) %THEN
+    	    	%IF %NULL (COUNT) OR %NULL (STATUS) %THEN
+    	    	    %ERRORMACRO ('COUNT and STATUS must be specified')
+    	    	%FI
+    	    	__FLQSRCHPTR [FLQS_L_COUNT] = (COUNT);
+    	    	__FLQSRCHPTR [FLQS_L_STATUS] = 0;
+    	    	__FLQSTAT_INIT (%REMOVE (STATUS))
+    	    %ELSE %IF %IDENTICAL (CODE, FLQS__FLAGS) %THEN
+    	    	%IF %NULL (MASK) OR %NULL (FLAGS) %THEN
+    	    	    %ERRORMACRO ('MASK and FLAGS must be specified')
+    	    	%FI
+    	    	__FLQSRCHPTR [FLQS_L_MASK] = (MASK);
+    	    	__FLQSRCHPTR [FLQS_L_FLAGS] = (FLAGS);
+    	    %ELSE %IF %IDENTICAL (CODE, FLQS__CREDT) OR
+    	    	    	%IDENTICAL (CODE, FLQS__MODDT) OR
+    	    	    	%IDENTICAL (CODE, FLQS__EXPDT) OR
+    	    	    	%IDENTICAL (CODE, FLQS__DLYDT) %THEN
+    	    	__FLQSRCHPTR [FLQS_L_AFTER] =
+    	    	    %IF %NULL (AFTER) %THEN 0 %ELSE (AFTER) %FI;
+    	    	__FLQSRCHPTR [FLQS_L_BEFORE] =
+    	    	    %IF %NULL (BEFORE) %THEN 0 %ELSE (BEFORE) %FI;
+    	    %ELSE %IF %IDENTICAL (CODE, FLQS__DSTPRC) %THEN
+    	    	%IF %NULL (COUNT) OR %NULL (DSTPRC) %THEN
+    	    	    %ERRORMACRO ('COUNT and DSTPRC must be specified')
+    	    	%FI
+    	    	__FLQSRCHPTR [FLQS_L_COUNT] = (COUNT);
+    	    	__FLQSRCHPTR [FLQS_L_DSTPRC] = (DSTPRC);
+    	    %ELSE %IF %IDENTICAL (CODE, FLQS__ORIGIN) %THEN
+    	    	%IF %NULL (COUNT) OR %NULL (ORIGIN) %THEN
+    	    	    %ERRORMACRO ('COUNT and ORIGIN must be specified')
+    	    	%FI
+    	    	__FLQSRCHPTR [FLQS_L_COUNT] = (COUNT);
+    	    	__FLQSRCHPTR [FLQS_L_ORIGIN] = (ORIGIN);
+
+    	    %FI %FI %FI %FI %FI %FI
+    	    __FLQSRCHPTR = .__FLQSRCHPTR + FLQS_S_SRCHITM;
+    	%;
+
+    MACRO
+    	__FLQSTAT_INIT (A,B,C,D) =
+    	    BEGIN
+    	    	BIND __FLQSTATPTR = __FLQSRCHPTR [FLQS_L_STATUS]:BLOCK [,BYTE];
+    	    	__FLQSTATPTR [0,0,8,0] = (A);
+    	    	%IF NOT %NULL (B) %THEN
+    	    	    __FLQSTATPTR [1,0,8,0] = (B); %FI
+    	    	%IF NOT %NULL (C) %THEN
+    	    	    __FLQSTATPTR [2,0,8,0] = (C); %FI
+    	    	%IF NOT %NULL (D) %THEN
+    	    	    __FLQSTATPTR [3,0,8,0] = (D); %FI
+    	    END;
+    	%;
+
+!    MACRO
+!	_FLQSRCHLST_INIT (SRCHLST) [ITEM_VALUES] =
+!	%IF %COUNT EQL 0 %THEN
+!		__FLQSRCH_INITIATE (SRCHLST, NUMITM=%LENGTH-1)
+!	%FI
+!
+!	__FLQSRCH_INIT (%REMOVE (ITEM_VALUES))
+!
+!	%IF %COUNT EQL %LENGTH-2 %THEN
+!		__FLQSRCHPTR [0,0,32,0] = 0;
+!		__FLQSRCHPTR = .__FLQSRCHPTR + 4;
+!		END
+!	%FI
+!	%;
+!
+!    KEYWORDMACRO
+!	__FLQSRCH_INITIATE (SRCHLST, NUMITM) =
+!	%IF %ALLOCATION (SRCHLST) LSSU ((NUMITM)*FLQS_S_SRCHITM+4) %THEN
+!		%ERRORMACRO ('search list ', SRCHLST, ' not large enough')
+!	%FI
+!
+!	BEGIN
+!	LOCAL __FLQSRCHPTR : REF BLOCK [,BYTE];
+!	__FLQSRCHPTR = (SRCHLST);
+!	%,
+!
+!	__FLQSRCH_INIT (CODE, COUNT, MINSIZE, MAXSIZE, STATUS, MASK,
+!		FLAGS, AFTER, BEFORE, PATTERN) =
+!	%IF %NULL (CODE) %THEN
+!		%ERRORMACRO ('CODE must be specified')
+!	%FI
+!
+!	__FLQSRCHPTR [FLQS_L_CODE] = (CODE);
+!	%IF %IDENTICAL (CODE, FLQS__SIZE) %THEN
+!		__FLQSRCHPTR [FLQS_L_MINSIZE] =
+!		%IF %NULL (MINSIZE) %THEN 0 %ELSE (MINSIZE) %FI;
+!		__FLQSRCHPTR [FLQS_L_MAXSIZE] =
+!		%IF %NULL (MAXSIZE) %THEN 0 %ELSE (MAXSIZE) %FI;
+!	%ELSE %IF %IDENTICAL (CODE, FLQS__STATUS) %THEN
+!		%IF %NULL (COUNT) OR %NULL (STATUS) %THEN
+!		%ERRORMACRO ('COUNT and STATUS must be specified')
+!		%FI
+!		__FLQSRCHPTR [FLQS_L_COUNT] = (COUNT);
+!		__FLQSRCHPTR [FLQS_L_STATUS] = 0;
+!		__FLQSTAT_INIT (%REMOVE (STATUS))
+!	%ELSE %IF %IDENTICAL (CODE, FLQS__FLAGS) %THEN
+!		%IF %NULL (MASK) OR %NULL (FLAGS) %THEN
+!		%ERRORMACRO ('MASK and FLAGS must be specified')
+!		%FI
+!		__FLQSRCHPTR [FLQS_B_MASK] = (MASK);
+!		__FLQSRCHPTR [FLQS_B_FLAGS] = (FLAGS);
+!	%ELSE %IF %IDENTICAL (CODE, FLQS__CREDT) OR
+!			%IDENTICAL (CODE, FLQS__MODDT) OR
+!			%IDENTICAL (CODE, FLQS__EXPDT) OR
+!			%IDENTICAL (CODE, FLQS__DLYDT) %THEN
+!		__FLQSRCHPTR [FLQS_L_AFTER] =
+!		%IF %NULL (AFTER) %THEN 0 %ELSE (AFTER) %FI;
+!		__FLQSRCHPTR [FLQS_L_BEFORE] =
+!		%IF %NULL (BEFORE) %THEN 0 %ELSE (BEFORE) %FI;
+!
+!	%FI %FI %FI %FI
+!	__FLQSRCHPTR = .__FLQSRCHPTR + FLQS_S_SRCHITM;
+!	%;
+!
+!    MACRO
+!	__FLQSTAT_INIT (A,B,C,D) =
+!	BEGIN
+!		BIND __FLQSTATPTR = __FLQSRCHPTR [FLQS_L_STATUS]:BLOCK [,BYTE];
+!		__FLQSTATPTR [0,0,8,0] = (A);
+!		%IF NOT %NULL (B) %THEN
+!		__FLQSTATPTR [1,0,8,0] = (B); %FI
+!		%IF NOT %NULL (C) %THEN
+!		__FLQSTATPTR [2,0,8,0] = (C); %FI
+!		%IF NOT %NULL (D) %THEN
+!		__FLQSTATPTR [3,0,8,0] = (D); %FI
+!	END;
+!	%;

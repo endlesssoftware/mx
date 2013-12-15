@@ -1,0 +1,318 @@
+%TITLE 'FLQ_GET_MAXSIZE'
+MODULE FLQ_GET_MAXSIZE (IDENT='V1.0-2', ADDRESSING_MODE(EXTERNAL=LONG_RELATIVE)) =
+BEGIN
+!++
+! FACILITY:     FLQ
+!
+! ABSTRACT:     Gets the maximum allowable size for a queue entry.
+!
+! MODULE DESCRIPTION:
+!
+!   This module contains the routine FLQ_GET_MAXSIZE, which returns
+!   the largest allowable size for an entry in the queue.  It is
+!   purely advisory; there is no internal enforcement of this size
+!   limit.
+!
+! AUTHOR:	    M. Madison
+!
+! Copyright (c) 2008, Matthew Madison.
+! 
+! All rights reserved.
+! 
+! Redistribution and use in source and binary forms, with or without
+! modification, are permitted provided that the following conditions
+! are met:
+! 
+!     * Redistributions of source code must retain the above
+!       copyright notice, this list of conditions and the following
+!       disclaimer.
+!     * Redistributions in binary form must reproduce the above
+!       copyright notice, this list of conditions and the following
+!       disclaimer in the documentation and/or other materials provided
+!       with the distribution.
+!     * Neither the name of the copyright owner nor the names of any
+!       other contributors may be used to endorse or promote products
+!       derived from this software without specific prior written
+!       permission.
+! 
+! THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
+! "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
+! LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
+! A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
+! OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
+! SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
+! LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
+! DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
+! THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
+! (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
+! OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+!
+! CREATION DATE:    27-JUN-1998
+!
+! MODIFICATION HISTORY:
+!
+!   27-JUN-1998	V1.0	Madison	    Initial coding.
+!   03-SEP-1998	V1.0-1	Madison	    Allow absolute override to free disk pct.
+!   29-NOV-2000	V1.0-2	Madison	    More descriptive status code.
+!--
+
+    LIBRARY 'SYS$LIBRARY:STARLET';
+    LIBRARY 'FLQ_DEFS';
+    LIBRARY 'FLQ_PRIVATE_DEFS';
+
+    FORWARD ROUTINE
+    	FLQ_GET_MAXSIZE,
+    	numeric_logical;
+
+    EXTERNAL ROUTINE
+    	G_HAT (LIB$EMUL, LIB$EDIV, LIB$SUBX, LIB$CVT_DTB);
+
+    EXTERNAL LITERAL
+	FLQ__QUEDISKFULL;
+
+%SBTTL 'FLQ_GET_MAXSIZE'
+GLOBAL ROUTINE FLQ_GET_MAXSIZE (ctx_a_a, maxbytes_a) =
+BEGIN
+!++
+! FUNCTIONAL DESCRIPTION:
+!
+!   Returns the maximum allowed message size, in bytes.
+!
+!   The maximum size is the smaller of a fixed limit set by
+!   the system manager (via the logical name MX_FLQ_MAX_ENTRY_SIZE)
+!   and the amount of space remaining on the disk where the
+!   queue resides, minus a percentage reserved for overhead
+!   (set by the logical name MX_FLQ_DISK_FREE_RESERVED, with
+!   a default value of 10%).
+!
+!   If a queue context is provided, the maximum size is
+!   provided based on the device on which the queue context
+!   was opened.  Otherwise, the maximum size is based on
+!   the system queue.
+!
+!   If the maximum allowable size is larger than what will
+!   fit in an unsigned longword (due to the queue residing
+!   on an extremely large disk), zero is returned
+!   for the maximum size.  If the maximum allowable size is
+!   less than 1KB, a status of FLQ__QUEDISKFULL is returned.
+!
+! RETURNS:	cond_value, longword (unsigned), write only, by value
+!
+! PROTOTYPE:
+!
+!   FLQ_GET_MAXSIZE  [ctx], maxbytes
+!
+! ctx:	    	longword_unsigned, longword (unsigned), read only, by reference
+! maxbytes:	longword_unsigned, longword (unsigned), write only, by reference
+!
+! IMPLICIT INPUTS:  None.
+!
+! IMPLICIT OUTPUTS: None.
+!
+! COMPLETION CODES:
+!
+!   SS$_NORMAL:		normal successful completion.
+!   FLQ__QUEDISKFULL:  	less than 1KB is free.
+!   Other completion codes due to error conditions; see code.
+!
+! SIDE EFFECTS:
+!
+!   None.
+!--
+    BIND
+	CTX 	    = .CTX_A_A	    	: REF QCTXDEF,
+    	maxbytes    = .maxbytes_a;
+
+    LOCAL
+    	fab 	: $FAB_DECL,
+    	nam 	: $NAM_DECL,
+    	espec	: VECTOR [255,BYTE],
+    	rspec	: VECTOR [255,BYTE],
+    	dsc 	: BLOCK [DSC$K_S_BLN,BYTE],
+    	dvilst	: $ITMLST_DECL (ITEMS=3),
+    	admin_limit,
+    	albytes	: VECTOR [2,LONG],
+    	freepct,
+    	tgtfree,
+    	freeblocks,
+    	maxblock,
+    	blksize,
+    	status;
+
+    admin_limit = numeric_logical (%ASCID'MX_FLQ_MAX_ENTRY_SIZE', 0);
+
+    ! Limit is specified in KBytes.  Change to bytes, and if we
+    ! overflow a longword, treat as infinite.
+    !
+    LIB$EMUL (%REF (1024), admin_limit, %REF (0), albytes);
+    IF .albytes [1] NEQU 0 THEN
+    	admin_limit = 0
+    ELSE
+    	admin_limit = .albytes [0];
+
+    tgtfree 	= numeric_logical (%ASCID'MX_FLQ_DISK_FREE_ABSOLUTE', 0);
+    IF .tgtfree NEQU 0 THEN
+    BEGIN
+    	tgtfree = MAXU (.tgtfree, 1024);
+    	freepct = 0
+    END
+    ELSE
+    BEGIN
+    	freepct = numeric_logical (%ASCID'MX_FLQ_DISK_FREE_RESERVED', 10);
+    	freepct = MINU (MAXU (.freepct, 1), 90);   ! no less than 1% reserved and no more than 90% reserved
+    END;
+
+    IF .ctx_a_a EQLA 0 THEN
+    BEGIN
+    	$FAB_INIT (FAB=fab, FNA=UPLIT (FLQ_T_QUEFNM), FNS=%CHARCOUNT (FLQ_T_QUEFNM),
+    	    	    	    DNA=UPLIT (FLQ_T_QUEDNM), DNS=%CHARCOUNT (FLQ_T_QUEDNM),
+    	    	    	    SHR=<GET,PUT,DEL,UPD,MSE,UPI>, NAM=nam,
+    	    	    	    LNM_MODE=PSL$C_EXEC);
+    	$NAM_INIT (NAM=nam, ESA=espec, ESS=%ALLOCATION (espec),
+    	    	    	    RSA=rspec, RSS=%ALLOCATION (rspec),
+    	    	    	    NOP=NOCONCEAL);
+    	status = $PARSE (FAB=fab);
+    	IF NOT .status THEN
+    	BEGIN
+    	    nam [NAM$V_SYNCHK] = 1;  ! release any open disk channels
+    	    $PARSE (FAB=fab);
+    	    RETURN .status;
+    	END;
+    	INIT_SDESC (dsc, .nam [NAM$B_DEV], .nam [NAM$L_DEV]);
+    END
+    ELSE
+    BEGIN
+    	LOCAL
+    	    fscnlst : $ITMLST_DECL (ITEMS=1);
+
+    	! N.B.:  $FILESCAN really takes an item_list_2 structure, but since we only want
+    	!        one item, we can fake it with an item_list_3.
+    	$ITMLST_INIT (ITMLST=fscnlst, (ITMCOD=FSCN$_DEVICE, BUFSIZ=0, BUFADR=0, RETLEN=0));
+    	INIT_SDESC (dsc, .ctx [QCTX_W_QUENAM], ctx [QCTX_T_QUENAM]);
+    	status = $FILESCAN (SRCSTR=dsc, VALUELST=fscnlst);
+    	IF NOT .status THEN RETURN .status;
+    	INIT_SDESC (dsc, .fscnlst [0,ITM$W_BUFSIZ], .fscnlst [0,ITM$L_BUFADR]);
+    END;
+
+    $ITMLST_INIT (ITMLST=dvilst,
+    	    	    (ITMCOD=DVI$_MAXBLOCK, BUFSIZ=%ALLOCATION (maxblock), BUFADR=maxblock),
+    	    	    (ITMCOD=DVI$_FREEBLOCKS, BUFSIZ=%ALLOCATION (freeblocks), BUFADR=freeblocks),
+    	    	    (ITMCOD=DVI$_DEVBUFSIZ, BUFSIZ=%ALLOCATION (blksize), BUFADR=blksize));
+    status = $GETDVIW (DEVNAM=dsc, ITMLST=dvilst);
+    IF .status THEN
+    BEGIN
+    	LOCAL
+    	    freeblks00	: VECTOR [2,LONG],
+    	    tgtfree00	: VECTOR [2,LONG],
+    	    maxblks00	: VECTOR [2,LONG],
+    	    bytelimit 	: VECTOR [2,LONG],
+    	    blklimit,
+    	    junk;
+ 
+    	! Compute maximum number of disk blocks allowed,
+    	!      freeblocks - (maxblocks * reserved_percentage)
+    	!
+    	! Scale by 100 to avoid floating-point math.
+    	!
+    	IF .freepct NEQU 0 THEN
+    	BEGIN
+    	    LIB$EMUL (%REF (100), freeblocks, %REF (0), freeblks00);
+    	    LIB$EMUL (freepct, maxblock, %REF (0), tgtfree00);
+    	    LIB$SUBX (freeblks00, tgtfree00, maxblks00);
+
+    	    ! Now reduce by the scaling factor (100) to get back
+    	    ! to actual number of blocks.
+
+    	    LIB$EDIV (%REF (100), maxblks00, blklimit, %REF (junk));
+    	END
+    	ELSE
+    	    blklimit = .freeblocks - .tgtfree;
+
+    	! If we're over our limit, then the queue is full!
+
+    	IF .blklimit LSS 0 THEN
+    	    status = FLQ__QUEDISKFULL
+    	ELSE
+    	BEGIN
+
+    	    ! Now compute limit in bytes.
+
+    	    LIB$EMUL (%REF (.blksize), blklimit, %REF (0), bytelimit);
+
+    	    !
+    	    !  If the result is bigger than a longword, then we
+    	    !  just return the administrative limit (which does
+    	    !  fit in a longword, and could be zero if there is
+    	    !  no limit set).
+    	    !
+    	    IF .bytelimit [1] NEQ 0 THEN
+    	    	maxbytes = .admin_limit
+    	    ELSE IF .bytelimit [0] LSSU 1024 THEN  ! less than 1KB left!!
+    	    	status = FLQ__QUEDISKFULL
+    	    ELSE IF .admin_limit EQLU 0 THEN
+    	    	maxbytes = .bytelimit [0]
+    	    ELSE
+    	    	maxbytes = MINU (.admin_limit, .bytelimit [0]);
+
+    	END;
+    END;
+
+    IF .ctx_a_a EQLA 0 THEN
+    BEGIN
+    	nam [NAM$V_SYNCHK] = 1;   ! release any open disk channels
+    	$PARSE (FAB=fab);
+    END;
+
+    .status
+    
+END; ! FLQ_GET_MAXSIZE
+
+%SBTTL 'numeric_logical'
+ROUTINE numeric_logical (lognam_a, default_value) = 
+BEGIN
+!++
+! FUNCTIONAL DESCRIPTION:
+!
+!   Translates a logical name that is supposed to contain
+!   a numeric value.
+!
+! RETURNS:  	longword_unsigned, longword (unsigned), write only, by value
+!
+! PROTOTYPE:
+!
+!   numeric_logical  lognam, default_value
+!
+! IMPLICIT INPUTS:  None.
+!
+! IMPLICIT OUTPUTS: None.
+!
+! COMPLETION CODES: None.
+!
+! SIDE EFFECTS:	    None.
+!--
+
+    LOCAL
+    	lnmlst	: $ITMLST_DECL (ITEMS=1),
+    	buf 	: VECTOR [128,BYTE],
+    	buflen	: WORD,
+    	value,
+    	status;
+
+    $ITMLST_INIT (ITMLST=lnmlst,
+    	    	    (BUFSIZ=%ALLOCATION (buf), ITMCOD=LNM$_STRING,
+    	    	     BUFADR=buf, RETLEN=buflen));
+    status = $TRNLNM (LOGNAM=.lognam_a, TABNAM=%ASCID'LNM$FILE_DEV',
+    	    	      ACMODE=%REF (PSL$C_EXEC), ITMLST=lnmlst);
+    IF NOT .status OR .buflen EQLU 0 THEN RETURN .default_value;
+
+    status = LIB$CVT_DTB (.buflen, buf, value);
+
+    IF .status THEN
+    	.value
+    ELSE
+    	.default_value
+
+END; ! numeric_logical
+
+END
+ELUDOM

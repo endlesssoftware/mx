@@ -1,0 +1,175 @@
+%TITLE 'FLQ_SYNCH_BITMAP'
+MODULE FLQ_SYNCH_BITMAP (IDENT='V2.2') =
+BEGIN
+!++
+! FACILITY: 	    MX_FLQ_SHR
+!
+! ABSTRACT: 	    FLQ access routines.
+!
+! MODULE DESCRIPTION:
+!
+!   This module includes routines to synchronize the FLQ bitmap with
+!   the actual queue entries.
+!
+! AUTHOR:	    Hunter Goatley
+!
+! Copyright (c) 2008, Matthew Madison and Hunter Goatley.
+! 
+! All rights reserved.
+! 
+! Redistribution and use in source and binary forms, with or without
+! modification, are permitted provided that the following conditions
+! are met:
+! 
+!     * Redistributions of source code must retain the above
+!       copyright notice, this list of conditions and the following
+!       disclaimer.
+!     * Redistributions in binary form must reproduce the above
+!       copyright notice, this list of conditions and the following
+!       disclaimer in the documentation and/or other materials provided
+!       with the distribution.
+!     * Neither the name of the copyright owner nor the names of any
+!       other contributors may be used to endorse or promote products
+!       derived from this software without specific prior written
+!       permission.
+! 
+! THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
+! "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
+! LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
+! A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
+! OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
+! SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
+! LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
+! DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
+! THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
+! (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
+! OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+!
+! CREATION DATE:    10-DEC-1993 16:58
+!
+! MODIFICATION HISTORY:
+!
+!   10-DEC-1993	V1.0	Goatley	    Initial coding.
+!    7-FEB-1994	V1.0-1	Goatley	    Fix errant return path.
+!   16-MAR-1994 V2.0	Goatley     Rewrite for FLQ V4.
+!   21-MAR-1994 V2.0-1	Goatley     Add ability to reset MAXENTNO in q hdr.
+!    6-MAY-1994	V2.1	Altmayer    Re-structure lsv (add IPC library)
+!   30-DEC-2004 V2.2    Madison     Eliminate linked list structure.
+!--
+    LIBRARY 'SYS$LIBRARY:STARLET';
+    LIBRARY 'MX_SRC_COMMON:IPC';
+    LIBRARY 'FLQ_DEFS';
+    LIBRARY 'FLQ_PRIVATE_DEFS';
+
+    FORWARD ROUTINE
+    	FLQ_SYNCH_BITMAP;
+
+    UNDECLARE FLQ__RDONLY;  ! HACK!
+
+    EXTERNAL LITERAL
+    	FLQ__RDONLY;
+
+    EXTERNAL ROUTINE
+	FLQ___GETBITMAP, FLQ___FREEBITMAP,
+        G_HAT (LIB$GET_VM_PAGE, LIB$FREE_VM_PAGE);
+
+
+%SBTTL 'FLQ_SYNCH_BITMAP'
+GLOBAL ROUTINE FLQ_SYNCH_BITMAP (ctx_a_a, x_logrtn) =
+BEGIN
+!++
+! FUNCTIONAL DESCRIPTION:
+!
+!   description
+!
+! RETURNS:  	cond_value, longword (unsigned), write only, by value
+!
+! PROTOTYPE:
+!
+!   x
+!
+! IMPLICIT INPUTS:  None.
+!
+! IMPLICIT OUTPUTS: None.
+!
+! COMPLETION CODES:
+!
+!   SS$_NORMAL:	    	normal successful completion.
+!
+! SIDE EFFECTS:
+!
+!   None.
+!--
+    BUILTIN
+        ACTUALCOUNT;
+
+    BIND
+	ctx	= .ctx_a_a		: REF QCTXDEF,
+	rab	= ctx [QCTX_X_RAB]	: $RAB_DECL;
+
+    LOCAL
+    	qent		: QENTDEF,
+	bmap		: REF BITVECTOR [],
+        oldbmap         : REF BITVECTOR [],
+        logrtn,
+    	status;
+
+    IF .ctx [QCTX_V_RDONLY] THEN
+        RETURN FLQ__RDONLY;
+
+    logrtn = (IF ACTUALCOUNT () GTRU 1 AND .x_logrtn NEQA 0
+              THEN .x_logrtn ELSE 0);
+    !
+    !  When synching the database, all we're really doing is creating
+    !  a new bitmap by reading the existing records and marking them
+    !  in the bitmap.
+    !
+    !  This could take a while, depending on the speed of the disk
+    !  and the number of entries in the queue.  Other processes
+    !  trying to create or remove entries will hang until the
+    !  "reclaim" is done.
+    !
+    status = FLQ___GETBITMAP (.ctx, bmap);
+    IF NOT(.status) THEN RETURN (.status);
+
+    IF .logrtn EQLA 0 THEN
+        oldbmap = 0
+    ELSE
+    BEGIN
+        status = LIB$GET_VM_PAGE (%REF (FLQ_K_BMAPBLKS), oldbmap);
+        IF NOT .status THEN
+        BEGIN
+            oldbmap = 0;
+            logrtn = 0;
+        END
+        ELSE
+            CH$MOVE (FLQ_K_BMAPSIZE, .bmap, .oldbmap);
+    END;
+
+    CH$FILL (0, FLQ_K_BMAPSIZE, .bmap);
+
+    rab [RAB$L_UBF] = qent;
+    rab [RAB$W_USZ] = QENT_S_QENTDEF;
+
+    INCR i FROM 1 TO .ctx [QCTX_L_MAXENT] DO
+    BEGIN
+        rab [RAB$L_BKT] = FLQ_K_QENTBASE + .i;
+        status = $READ (RAB=rab);
+        IF .status AND .qent [QENT_L_ENTNUM] EQLU .i AND .qent [QENT_V_VALID] THEN
+        BEGIN
+            bmap [.i-1] = 1;
+            IF .logrtn NEQA 0 THEN
+                IF .oldbmap [.i-1] NEQ .bmap [.i-1] THEN
+                    (.logrtn)(.i, .oldbmap [.i-1], .bmap [.i-1]);
+        END;
+    END;
+
+    IF .oldbmap NEQA 0 THEN
+        LIB$FREE_VM_PAGE (%REF (FLQ_K_BMAPBLKS), oldbmap);
+
+    FLQ___FREEBITMAP (.ctx, 1)
+
+END; ! FLQ_SYNCH_BITMAP
+
+END
+ELUDOM

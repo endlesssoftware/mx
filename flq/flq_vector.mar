@@ -1,0 +1,81 @@
+	.TITLE	FLQ_VECTOR
+	.IDENT	/V2.3/
+;
+; FACILITY: 	FLQ file access routines
+;
+; ABSTRACT: 	This module defines the transfer vectors for the FLQ_SHR
+;   	    	shareable library.
+;
+; AUTHOR:   	M. Madison
+;
+;
+; Copyright (c) 2008, Matthew Madison.
+; 
+; All rights reserved.
+; 
+; Redistribution and use in source and binary forms, with or without
+; modification, are permitted provided that the following conditions
+; are met:
+; 
+;     * Redistributions of source code must retain the above
+;       copyright notice, this list of conditions and the following
+;       disclaimer.
+;     * Redistributions in binary form must reproduce the above
+;       copyright notice, this list of conditions and the following
+;       disclaimer in the documentation and/or other materials provided
+;       with the distribution.
+;     * Neither the name of the copyright owner nor the names of any
+;       other contributors may be used to endorse or promote products
+;       derived from this software without specific prior written
+;       permission.
+; 
+; THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
+; "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
+; LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
+; A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
+; OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
+; SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
+; LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
+; DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
+; THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
+; (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
+; OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+;
+; MODIFICATION HISTORY:
+;
+;   11-JUL-1991	V2.0	Madison	    Initial coding for V2 library.
+;   27-JUN-1998	V2.1	Madison	    Add FLQ_GET_MAXSIZE.
+;   30-DEC-2004 V2.2    Madison     Remove FLQ_VERIFY_QUEUE; add bitmap routines.
+;   13-APR-2005 V2.3    Madison     Add FLQ_SEARCH_END.
+;
+    	.DISABLE GLOBAL
+;
+; Macro to generate a transfer vector entry.
+;
+	.MACRO	ROUTINE	NAME
+	.EXTRN		NAME
+	.ALIGN	QUAD
+	.TRANSFER	NAME
+	.MASK		NAME
+	JMP		NAME+2
+	.ENDM
+;
+	.PSECT	$$FLQ_VECTOR	PIC,USR,CON,REL,LCL,SHR,EXE,RD,NOWRT,QUAD
+;
+    	ROUTINE	FLQ_OPEN
+    	ROUTINE	FLQ_CLOSE
+    	ROUTINE FLQ_ADD
+    	ROUTINE	FLQ_READ
+    	ROUTINE FLQ_UPDATE
+    	ROUTINE	FLQ_REMOVE
+    	ROUTINE	FLQ_SEARCH
+	ROUTINE	FLQ_MAKE_FSPEC
+	ROUTINE	FLQ_SYNCH_BITMAP
+	ROUTINE FLQ_PURGE
+    	ROUTINE	FLQ_GET_MAXSIZE
+	ROUTINE FLQ___GETBITMAP
+	ROUTINE FLQ___FREEBITMAP
+	ROUTINE	FLQ_SEARCH_END
+    	.BLKL	24
+;
+	.END

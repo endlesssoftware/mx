@@ -1,0 +1,288 @@
+%TITLE 'FLQ_OPEN'
+MODULE FLQ_OPEN (IDENT='V2.4',
+	ADDRESSING_MODE(EXTERNAL=LONG_RELATIVE)) =
+BEGIN
+!++
+! FACILITY:     FLQ
+!
+! ABSTRACT:     Opens a queue.
+!
+! MODULE DESCRIPTION:
+!
+!   This module contains routine FLQ_OPEN, which opens an FLQ file queue.
+!
+! AUTHOR:	    M. Madison
+!
+! Copyright (c) 2008, Matthew Madison.
+! 
+! All rights reserved.
+! 
+! Redistribution and use in source and binary forms, with or without
+! modification, are permitted provided that the following conditions
+! are met:
+! 
+!     * Redistributions of source code must retain the above
+!       copyright notice, this list of conditions and the following
+!       disclaimer.
+!     * Redistributions in binary form must reproduce the above
+!       copyright notice, this list of conditions and the following
+!       disclaimer in the documentation and/or other materials provided
+!       with the distribution.
+!     * Neither the name of the copyright owner nor the names of any
+!       other contributors may be used to endorse or promote products
+!       derived from this software without specific prior written
+!       permission.
+! 
+! THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
+! "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
+! LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
+! A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
+! OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
+! SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
+! LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
+! DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
+! THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
+! (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
+! OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+!
+! CREATION DATE:    11-JUL-1991
+!
+! MODIFICATION HISTORY:
+!
+!   11-JUL-1991	V1.0	Madison	    Initial coding for FLQ V2.
+!    9-FEB-1994 V2.0	Goatley     Finish it.
+!   16-MAR-1994 V2.0-1	Goatley     Change length of lckpfx for long entnum.
+!    6-MAY-1994	V2.1	Altmayer    Re-structure lsv (add IPC library)
+!   21-MAY-1994 V2.1-1	Goatley     Add check for AUTOPURGE logical.
+!   14-DEC-1995 V2.2	Goatley     Changed $GETDVI to $GETDVIW.
+!   30-AUG-1997	V2.3	Madison	    Add queue validation.
+!   30-DEC-2004 V2.4    Madison     No more linked list for queue.
+!--
+
+    LIBRARY 'SYS$LIBRARY:STARLET';
+    LIBRARY 'MX_SRC_COMMON:IPC';
+    LIBRARY 'FLQ_DEFS';
+    LIBRARY 'FLQ_PRIVATE_DEFS';
+
+    EXTERNAL ROUTINE
+	G_HAT (LIB$GET_VM_PAGE, LIB$FREE_VM_PAGE, STR$COPY_DX);
+
+    EXTERNAL LITERAL
+	FLQ__INVACC, FLQ__NOSUCHENT;
+
+%SBTTL 'FLQ_OPEN'
+GLOBAL ROUTINE FLQ_OPEN (ACCKEY, CTX_A_A, QUENAM_A, RMSSTV_A, EXCLUSIVE) =
+BEGIN
+!++
+! FUNCTIONAL DESCRIPTION:
+!
+!   Opens a queue with the named control file and queue directory.
+!
+! RETURNS:	cond_value, longword (unsigned), write only, by value
+!
+! PROTOTYPE:
+!
+!   FLQ_OPEN  acckey, ctx, quenam, rmsstv, exclusive, validate
+!
+! acckey: longword_unsigned, longword (unsigned), read only, by value
+! ctx:	  longword_unsigned, longword (unsigned), modify, by reference
+! quenam: char_string, character string, read only, by fixed-length descriptor
+! rmsstv: longword_unsigned, longword (unsigned), write only, by reference
+! exclusive: longword_unsigned, longword (unsigned), read only, by value
+! validate:  longword_unsigned, longword (unsigned), read only, by value
+!
+! IMPLICIT INPUTS:  None.
+!
+! IMPLICIT OUTPUTS: None.
+!
+! COMPLETION CODES:
+!
+!   SS$_NORMAL:		normal successful completion.
+!
+! SIDE EFFECTS:
+!
+!   None.
+!--
+    BIND
+	quenam	= .quenam_a	: $BBLOCK [DSC$K_S_BLN],
+	ctx	= .ctx_a_a	: REF QCTXDEF;
+
+    BUILTIN
+	ACTUALCOUNT;
+
+    LOCAL
+	nam		: $NAM_DECL,
+	espec		: VECTOR [255,BYTE],
+	qnam_ptr	: REF $BBLOCK,
+	str		: $BBLOCK [DSC$K_S_BLN],
+	status;
+
+    IF .acckey NEQU FLQ__RDONLY AND .acckey NEQU FLQ__FULL THEN
+	RETURN FLQ__INVACC;
+
+    INIT_DYNDESC (str);
+    !
+    !  Allocate the context memory.
+    !
+    status = LIB$GET_VM_PAGE (%REF (QCTX_K_PAGECNT), ctx);
+    IF NOT .status THEN
+        RETURN .status;
+    CH$FILL (%CHAR (0), QCTX_S_QCTXDEF, .ctx);
+
+    ctx [QCTX_V_RDONLY] = .acckey EQLU FLQ__RDONLY;
+
+    !
+    !  Get the EXPIRY_THRESHOLD value and other logicals.
+    !
+    BEGIN
+	LOCAL
+	    lnmlst	: $ITMLST_DECL (ITEMS=1),
+	    sdsc	: $BBLOCK [DSC$K_S_BLN],
+	    lnmbuf	: VECTOR [255,BYTE],
+	    lnmlen	: WORD;
+
+	$ITMLST_INIT (ITMLST=lnmlst,
+	    (ITMCOD=LNM$_STRING, BUFSIZ=%ALLOCATION (lnmbuf), BUFADR=lnmbuf,
+		RETLEN=lnmlen));
+	status = $TRNLNM (TABNAM=%ASCID'LNM$SYSTEM', ACMODE=%REF (PSL$C_EXEC),
+	    LOGNAM=%ASCID'MX_FLQ_EXPIRY_THRESHOLD', ITMLST=lnmlst);
+	IF .status THEN
+	    INIT_SDESC (SDSC, .LNMLEN, LNMBUF);
+	$BINTIM (TIMBUF=(IF .status THEN sdsc ELSE %ASCID'30 00:00:00.00'),
+		 TIMADR=ctx [QCTX_Q_EXPDELTA]);
+
+	$ITMLST_INIT (ITMLST=lnmlst,
+		(ITMCOD=LNM$_STRING, BUFADR=ctx [QCTX_T_NODE],
+		BUFSIZ=QCTX_S_NODE, RETLEN=ctx [QCTX_W_NODE]));
+	status = $TRNLNM(TABNAM=%ASCID'LNM$SYSTEM', ACMODE = %REF(PSL$C_EXEC),
+			LOGNAM=%ASCID'MX_FLQ_NODE_NAME', ITMLST=lnmlst);
+
+	!
+	!  Set the autopurge flag based on the presence of the logical.
+	!
+	ctx [QCTX_V_AUTOPURGE] =
+		$TRNLNM(TABNAM=%ASCID'LNM$SYSTEM', ACMODE = %REF(PSL$C_EXEC),
+			LOGNAM=%ASCID'MX_FLQ_AUTOPURGE_FIN') AND 1;
+    END;
+
+
+    !
+    ! Open the queue control file
+    !
+    IF ACTUALCOUNT () GEQU 3 AND quenam NEQA 0 AND
+       .quenam [DSC$W_LENGTH] NEQU 0 THEN
+	qnam_ptr = quenam
+    ELSE
+    BEGIN
+        STR$COPY_DX (str, %ASCID %STRING (FLQ_T_QUEFNM));
+        qnam_ptr = str;
+    END;
+
+    $NAM_INIT (NAM=nam, ESA=espec, ESS=%ALLOCATION (espec),
+		RSA=ctx [QCTX_T_QUENAM], RSS=QCTX_S_QUENAM);
+    $FAB_INIT (FAB=ctx [QCTX_X_FAB], FNA=.qnam_ptr [DSC$A_POINTER],
+		FNS=.qnam_ptr [DSC$W_LENGTH],
+		DNA=UPLIT(FLQ_T_QUEDNM), DNS=%CHARCOUNT(FLQ_T_QUEDNM),
+		NAM=nam,
+		SHR=<GET,PUT,DEL,UPD,MSE,UPI>,
+		LNM_MODE=PSL$C_EXEC);
+
+    BEGIN
+	BIND fab = ctx [QCTX_X_FAB]  : $FAB_DECL;
+	fab [FAB$B_FAC] = (IF .acckey EQLU FLQ__RDONLY
+			   THEN
+				FAB$M_GET OR FAB$M_BIO
+			   ELSE
+				FAB$M_GET OR FAB$M_PUT OR FAB$M_BIO);
+
+	IF ACTUALCOUNT() GEQU 5 THEN
+	    IF .exclusive THEN
+		fab [FAB$B_SHR] = FAB$M_UPI OR FAB$M_MSE;
+
+	status = $OPEN (FAB=fab);
+	FREE_STRINGS (str);
+
+	IF NOT .status THEN
+	BEGIN
+	    LIB$FREE_VM_PAGE (%REF (QCTX_K_PAGECNT), ctx);
+	    IF ACTUALCOUNT() GTR 3 THEN
+		IF rmsstv_a NEQA 0 THEN .rmsstv_a = .fab [FAB$L_STV];
+	    RETURN .status;
+	END;
+	fab [FAB$L_NAM] = 0;
+	ctx [QCTX_L_MAXENT] = .fab [FAB$L_ALQ] - FLQ_K_QENTBASE - 1;
+    END;
+
+    ctx [QCTX_W_QUENAM] = .nam [NAM$B_RSL];
+    !
+    ! Build unique lock prefix from FID & disk's DEVLOCKNAM (just like RMS)
+    !
+    BEGIN
+	LOCAL
+	    dvilst	: $ITMLST_DECL (ITEMS=1),
+	    devnam	: $BBLOCK [DSC$K_S_BLN],
+	    lckbuf	: $BBLOCK [16];
+
+	INIT_SDESC (devnam, .nam [NAM$B_DEV], .nam [NAM$L_DEV]);
+	$ITMLST_INIT (ITMLST=dvilst,
+	    (ITMCOD=DVI$_DEVLOCKNAM, BUFADR=lckbuf,
+		BUFSIZ=%ALLOCATION (lckbuf)));
+	status = $GETDVIW (DEVNAM=devnam, ITMLST=dvilst);
+	IF NOT .status THEN
+	BEGIN
+	    $CLOSE (FAB=ctx [QCTX_X_FAB]);
+	    LIB$FREE_VM_PAGE (%REF (QCTX_K_PAGECNT), ctx);
+	    RETURN .status;
+	END;
+
+	CH$COPY (4, UPLIT ('FLQ_'), 6, nam [NAM$W_FID],
+	    16, lckbuf, %C' ', QCTX_S_LCKPFX, ctx [QCTX_T_LCKPFX]);
+	ctx [QCTX_W_LCKPFX] = MIN (QCTX_S_LCKPFX, 24);
+    END;
+
+    $RAB_INIT (RAB=ctx [QCTX_X_RAB], FAB = ctx [QCTX_X_FAB], ROP=BIO);
+
+    status = $CONNECT (RAB=ctx [QCTX_X_RAB]);
+    IF NOT .status THEN
+    BEGIN
+        IF ACTUALCOUNT() GTR 3 THEN
+        BEGIN
+            BIND  rab = ctx [QCTX_X_RAB] : $RAB_DECL;
+            IF rmsstv_a NEQA 0 THEN .rmsstv_a = .rab [RAB$L_STV];
+        END;
+	$CLOSE (FAB=ctx [QCTX_X_FAB]);
+	LIB$FREE_VM_PAGE (%REF (QCTX_K_PAGECNT), ctx);
+	RETURN .status;
+    END;
+
+    !
+    !  Build the bitmap lock name.
+    !
+    BEGIN
+	LOCAL
+	    resnam	: $BBLOCK [DSC$K_S_BLN],
+	    resbuf	: VECTOR [31,BYTE],
+	    lsb		: LSBDEF;
+
+	CH$COPY (.ctx [QCTX_W_LCKPFX], ctx [QCTX_T_LCKPFX], 5, UPLIT ('_BMAP'),
+	    %C' ', %ALLOCATION (resbuf), resbuf);
+	INIT_SDESC (resnam, .ctx [QCTX_W_LCKPFX]+5, resbuf);
+	status = $ENQW (LKMODE=LCK$K_NLMODE, LKSB=lsb, RESNAM=resnam,
+	    FLAGS=LCK$M_SYSTEM, ACMODE=PSL$C_USER);
+	IF .status THEN status = .lsb [LSB_W_STATUS];
+	IF .status THEN
+	    ctx [QCTX_L_BMAPLKID] = .lsb [LSB_L_LKID]
+	ELSE
+	BEGIN
+            $CLOSE (FAB=ctx [QCTX_X_FAB]);
+	    LIB$FREE_VM_PAGE (%REF (QCTX_K_PAGECNT), ctx);
+	    RETURN .status;
+	END;
+    END;
+
+    SS$_NORMAL
+
+END; ! FLQ_OPEN
+
+END
+ELUDOM

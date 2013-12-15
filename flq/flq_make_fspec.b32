@@ -1,0 +1,162 @@
+%TITLE 'FLQ_MAKE_FSPEC'
+MODULE FLQ_MAKE_FSPEC (IDENT='V2.0-1',ADDRESSING_MODE(EXTERNAL=LONG_RELATIVE,NONEXTERNAL=LONG_RELATIVE)) =
+BEGIN
+!++
+! FACILITY: 	    FLQ
+!
+! ABSTRACT: 	    abstract
+!
+! MODULE DESCRIPTION:
+!
+!   Create MX_FLQ_DIR: file names for .MSG_TEXT, .SMTP_INFO, etc.
+!
+! AUTHOR:   	    M. Madison
+!
+! Copyright (c) 2008, Matthew Madison.
+! 
+! All rights reserved.
+! 
+! Redistribution and use in source and binary forms, with or without
+! modification, are permitted provided that the following conditions
+! are met:
+! 
+!     * Redistributions of source code must retain the above
+!       copyright notice, this list of conditions and the following
+!       disclaimer.
+!     * Redistributions in binary form must reproduce the above
+!       copyright notice, this list of conditions and the following
+!       disclaimer in the documentation and/or other materials provided
+!       with the distribution.
+!     * Neither the name of the copyright owner nor the names of any
+!       other contributors may be used to endorse or promote products
+!       derived from this software without specific prior written
+!       permission.
+! 
+! THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
+! "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
+! LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
+! A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
+! OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
+! SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
+! LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
+! DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
+! THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
+! (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
+! OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+!
+! CREATION DATE:    05-OCT-1992
+!
+! MODIFICATION HISTORY:
+!
+!   05-OCT-1992	V1.0	Madison	    Initial coding.
+!   29-OCT-1992 V1.0-1	Goatley     Changed RSL/RSA -> ESL/ESA
+!   17-DEC-1992 V1.0-2	Goatley     Added code to handle FLQ_DIR subdirectories
+!   11-MAR-1993 V1.1	Goatley     Removed ";" from filename.
+!   10-FEB-1994 V2.0	Goatley     Modify for FLQ V2.
+!   25-DEC-1996	V2.0-1	Madison	    Use LIB$SCOPY_R_DX.
+!--
+    LIBRARY 'SYS$LIBRARY:STARLET';
+    LIBRARY 'FLQ_DEFS';
+    LIBRARY 'FLQ_PRIVATE_DEFS';
+
+    EXTERNAL ROUTINE
+    	G_HAT (LIB$ANALYZE_SDESC, LIB$SCOPY_R_DX, LIB$PUT_OUTPUT);
+
+%SBTTL 'FLQ_MAKE_FSPEC'
+GLOBAL ROUTINE FLQ_MAKE_FSPEC (ENTNUM, EXTEN_A, FSPEC_A, FSLEN_A) = 
+BEGIN
+!++
+! FUNCTIONAL DESCRIPTION:
+!
+!   description
+!
+! RETURNS:  	cond_value, longword (unsigned), write only, by value
+!
+! PROTOTYPE:
+!
+!   FLQ_MAKE_FSPEC
+!
+! IMPLICIT INPUTS:  None.
+!
+! IMPLICIT OUTPUTS: None.
+!
+! COMPLETION CODES:
+!
+!   SS$_NORMAL:	    	normal successful completion.
+!
+! SIDE EFFECTS:
+!
+!   None.
+!--
+    BUILTIN
+    	ACTUALCOUNT;
+
+    BIND
+    	exten	= .exten_a	: $BBLOCK [DSC$K_S_BLN],
+    	fspec	= .fspec_a	: $BBLOCK [DSC$K_S_BLN],
+    	fslen	= .fslen_a	: WORD;
+
+    LOCAL
+    	extlen	: WORD,
+    	extptr	: REF VECTOR [,BYTE],
+	extptr2	: REF VECTOR [,BYTE],
+    	faolen	: WORD,
+    	faodsc	: $BBLOCK [DSC$K_S_BLN],
+    	faobuf	: VECTOR [512,BYTE],
+    	fab 	: $FAB_DECL,
+    	nam 	: $NAM_DECL,
+    	espec	: VECTOR [255,BYTE],
+    	rspec	: VECTOR [255,BYTE],
+    	status;
+
+    status =  LIB$ANALYZE_SDESC (exten, extlen, extptr);
+    IF NOT .status THEN RETURN .status;
+
+    status = 0;
+    INIT_SDESC (faodsc, %ALLOCATION (faobuf), faobuf);
+    IF NOT .status THEN
+    	status = $FAO (%ASCID'!AS!UL.!AD', faolen, faodsc,
+    	    	    %ASCID %STRING (FLQ_T_SYSQDIR), .entnum, .extlen, .extptr);
+    $FAB_INIT (FAB=fab, FNA=faobuf, FNS=.faolen, NAM=nam, LNM_MODE=PSL$C_EXEC);
+    $NAM_INIT (NAM=nam, ESA=espec, ESS=%ALLOCATION (espec),
+    	    	RSA=rspec, RSS=%ALLOCATION (rspec));
+    status = $PARSE (FAB=fab);
+    IF NOT .status THEN RETURN .status;
+
+    !
+    !  Now convert the file spec to use the FLQ_DIR subdirectory format:
+    !
+    !		e.g., DUA0:[MX.QUEUE.3]123.MSG_TEXT
+    !
+    !  The last digit of the file name is used to determine the FLQ_DIR
+    !  subdirectory (0--9).
+    !
+    extlen = .nam[NAM$B_ESL];		!Re-use the EXTLEN to get a word length
+
+    faodsc[DSC$W_LENGTH] = %ALLOCATION(faobuf);		!Reset the FAO dsc len
+    extptr = .nam[NAM$L_NAME] - 1;			!Point to "]" or ">"
+    faolen = CH$DIFF(.extptr, .nam[NAM$L_ESA]);		!Length of directory
+    extlen = .extlen - .faolen - 1 - .nam[NAM$B_VER];	!Remainder (- version)
+    status = $FAO (%ASCID'!AD.!UB!AD!AD', faodsc, faodsc,
+			.faolen, .nam[NAM$L_ESA],	!The device/directory
+			.entnum MOD 10,			!The subdirectory name
+			1, .extptr,			!The "]" or ">"
+			.extlen, .nam[NAM$L_NAME]);	!The NAME.TYPE;VERS
+
+    IF .status THEN
+    BEGIN
+    !
+    !  Copy the string to the caller's buffer.
+    !
+    	status = LIB$SCOPY_R_DX (faodsc [DSC$W_LENGTH], .faodsc[DSC$A_POINTER], .fspec_a);
+
+    	IF ACTUALCOUNT () GTR 3 THEN
+    	    IF fslen NEQA 0 THEN fslen = .faodsc [DSC$W_LENGTH];
+    END;
+
+    .status
+
+END; ! FLQ_MAKE_FSPEC
+
+END
+ELUDOM

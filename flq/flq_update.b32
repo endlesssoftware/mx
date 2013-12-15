@@ -1,0 +1,203 @@
+%TITLE 'FLQ_UPDATE'
+MODULE FLQ_UPDATE (IDENT='V2.4',
+	ADDRESSING_MODE(EXTERNAL=LONG_RELATIVE)) =
+BEGIN
+!++
+! FACILITY: 	    FLQ
+!
+! ABSTRACT: 	    Updates a queue entry.
+!
+! MODULE DESCRIPTION:
+!
+!   This module contains routine FLQ_UPDATE, which updates a queue entry.
+!
+!   N.B.:  In order to synchronize with FLQ___INSQTAIL and FLQ_REMOVE,
+!   which both update queue entries without taking out their entry locks,
+!   we must also take out the queue header lock in this routine.
+!
+! AUTHOR:   	    M. Madison
+!
+! Copyright (c) 2008, Matthew Madison.
+! 
+! All rights reserved.
+! 
+! Redistribution and use in source and binary forms, with or without
+! modification, are permitted provided that the following conditions
+! are met:
+! 
+!     * Redistributions of source code must retain the above
+!       copyright notice, this list of conditions and the following
+!       disclaimer.
+!     * Redistributions in binary form must reproduce the above
+!       copyright notice, this list of conditions and the following
+!       disclaimer in the documentation and/or other materials provided
+!       with the distribution.
+!     * Neither the name of the copyright owner nor the names of any
+!       other contributors may be used to endorse or promote products
+!       derived from this software without specific prior written
+!       permission.
+! 
+! THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
+! "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
+! LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
+! A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
+! OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
+! SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
+! LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
+! DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
+! THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
+! (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
+! OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+!
+! CREATION DATE:    17-JUL-1991
+!
+! MODIFICATION HISTORY:
+!
+!   17-JUL-1991	V1.0	Madison	    Initial coding for FLQ V2.
+!    9-FEB-1994 V2.0	Goatley     Finish it.
+!   25-MAR-1994 V2.0-1	Goatley     When placed STINP, save the process's PID.
+!    6-MAY-1994	V2.1	Altmayer    Re-structure lsv (add IPC library)
+!   13-MAY-1994 V2.1-1	Altmayer    Call FLQ___UPDATE for status STCAN too
+!   22-MAY-1994 V2.2	Goatley	    Add autopurge support for FIN entries.
+!   31-AUG-1997	V2.3	Madison	    Don't need to lock queue header.
+!   03-SEP-1997	V2.3-1	Madison	    Put queue header locking back in.
+!   04-SEP-1997	V2.3-2	Madison	    Unlock queue header _before_ IPC.
+!   20-JUN-1999	V2.3-3	Madison	    Update expiry time when updating entry.
+!   31-DEC-2004 V2.4    Madison     Queue is no longer a linked list.
+!--
+
+    LIBRARY 'SYS$LIBRARY:STARLET';
+    LIBRARY 'MX_SRC_COMMON:IPC';
+    LIBRARY 'FLQ_DEFS';
+    LIBRARY 'FLQ_PRIVATE_DEFS';
+
+    EXTERNAL ROUTINE
+    	FLQ___LOCKENTRY, FLQ___UNLKENTRY, FLQ___LOCK, FLQ_PURGE;
+
+    EXTERNAL LITERAL
+    	FLQ__ENTMISMATCH, FLQ__NOSUCHENT;
+
+%SBTTL 'FLQ_UPDATE'
+GLOBAL ROUTINE FLQ_UPDATE (ctx_a_a, qent_a) = 
+BEGIN
+!++
+! FUNCTIONAL DESCRIPTION:
+!
+!   Updates a queue entry.
+!
+! RETURNS:  	cond_value, longword (unsigned), write only, by value
+!
+! PROTOTYPE:
+!
+!   FLQ_UPDATE  ctx, qent
+!
+! ctx:    longword_unsigned, longword (unsigned), modify, by reference
+! qent:	  queue_entry, longword (unsigned), modify, by reference
+!
+! IMPLICIT INPUTS:  None.
+!
+! IMPLICIT OUTPUTS: None.
+!
+! COMPLETION CODES:
+!
+!   SS$_NORMAL:	    	normal successful completion.
+!
+! SIDE EFFECTS:
+!
+!   None.
+!--
+    BIND
+    	ctx	= .ctx_a_a		: REF QCTXDEF,
+    	rab	= ctx [QCTX_X_RAB]	: $RAB_DECL,
+    	qent	= .qent_a		: QENTDEF;
+
+    BUILTIN
+    	SUBM;
+
+    LOCAL
+    	lsb	: LSBDEF,
+    	tmpent	: QENTDEF,
+	itmlst	: $ITMLST_DECL (ITEMS=1),
+    	locked_entry,
+    	status;
+
+    IF .ctx [QCTX_V_RDONLY] THEN
+        RETURN FLQ__RDONLY;
+    if .qent [QENT_L_ENTNUM] EQLU 0 THEN
+        RETURN SS$_BADPARAM;
+
+    !
+    !  If AUTOPURGE is enabled and this is a FINished entry, then go ahead
+    !  and just PURGE it (delete the related files and remove the entry).
+    !
+    IF .ctx [QCTX_V_AUTOPURGE] AND .qent [QENT_L_STATUS] EQLU FLQ_K_STFIN THEN
+        RETURN FLQ_PURGE (ctx, qent);
+
+    locked_entry = 0;
+    IF .ctx [QCTX_L_ENTNUM] EQLU 0 THEN
+    BEGIN
+        status = FLQ___LOCKENTRY (.CTX, .qent [QENT_L_ENTNUM]);
+        IF NOT .status THEN
+            RETURN .status;
+        locked_entry = 1;
+    END
+    ELSE IF .ctx [QCTX_L_ENTNUM] NEQU .qent [QENT_L_ENTNUM] THEN
+        RETURN FLQ__ENTMISMATCH;
+
+    rab [RAB$L_UBF] = rab [RAB$L_RBF] = tmpent;
+    rab [RAB$L_BKT] = FLQ_K_QENTBASE + .ctx [QCTX_L_ENTNUM];
+    rab [RAB$W_USZ] = QENT_S_QENTDEF;
+    status = $READ (RAB=rab);
+    IF NOT .status THEN
+    BEGIN
+        IF .locked_entry THEN
+            FLQ___UNLKENTRY (.ctx);
+        RETURN .status;
+    END;
+
+    !
+    !   If the VALID bit isn't set, then this entry has either
+    !   already been deleted from the queue, or its ADD never
+    !   completed properly.
+    !
+    IF NOT .tmpent [QENT_V_VALID] THEN
+    BEGIN
+        IF .locked_entry THEN
+            FLQ___UNLKENTRY (.ctx);
+        RETURN FLQ__NOSUCHENT;
+    END;
+
+    CH$MOVE (QENT_S_QENTDEF-12, QENT+12, TMPENT+12);
+    $GETTIM (TIMADR=tmpent [QENT_Q_MODDT]);
+    SUBM (2, ctx [QCTX_Q_EXPDELTA], tmpent [QENT_Q_MODDT], tmpent [QENT_Q_EXPDT]);
+    tmpent [QENT_V_VALID] = 1;
+
+    IF .tmpent [QENT_L_STATUS] EQLU FLQ_K_STINP THEN
+    BEGIN
+	$ITMLST_INIT (ITMLST=itmlst,
+            (ITMCOD=JPI$_PID, BUFSIZ=4, BUFADR=tmpent [QENT_L_INPPID]));
+	$GETJPIW (ITMLST = itmlst);
+    END
+    ELSE
+	tmpent [QENT_L_INPPID] = 0;
+
+    status = $WRITE (RAB=rab);
+    IF .status THEN
+    BEGIN
+        $FLUSH (RAB=rab);
+        FLQ___UNLKENTRY (.ctx);
+
+        IF .tmpent [QENT_V_LOCK] AND
+            (.tmpent [QENT_L_STATUS] EQLU FLQ_K_STRDY OR
+	     .tmpent [QENT_L_STATUS] EQLU FLQ_K_STCAN) THEN
+            status = FLQ___LOCK (.ctx, tmpent);
+    END
+    ELSE IF .locked_entry THEN
+        FLQ___UNLKENTRY (.ctx);
+
+    .status
+
+END; ! FLQ_UPDATE
+
+END
+ELUDOM
