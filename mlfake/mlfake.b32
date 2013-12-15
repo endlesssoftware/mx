@@ -1,0 +1,317 @@
+%TITLE 'MLFAKE'
+MODULE MLFAKE (IDENT='V1.9', MAIN=MLFAKE) =
+BEGIN
+!++
+! FACILITY: 	    Message Exchange
+!
+! ABSTRACT: 	    Fake a message from another user for mailing lists.
+!
+! MODULE DESCRIPTION:
+!
+!   This module can be used by a privileged user to fake a message
+!   for subscribing or signing off a mailing list.
+!
+!   Command format:
+!
+!   	$ MLFAKE  listname hostname [command] [args]
+!
+!   	    listname              The name of the mailing list.
+!           hostname              The name of the host.
+!           command               Command to be used.  Default is SIGNOFF.
+!   	    args    	    	  Arguments for command.  Optional.
+!   	    /LISTSERV[=lsvname]   Specifies that this is a LISTSERV list.
+!   	    /REQUEST=reqaddress   For specifying a different -request address.
+!   	    /FROM=fromuser        For specifying who the message is from.
+!
+! AUTHOR:   	    M. Madison
+!
+! Copyright (c) 2008, Matthew Madison.
+! 
+! All rights reserved.
+! 
+! Redistribution and use in source and binary forms, with or without
+! modification, are permitted provided that the following conditions
+! are met:
+! 
+!     * Redistributions of source code must retain the above
+!       copyright notice, this list of conditions and the following
+!       disclaimer.
+!     * Redistributions in binary form must reproduce the above
+!       copyright notice, this list of conditions and the following
+!       disclaimer in the documentation and/or other materials provided
+!       with the distribution.
+!     * Neither the name of the copyright owner nor the names of any
+!       other contributors may be used to endorse or promote products
+!       derived from this software without specific prior written
+!       permission.
+! 
+! THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
+! "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
+! LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
+! A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
+! OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
+! SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
+! LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
+! DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
+! THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
+! (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
+! OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+!
+! CREATION DATE:    29-MAY-1990
+!
+! MODIFICATION HISTORY:
+!
+!   29-MAY-1990	V1.0	Madison	    Initial coding.
+!   05-FEB-1991 V1.1	Madison	    MX_SHR compatibility.
+!   23-OCT-1991	V1.2	Madison	    Use new RCPTDEF structure.
+!   03-DEC-1991	V1.3	Madison	    Add support for args.
+!   10-FEB-1994 V1.4	Goatley     Modify to work with FLQ V2.
+!   15-JAN-1997	V1.5	Madison	    Eliminate MDMLIB.
+!   02-MAY-1997	V1.6	Madison	    New local address formatter.
+!   09-MAY-1997	V1.6-1	Madison	    LOWERCASE usernames.
+!   29-AUG-1997	V1.7	Madison	    RCPT change.
+!   17-DEC-1997 V1.8	Goatley	    MX_FMT_LCL_ADDR->THISUSER, <> to FROMUSER.
+!   14-JUL-1998	V1.4	Madison	    Use WRITE_ENVELOPE.
+!--
+    LIBRARY 'SYS$LIBRARY:STARLET';
+    LIBRARY 'MX_SRC_COMMON:MX';
+    LIBRARY 'MX_SRC_COMMON:FLQ';
+
+    EXTERNAL
+    	MLFAKE_CLD;
+
+    EXTERNAL ROUTINE
+    	G_HAT (MX_FILE_OPEN, MX_FILE_WRITE, MX_FILE_CLOSE, MX_MKDATE),
+    	G_HAT (MEM_GETTXT, MEM_FREETXT, MEM_GETRCPT, MEM_FREERCPT),
+    	G_HAT (WRITE_ENVELOPE, WRITE_HDRS, MX_FMT_LCL_ADDR, DISPOSE_ENVELOPE),
+    	G_HAT (LIB$GET_FOREIGN, CLI$DCL_PARSE, CLI$PRESENT, CLI$GET_VALUE,
+    	    LIB$GETJPI, LIB$GET_FOREIGN, LIB$GET_INPUT, LIB$PUT_OUTPUT,
+    	    STR$COPY_DX, STR$PREFIX, STR$APPEND, STR$CONCAT, STR$TRIM,
+    	    LIB$SYS_FAO, LIB$GET_VM, LIB$FREE_VM, STR$TRANSLATE);
+
+    EXTERNAL LITERAL
+    	CLI$_PRESENT, CLI$_NEGATED;
+
+%SBTTL 'MLFAKE'
+GLOBAL ROUTINE MLFAKE = 
+BEGIN
+!++
+! FUNCTIONAL DESCRIPTION:
+!
+!   description
+!
+! RETURNS:  	cond_value, longword (unsigned), write only, by value
+!
+! PROTOTYPE:
+!
+!   MLFAKE
+!
+! IMPLICIT INPUTS:  None.
+!
+! IMPLICIT OUTPUTS: None.
+!
+! COMPLETION CODES:
+!
+!   SS$_NORMAL:	    	normal successful completion.
+!
+! SIDE EFFECTS:
+!
+!   None.
+!--
+    LOCAL
+    	envl	    : ENVLDEF,
+    	HDRQ	    : QUEDEF,
+    	QENT	    : QENTDEF,
+    	RCPT	    : REF RCPTDEF,
+    	CMDSTR	    : BLOCK [DSC$K_S_BLN,BYTE],
+    	STR 	    : BLOCK [DSC$K_S_BLN,BYTE],
+    	DESTUSER    : BLOCK [DSC$K_S_BLN,BYTE],
+    	FROMUSER    : BLOCK [DSC$K_S_BLN,BYTE],
+    	REMHOST	    : BLOCK [DSC$K_S_BLN,BYTE],
+    	LISTNAME    : BLOCK [DSC$K_S_BLN,BYTE],
+    	THISUSER    : BLOCK [DSC$K_S_BLN,BYTE],
+    	ARGS	    : BLOCK [DSC$K_S_BLN,BYTE],
+    	UNIT,
+    	QCTX,
+    	STATUS,
+    	LISTSERV,
+    	REQUEST,
+    	CONFIRM;
+
+
+    INIT_DYNDESC (CMDSTR, DESTUSER, FROMUSER,
+    	    REMHOST, LISTNAME, STR, THISUSER, ARGS);
+
+    LIB$GET_FOREIGN (CMDSTR);
+    STR$PREFIX (CMDSTR, %ASCID'MLFAKE ');
+    STATUS = CLI$DCL_PARSE (CMDSTR, MLFAKE_CLD, LIB$GET_INPUT, LIB$GET_INPUT);
+    IF NOT .STATUS THEN SIGNAL_STOP (.STATUS);
+
+    LISTSERV = CLI$PRESENT (%ASCID'LISTSERV') EQLU CLI$_PRESENT;
+    REQUEST = CLI$PRESENT (%ASCID'REQUEST') EQLU CLI$_PRESENT;
+    CONFIRM = CLI$PRESENT (%ASCID'CONFIRM') NEQU CLI$_NEGATED;
+
+    CLI$GET_VALUE (%ASCID'COMMAND', CMDSTR);
+    CLI$GET_VALUE (%ASCID'RMTHST', REMHOST);
+    CLI$GET_VALUE (%ASCID'LIST', LISTNAME);
+    IF CLI$PRESENT (%ASCID'ARGS') EQLU CLI$_PRESENT THEN
+    	CLI$GET_VALUE (%ASCID'ARGS', ARGS);
+
+    CH$FILL (%CHAR (0), ENVL_S_ENVLDEF, envl);
+    INIT_QUEUE (envl [ENVL_Q_RCPTQUE], HDRQ);
+    FLQ_INIT_QENT (QENT);
+    QENT [QENT_L_STATUS] = FLQ_K_STINP;
+    QENT [QENT_V_LOCK] = 1;
+    qent [QENT_L_DSTPRC] = FLQ_K_MX_ROUTER;
+    qent [QENT_L_ORIGIN] = MX_K_ORG_LOCAL;
+    qent [QENT_W_ORGADR] = 2;
+    CH$MOVE (2, UPLIT(%ASCII'<>'), qent [QENT_T_ORGADR]);
+
+    STATUS = FLQ_OPEN (FLQ__FULL, QCTX);
+    IF NOT .STATUS THEN SIGNAL_STOP (.STATUS);
+    STATUS = FLQ_ADD (QCTX, QENT);
+    IF NOT .STATUS THEN
+    BEGIN
+    	FLQ_CLOSE (QCTX);
+    	SIGNAL_STOP (.STATUS);
+    END;
+
+    LIB$GETJPI (%REF (JPI$_USERNAME), 0, 0, 0, STR);
+    STR$TRIM (THISUSER, STR);
+    MX_FMT_LCL_ADDR (MX__FMT_ENVFROM OR FMT_M_LOWERCASE, thisuser, thisuser);
+
+    IF CLI$PRESENT (%ASCID'FROM') EQL CLI$_PRESENT THEN
+    	CLI$GET_VALUE (%ASCID'FROM', FROMUSER)
+    ELSE
+    	STR$COPY_DX (FROMUSER, THISUSER);
+
+    IF CH$FAIL (CH$FIND_CH (.FROMUSER [DSC$W_LENGTH],
+    	    .FROMUSER [DSC$A_POINTER], %C'@')) THEN
+    BEGIN
+    	MX_FMT_LCL_ADDR (MX__FMT_FROM OR FMT_M_LOWERCASE, FROMUSER, STR);
+    	STR$COPY_DX (FROMUSER, STR);
+    END;
+    IF (CH$RCHAR(.fromuser [DSC$A_POINTER]) NEQU %C'<')
+    THEN
+	STR$CONCAT (fromuser, %ASCID'<', fromuser, %ASCID'>');
+    IF .LISTSERV THEN
+    BEGIN
+    	CLI$GET_VALUE (%ASCID'LISTSERV', DESTUSER);
+    	IF CH$FAIL (CH$FIND_CH (.DESTUSER [DSC$W_LENGTH],
+    	    	.DESTUSER [DSC$A_POINTER], %C'@')) THEN
+    	BEGIN
+    	    STR$APPEND (DESTUSER, %ASCID'@');
+    	    STR$APPEND (DESTUSER, REMHOST);
+    	END;
+    END
+    ELSE IF .REQUEST THEN
+    BEGIN
+    	CLI$GET_VALUE (%ASCID'REQUEST', DESTUSER);
+    	IF CH$FAIL (CH$FIND_CH (.DESTUSER [DSC$W_LENGTH],
+    	    	.DESTUSER [DSC$A_POINTER], %C'@')) THEN
+    	BEGIN
+    	    STR$APPEND (DESTUSER, %ASCID'@');
+    	    STR$APPEND (DESTUSER, REMHOST);
+    	END;
+    END
+    ELSE
+    	STR$CONCAT (DESTUSER, LISTNAME, %ASCID'-request@', REMHOST);
+
+    INSTXT (FROMUSER, .HDRQ [QUE_L_TAIL], MX_K_HDR_FROM);
+    INSTXT (DESTUSER, .HDRQ [QUE_L_TAIL], MX_K_HDR_TO);
+    MX_MKDATE (0, STR, 0);
+    INSTXT (STR, .HDRQ [QUE_L_TAIL], MX_K_HDR_DATE);
+    INSTXT (CMDSTR, .HDRQ [QUE_L_TAIL], MX_K_HDR_SUBJECT);
+
+    STR$CONCAT (STR, %ASCID'<', DESTUSER, %ASCID'>');
+    MEM_GETRCPT (RCPT);
+    RCPT [RCPT_A_ADDR] = MEM_GETTXT (.str [DSC$W_LENGTH], .str [DSC$A_POINTER]);
+    INSQUE_TAIL (.RCPT, envl [ENVL_Q_RCPTQUE]);
+    envl [ENVL_V_ORIGIN] = 1;
+    envl [ENVL_L_ORIGIN] = MX_K_ORG_LOCAL;
+    envl [ENVL_V_FROMADR] = 1;
+    envl [ENVL_A_FROMADR] = MEM_GETTXT (.thisuser [DSC$W_LENGTH], .thisuser [DSC$A_POINTER]);
+    envl [ENVL_V_ORGSENDER] = 1;
+    envl [ENVL_A_ORGSENDER] = MEM_GETTXT (.thisuser [DSC$W_LENGTH], .thisuser [DSC$A_POINTER]);
+
+    WRITE_ENVELOPE (.QCTX, QENT, %ASCID'SRC_INFO', envl);
+    DISPOSE_ENVELOPE (envl);
+    WRITE_HDRS (.QCTX, QENT, %ASCID'HDR_INFO', HDRQ);
+
+    FLQ_MAKE_FSPEC (.QENT [QENT_L_ENTNUM], %ASCID'MSG_TEXT', STR);
+    STATUS = MX_FILE_OPEN (MX__FILE_WRITE, STR, UNIT);
+    IF NOT .STATUS THEN
+    BEGIN
+    	QENT [QENT_L_STATUS] = FLQ_K_STCAN;
+    	FLQ_UPDATE (QCTX, QENT);
+    	FLQ_CLOSE (QCTX);
+    	SIGNAL_STOP (.STATUS);
+    END;
+
+    IF .LISTSERV THEN
+    BEGIN
+    	STR$APPEND (CMDSTR, %ASCID' ');
+    	STR$APPEND (CMDSTR, LISTNAME);
+    END;
+
+    IF .ARGS [DSC$W_LENGTH] GTR 0 THEN
+    BEGIN
+    	STR$APPEND (CMDSTR, %ASCID' ');
+    	STR$APPEND (CMDSTR, ARGS);
+    END;
+
+    MX_FILE_WRITE (.UNIT, CMDSTR);
+    MX_FILE_CLOSE (.UNIT);
+
+    IF .CONFIRM THEN
+    BEGIN
+    	LIB$SYS_FAO (%ASCID'About to send message: !AS', 0, STR, CMDSTR);
+    	LIB$PUT_OUTPUT (STR);
+    	LIB$SYS_FAO (%ASCID'  Sending to:          !AS', 0, STR, DESTUSER);
+    	LIB$PUT_OUTPUT (STR);
+    	LIB$SYS_FAO (%ASCID'  From:                !AS', 0, STR, FROMUSER);
+    	LIB$PUT_OUTPUT (STR);
+    	LIB$PUT_OUTPUT (%ASCID'');
+    	WHILE 1 DO
+    	BEGIN
+    	    LIB$GET_INPUT (STR, %ASCID'Okay? ');
+    	    IF .STR [DSC$W_LENGTH] GTR 0 THEN
+    	    BEGIN
+    	    	LOCAL CH;
+    	    	CH = CH$RCHAR (.STR [DSC$A_POINTER]);
+    	    	IF .CH EQL 'y' OR .CH EQL 'Y' THEN
+    	    	BEGIN
+    	    	    QENT [QENT_L_STATUS] = FLQ_K_STRDY;
+    	    	    EXITLOOP;
+    	    	END;
+    	    	IF .CH EQL 'N' OR .CH EQL 'n' THEN
+    	    	BEGIN
+    	    	    QENT [QENT_L_STATUS] = FLQ_K_STCAN;
+    	    	    EXITLOOP;
+    	    	END;
+    	    END;
+    	END;
+    END
+    ELSE
+    	QENT [QENT_L_STATUS] = FLQ_K_STRDY;
+
+    QENT [QENT_W_ORGADR] = MIN (QENT_S_ORGADR, .FROMUSER [DSC$W_LENGTH]);
+    CH$MOVE (.QENT [QENT_W_ORGADR], .FROMUSER [DSC$A_POINTER],
+    	QENT [QENT_T_ORGADR]);
+    QENT [QENT_L_SIZE] = .CMDSTR [DSC$W_LENGTH];
+
+    FLQ_UPDATE (QCTX, QENT);
+    FLQ_CLOSE (QCTX);
+
+    IF .CONFIRM THEN
+    	IF .QENT [QENT_L_STATUS] EQL FLQ_K_STRDY THEN
+    	    LIB$PUT_OUTPUT (%ASCID'Message sent.')
+    	ELSE
+    	    LIB$PUT_OUTPUT (%ASCID'Message cancelled.');
+
+    SS$_NORMAL
+
+END; ! MLFAKE
+
+END
+ELUDOM
