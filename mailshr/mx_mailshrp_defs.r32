@@ -1,0 +1,231 @@
+!++
+!
+!  MX_MAILSHRP.R32
+!
+! Copyright (c) 2008, Matthew Madison.
+! 
+! All rights reserved.
+! 
+! Redistribution and use in source and binary forms, with or without
+! modification, are permitted provided that the following conditions
+! are met:
+! 
+!     * Redistributions of source code must retain the above
+!       copyright notice, this list of conditions and the following
+!       disclaimer.
+!     * Redistributions in binary form must reproduce the above
+!       copyright notice, this list of conditions and the following
+!       disclaimer in the documentation and/or other materials provided
+!       with the distribution.
+!     * Neither the name of the copyright owner nor the names of any
+!       other contributors may be used to endorse or promote products
+!       derived from this software without specific prior written
+!       permission.
+! 
+! THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
+! "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
+! LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
+! A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
+! OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
+! SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
+! LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
+! DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
+! THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
+! (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
+! OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+!
+!   REQUIRE file for MX_MAILSHRP definitions.
+!
+!
+!    8-DEC-1996 17:49	Goatley		Use $APROBE on Alpha instead of $PROBE.
+!    8-MAY-1997 09:52   Goatley		Don't probe 0-length strings. 
+!   22-APR-1998	    	Madison	    	Our own $PROBE on VAX.
+!   10-NOV-2004         Madison         IA64 port, and some cleanup.
+!--
+
+    LIBRARY 'SYS$LIBRARY:LIB';
+    LIBRARY 'MX_SRC_COMMON:FLQ';
+    LIBRARY 'MX_SRC_COMMON:FIELDS';
+
+%IF %BLISS (BLISS32V) %THEN
+    %IF %DECLARED (%QUOTE $APROBE) %THEN
+    	UNDECLARE %QUOTE $APROBE;
+    %FI
+
+MACRO
+    $APROBE ($$loc, $$len, $$type, $$mode) =
+	BEGIN
+	COMPILETIME quick = 0;
+
+	%IF %LENGTH LSS 3
+	%THEN
+	    %ERROR('Too few parameters in $APROBE')
+	%FI
+
+	%IF (NOT %IDENTICAL($$type,r)) AND
+	    (NOT %IDENTICAL($$type,w)) AND
+	    (NOT %IDENTICAL($$type,rq)) AND
+	    (NOT %IDENTICAL($$type,wq)) 
+	%THEN
+	    %ERROR('Error in $APROBE, ',$$type,' is an illegal type.')
+	%FI
+
+	%IF %IDENTICAL($$type,rq) OR %IDENTICAL($$type,wq)
+	%THEN
+	    %ASSIGN(quick,1)
+	%FI
+
+	    MACRO pbuiltin = 
+		%IF %IDENTICAL($$type,r) or %IDENTICAL($$type,rq)
+		%THEN
+		    PROBER
+		%ELSE
+		    PROBEW
+		%FI
+
+		%QUOTE % ;
+
+	    BUILTIN
+		pbuiltin;
+		
+	%IF quick OR (%CTCE($$len) AND ($$len LEQ 512))
+	%THEN
+	    pbuiltin(%REF(%IF %NULL($$mode) %THEN 0 %ELSE $$mode %FI),%REF($$len),$$loc)
+	%ELSE
+    	    LOCAL
+    	    	len, loc, status;
+
+    	    len = $$len;
+    	    loc = $$loc;
+    	    status = SS$_NORMAL;
+    	    WHILE .len GEQ 512 DO
+    	    BEGIN
+	    	status = pbuiltin(%REF(%IF %NULL($$mode) %THEN 0 %ELSE $$mode %FI),%REF (512),.loc);
+    	    	IF NOT .status THEN EXITLOOP;
+    	    	loc = .loc + 512;
+    	    	len = .len - 512;
+    	    END;
+    	    IF .status AND (.len GTR 0) THEN
+    	    	status = pbuiltin(%REF(%IF %NULL($$mode) %THEN 0 %ELSE $$mode %FI),len,.loc);
+
+    	    .status
+
+	%FI
+	END %;
+
+%FI ! BLISS32V
+
+    LITERAL
+    	PCTX_S_ENVFROM	= 1024,
+    	PCTX_S_HDRBUF	= 4096;
+
+    _DEF (PCTX)
+    	PCTX_Q_PRIVS	= _QUAD,
+    	_ALIGN (QUAD)
+    	PCTX_X_SFAB  	= _BYTES (FAB$C_BLN),  ! for src_info file
+    	_ALIGN (QUAD)
+    	PCTX_X_HFAB  	= _BYTES (FAB$C_BLN),  ! for hdr_info file
+    	_ALIGN (QUAD)
+    	PCTX_X_TFAB  	= _BYTES (FAB$C_BLN),  ! for msg_text file
+    	_ALIGN (QUAD)
+    	PCTX_X_SRAB 	= _BYTES (RAB$C_BLN),
+    	_ALIGN (QUAD)
+    	PCTX_X_HRAB 	= _BYTES (RAB$C_BLN),
+    	_ALIGN (QUAD)
+    	PCTX_X_TRAB 	= _BYTES (RAB$C_BLN),
+    	_ALIGN (QUAD)
+    	PCTX_X_QCTX	= _LONG,	!Pointer to QCTX for system queue
+    	_ALIGN (QUAD)
+    	PCTX_X_QENT 	= _BYTES (QENT_S_QENTDEF),
+    	_ALIGN (QUAD)
+    	PCTX_L_SIZE 	= _LONG,
+    	PCTX_L_ACOUNT	= _LONG,
+    	_ALIGN (QUAD)
+    	PCTX_W_ENVFROM 	= _WORD,
+    	PCTX_T_ENVFROM 	= _BYTES (PCTX_S_ENVFROM),
+    	_ALIGN (QUAD)
+    	PCTX_W_HDRCODE 	= _WORD,
+    	PCTX_W_HDRSIZE	= _WORD,
+    	PCTX_T_HDRBUF	= _BYTES (PCTX_S_HDRBUF)
+    _ENDDEF (PCTX);
+
+    EXTERNAL ROUTINE
+    	LIB$GET_VM_PAGE	    : ADDRESSING_MODE (GENERAL),
+    	LIB$FREE_VM_PAGE    : ADDRESSING_MODE (GENERAL);
+
+    MACRO
+    	INIT_PCTX (NUM) =
+    	BEGIN
+    	    LOCAL
+    	    	I,
+    	    	STATUS,
+    	    	PAGECNT,
+    	    	INADR	: VECTOR [2,LONG];
+    	    IF NOT $APROBE (NUM, 4, WQ, PSL$C_USER) THEN
+    	    	RETURN SS$_ACCVIO;
+    	    I = (INCR J FROM 0 TO PCTX_COUNT-1 DO
+    	    	    IF NOT .PCTX_INUSE[.J] THEN EXITLOOP .J);
+    	    IF I LSS 0 THEN RETURN SS$_ENDOFFILE;
+    	    PCTX_INUSE [.I] = 1;
+    	    PAGECNT = PCTX_S_PCTXDEF / 512 + 1;
+    	    STATUS = LIB$GET_VM_PAGE (PAGECNT, PCTX_ARRAY [.I]);
+    	    IF NOT .STATUS THEN
+    	    BEGIN
+    	    	PCTX_INUSE [.I] = 0;
+    	    	RETURN .STATUS;
+    	    END;
+    	    CH$FILL (%CHAR (0), PCTX_S_PCTXDEF, .PCTX_ARRAY [.I]);
+    	    INADR [0] = .PCTX_ARRAY [.I];
+    	    INADR [1] = .PCTX_ARRAY [.I] + .PAGECNT * 512 - 1;
+    	    STATUS = $SETPRT (INADR=INADR, PROT=PRT$C_EW);
+    	    IF NOT .STATUS THEN
+    	    BEGIN
+    	    	LIB$FREE_VM_PAGE (PAGECNT, PCTX_ARRAY [.I]);
+    	    	PCTX_INUSE [.I] = 0;
+    	    	RETURN .STATUS;
+    	    END;
+    	    NUM = .I;
+    	    .PCTX_ARRAY [.NUM]
+    	END%,
+
+    	FREE_PCTX (NUM) =
+    	BEGIN
+    	    LOCAL
+    	    	PAGECNT,
+    	    	INADR	: VECTOR [2,LONG];
+    	    IF NOT $APROBE (NUM, 4, WQ, PSL$C_USER) THEN
+    	    	RETURN SS$_ACCVIO;
+    	    PAGECNT = PCTX_S_PCTXDEF / 512 + 1;
+    	    LIB$FREE_VM_PAGE (PAGECNT, PCTX_ARRAY [.NUM]);
+    	    PCTX_ARRAY [.NUM] = 0;
+    	    PCTX_INUSE [.NUM] = 0;
+    	END%,
+
+    VRFY_PCTX (NUM) =
+    	BEGIN
+    	    IF NOT $APROBE (NUM, 4, WQ, PSL$C_USER) THEN
+    	    	RETURN SS$_ACCVIO;
+    	    IF .NUM LSS 0 OR .NUM GEQ PCTX_COUNT THEN RETURN SS$_BADPARAM;
+    	    IF NOT .PCTX_INUSE [.NUM] THEN RETURN SS$_BADPARAM;
+    	    IF .PCTX_ARRAY [.NUM] EQLA 0 THEN RETURN SS$_BADPARAM;
+    	    .PCTX_ARRAY [.NUM]
+    	END%,
+
+    PROBE_DESCW (DSC) =
+    	BEGIN
+    	    BIND __DSC = DSC	: BLOCK [DSC$K_S_BLN,BYTE];
+    	    IF NOT $APROBE (DSC, 8, WQ, PSL$C_USER) THEN
+    	    	RETURN SS$_ACCVIO;
+	    IF (.__DSC [DSC$W_LENGTH] NEQU 0) AND
+    	       NOT $APROBE (.__DSC [DSC$A_POINTER], .__DSC [DSC$W_LENGTH],
+    	    	    W, PSL$C_USER) THEN RETURN SS$_ACCVIO;
+    	END%,
+    PROBE_DESCR (DSC) =
+    	BEGIN
+    	    BIND __DSC = DSC	: BLOCK [DSC$K_S_BLN,BYTE];
+    	    IF NOT $APROBE (DSC, 8, RQ, PSL$C_USER) THEN
+    	    	RETURN SS$_ACCVIO;
+	    IF (.__DSC [DSC$W_LENGTH] NEQU 0) AND
+	       NOT $APROBE (.__DSC [DSC$A_POINTER], .__DSC [DSC$W_LENGTH],
+    	    	    R, PSL$C_USER) THEN RETURN SS$_ACCVIO;
+    	END%;

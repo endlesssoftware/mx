@@ -1,0 +1,38 @@
+	.TITLE	MX_MAILSHR_VEC
+	.IDENT	/V1.0-001/
+;
+; FACILITY: 	MX Mail Exchange facility
+;
+; ABSTRACT: 	This module defines the transfer vectors for the MX_MAILSHR
+;   	    	shareable library.
+;
+; AUTHOR:   	M. Madison
+;
+; MODIFICATION HISTORY:
+;
+;   03-AUG-1988	V1.0-001    Madison	    Initial coding.
+;
+    	.DISABLE GLOBAL
+;
+; Macro to generate a transfer vector entry.
+;
+	.MACRO	ROUTINE	NAME
+	.EXTRN		NAME
+	.ALIGN	QUAD
+	.TRANSFER	NAME
+	.MASK		NAME
+	JMP		NAME+2
+	.ENDM
+;
+	.PSECT	$$MX_MAILSHR_VEC    PIC,USR,CON,REL,LCL,SHR,EXE,RD,NOWRT,QUAD
+;
+    	ROUTINE	MAIL$PROTOCOL
+	ROUTINE	MX_MSG_INIT
+	ROUTINE	MX_MSG_SET_FROM
+	ROUTINE	MX_MSG_ADD_ADDRESS
+	ROUTINE	MX_MSG_ADD_HEADER
+	ROUTINE	MX_MSG_ADD_TEXT
+	ROUTINE	MX_MSG_SEND
+	ROUTINE	MX_MSG_CANCEL
+;
+	.END

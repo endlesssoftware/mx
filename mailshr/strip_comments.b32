@@ -1,0 +1,194 @@
+%TITLE 'STRIP_COMMENTS'
+MODULE STRIP_COMMENTS (IDENT='V1.1') =
+BEGIN
+!++
+! FACILITY: 	    STRIP_COMMENTS
+!
+! ABSTRACT: 	    Parses
+!
+! MODULE DESCRIPTION:
+!
+!   description
+!
+! AUTHOR:   	    M. Madison
+!
+! Copyright (c) 2008, Matthew Madison.
+! 
+! All rights reserved.
+! 
+! Redistribution and use in source and binary forms, with or without
+! modification, are permitted provided that the following conditions
+! are met:
+! 
+!     * Redistributions of source code must retain the above
+!       copyright notice, this list of conditions and the following
+!       disclaimer.
+!     * Redistributions in binary form must reproduce the above
+!       copyright notice, this list of conditions and the following
+!       disclaimer in the documentation and/or other materials provided
+!       with the distribution.
+!     * Neither the name of the copyright owner nor the names of any
+!       other contributors may be used to endorse or promote products
+!       derived from this software without specific prior written
+!       permission.
+! 
+! THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
+! "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
+! LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
+! A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
+! OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
+! SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
+! LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
+! DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
+! THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
+! (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
+! OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+!
+! CREATION DATE:    14-MAY-1992
+!
+! MODIFICATION HISTORY:
+!
+!   14-MAY-1992	V1.0	Madison	    Initial coding.
+!   10-MAR-1993 V1.1	Goatley     Converted to AXP.
+!--
+
+    LIBRARY 'SYS$LIBRARY:STARLET';
+    LIBRARY 'SYS$LIBRARY:TPAMAC';
+    LIBRARY 'MX_SRC_COMMON:MX';
+
+    FORWARD ROUTINE
+    	STRIP_COMMENTS,
+    	SC_STORE;
+
+    EXTERNAL ROUTINE
+    	G_HAT (LIB$TPARSE, STR$TRIM, STR$APPEND);
+
+    MACRO
+    	TPA_A_P1    	=   TPA$C_LENGTH0+00,0,32,0%,
+    	TPA_A_P2    	=   TPA$C_LENGTH0+04,0,32,0%,
+    	TPA_A_P3    	=   TPA$C_LENGTH0+08,0,32,0%,
+    	TPA_A_P4    	=   TPA$C_LENGTH0+12,0,32,0%,
+    	TPA_A_P5    	=   TPA$C_LENGTH0+16,0,32,0%,
+    	TPA_A_P6    	=   TPA$C_LENGTH0+20,0,32,0%,
+    	TPA_A_P7    	=   TPA$C_LENGTH0+24,0,32,0%,
+    	TPA_A_P8    	=   TPA$C_LENGTH0+28,0,32,0%;
+
+%SBTTL 'State table for STRIP_COMMENTS'
+
+    $INIT_STATE (SC_STATE, SC_KEY);
+
+    $STATE (OUTOFQUO,
+    	('!', TPA$_EXIT),
+    	(',', TPA$_EXIT),
+    	(TPA$_EOS, TPA$_EXIT),
+    	('"', INQUO, SC_STORE),
+    	(TPA$_ANY, OUTOFQUO, SC_STORE));
+    $STATE (INQUO,
+    	(TPA$_EOS, TPA$_EXIT),
+    	('"', INQUO2, SC_STORE),
+    	(TPA$_ANY, INQUO, SC_STORE));
+    $STATE (INQUO2,
+    	('"', INQUO, SC_STORE),
+    	(TPA$_LAMBDA, OUTOFQUO));
+
+%SBTTL 'STRIP_COMMENTS'
+GLOBAL ROUTINE STRIP_COMMENTS (INSTR_A, OUTSTR_A) =
+BEGIN
+!++
+! FUNCTIONAL DESCRIPTION:
+!
+!   Strips comments (and multiple addresses after commas) from
+!   a string.
+!
+! RETURNS:  	cond_value, longword (unsigned), write only, by value
+!
+! PROTOTYPE:
+!
+!   STRIP_COMMENTS  instr, outstr
+!
+! IMPLICIT INPUTS:  None.
+!
+! IMPLICIT OUTPUTS: None.
+!
+! COMPLETION CODES:
+!
+!   SS$_NORMAL:	    	normal successful completion.
+!
+! SIDE EFFECTS:
+!
+!   None.
+!--
+    BIND
+    	INSTR	= .INSTR_A  : BLOCK [,BYTE];
+
+    LITERAL
+    	TPA_C_LENGTH	= TPA$C_LENGTH0 + 4,
+    	TPA_K_COUNT 	= TPA$K_COUNT0 + 1;
+
+    LOCAL
+    	TPABLK	: BLOCK [TPA_C_LENGTH,BYTE],
+    	TMP 	: BLOCK [DSC$K_S_BLN,BYTE],
+    	STATUS;
+
+    INIT_DYNDESC (TMP);
+
+    TPABLK [TPA$L_COUNT] = TPA_K_COUNT;
+    TPABLK [TPA$L_OPTIONS] = 0;
+    TPABLK [TPA$V_BLANKS] = 1;
+    TPABLK [TPA$L_STRINGCNT] = .INSTR [DSC$W_LENGTH];
+    TPABLK [TPA$L_STRINGPTR] = .INSTR [DSC$A_POINTER];
+    TPABLK [TPA_A_P1] = TMP;
+
+    STATUS = LIB$TPARSE (TPABLK, SC_STATE, SC_KEY);
+    IF NOT .STATUS THEN RETURN .STATUS;
+
+    STR$TRIM (.OUTSTR_A, TMP);
+
+    FREE_STRINGS (TMP);
+
+    SS$_NORMAL
+
+END; ! STRIP_COMMENTS;
+
+%SBTTL 'SC_STORE'
+TPA_ROUTINE (SC_STORE, (OPTIONS, STRLEN, STRPTR, TOKLEN, TOKPTR, CH,
+    	    NUMBER, PARAM, STR_A))
+!++
+! FUNCTIONAL DESCRIPTION:
+!
+!   Stores values for STRIP_COMMENTS.
+!
+! RETURNS:  	cond_value, longword (unsigned), write only, by value
+!
+! PROTOTYPE:
+!
+!   SC_STORE blah
+!
+! IMPLICIT INPUTS:  None.
+!
+! IMPLICIT OUTPUTS: None.
+!
+! COMPLETION CODES:
+!
+!   SS$_NORMAL:	    	normal successful completion.
+!
+! SIDE EFFECTS:
+!
+!   None.
+!--
+    BIND
+	CHAR	= CH : BYTE;
+
+    LOCAL
+    	CHDSC	: BLOCK [DSC$K_S_BLN,BYTE] PRESET (
+    	    	    [DSC$B_CLASS] = DSC$K_CLASS_S,
+    	    	    [DSC$B_DTYPE] = DSC$K_DTYPE_T,
+    	    	    [DSC$W_LENGTH] = 1,
+    	    	    [DSC$A_POINTER] = CHAR);
+
+    STR$APPEND (.STR_A, CHDSC)
+
+END; ! SC_STORE
+    
+END
+ELUDOM

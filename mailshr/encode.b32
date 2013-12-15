@@ -1,0 +1,1123 @@
+%TITLE 'ENCODE'
+MODULE ENCODE (IDENT='V1.1') =
+BEGIN
+!++
+! FACILITY: 	    MX_MAILSHR VMS Mail foreign protocol
+!
+! ABSTRACT: 	    Encodes outgoing binaries for MX delivery.
+!
+! MODULE DESCRIPTION:
+!
+!   This module contains the routines that encode messages (BASE64, etc.)
+!   destined for MX deliveries.
+!
+! AUTHOR:   	    Hunter Goatley
+!
+! Copyright (c) 2008, Matthew Madison and Hunter Goatley.
+! 
+! All rights reserved.
+! 
+! Redistribution and use in source and binary forms, with or without
+! modification, are permitted provided that the following conditions
+! are met:
+! 
+!     * Redistributions of source code must retain the above
+!       copyright notice, this list of conditions and the following
+!       disclaimer.
+!     * Redistributions in binary form must reproduce the above
+!       copyright notice, this list of conditions and the following
+!       disclaimer in the documentation and/or other materials provided
+!       with the distribution.
+!     * Neither the name of the copyright owner nor the names of any
+!       other contributors may be used to endorse or promote products
+!       derived from this software without specific prior written
+!       permission.
+! 
+! THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
+! "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
+! LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
+! A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
+! OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
+! SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
+! LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
+! DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
+! THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
+! (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
+! OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+!
+! CREATION DATE:    12-APR-1993
+!
+! MODIFICATION HISTORY:
+!
+!	V1.1		Hunter Goatley		14-OCT-1997 15:29
+!		Add support for base64 encoding using record I/O instead
+!		of block I/O by adding base64_encode_copy_stream.  Also
+!		added base64_get_content_type to figure out the file name
+!		and type of file.  First MIME support---needs a lot more
+!		work.
+!
+!	V1.0-1		Hunter Goatley		30-APR-1993 16:00
+!		Cleared out FAB filename is $OPEN fails so that when the
+!		TLD is used, a bad name doesn't show up.  Also, use the
+!		name from a NAM block, if one is present in the open FAB.
+!
+!	V1.0		Hunter Goatley		12-APR-1993 20:12
+!		Initial version.
+!--
+    LIBRARY 'SYS$LIBRARY:STARLET';
+    LIBRARY 'MX_SRC_COMMON:MX';
+    LIBRARY 'MX_SRC_COMMON:MX_LCLDEFS';
+    LIBRARY 'MX_SRC_COMMON:DEBUG';
+    LIBRARY 'MX_MAILSHR_LIB';
+
+    COMPILETIME
+	__DBG = (%VARIANT AND 2) EQL 2;
+
+    FORWARD ROUTINE
+	generate_fdl_string,
+	squeeze_fdl_string,
+	base64_encode_copy,
+	base64_encode_copy_stream,
+	base64_get_content_type;
+
+    EXTERNAL ROUTINE
+	MX_MSG_ADD_TEXT,
+	G_HAT(FDL$GENERATE, STR$COPY_DX, STR$FREE1_DX, STR$COPY_R, STR$TRIM,
+	    LIB$GET_VM, LIB$FREE_VM, LIB$SYS_FAO);
+
+    BIND
+	image_jpeg	= %ASCID'image/jpeg',
+	image_gif	= %ASCID'image/gif',
+	video_mpeg	= %ASCID'video/mpeg',
+	audio_wav	= %ASCID'audio/wav',
+	audio_au	= %ASCID'audit/au',
+	other		= %ASCID'application/octet-stream';
+
+
+GLOBAL ROUTINE generate_fdl_string (context_a, tld_a, outstr_a, open_rab_a) =
+BEGIN
+!++
+! FUNCTIONAL DESCRIPTION:
+!
+!	This routine generates an FDL string for a file mailed /FOREIGN
+!	from VMS Mail.
+!
+!	The FDL string is created by opening the file and using $DISPLAY.
+!	The filename to open is found by tracking back through the passed
+!	in RAB to get to the FAB.
+!
+!	If an error occurs opening the file, then the TLD information
+!	passed from VMS Mail to the foreign mail protocol (MX_MAILSHR)
+!	is used.
+!
+!	NOTE: The TLD information does not include any information about
+!	indexed files---we *cannot* rely on just the TLD info to handle
+!	indexed files.  Hence the trick of opening the file again.
+!
+!	Once the FABs, XABs, and RAB are established, they are passed
+!	to FDL$GENERATE, which produces the FDL string.
+!
+! RETURNS:  	cond_value, longword (unsigned), write only, by value
+!
+! PROTOTYPE:
+!
+!   GENERATE_FDL_STRING (context, tld, outstr, rab)
+!
+! context:  unsigned_longword, longword (unsigned), ignored, by reference
+! tld:	    descriptor, read only, by reference
+! outstr:   descriptor, write only, by reference
+! rab:	    address of open rab, read only, by reference
+!
+! IMPLICIT INPUTS:  None.
+!
+! IMPLICIT OUTPUTS: None.
+!
+! COMPLETION CODES:
+!
+!   SS$_NORMAL:	    	normal successful completion.
+!
+! SIDE EFFECTS:
+!
+!   None.
+!--
+    BIND
+	context	= .context_a	: MXPDEF,	!The context block
+	tld	= .tld_a	: $BBLOCK,	!The TLD info from VMS Mail
+	outstr	= .outstr_a	: $BBLOCK,	!Desc. to receive FDL string
+	open_rab= .open_rab_a	: $BBLOCK;	!The open RAB from VMS Mail
+
+    BIND
+	debug		= context [MXP_L_DEBUG],
+	trace_unit	= context [MXP_L_TUNIT];
+
+    LOCAL
+	fdlstr		: $BBLOCK[DSC$K_S_BLN],
+	itm_item_list	: $ITMLST_DECL (ITEMS=1),
+	xabitm		: $XABITM (NXT = 0,
+				   MODE = SENSEMODE,
+				   ITEMLIST = itm_item_list),
+	xabfhc		: $XABFHC (),
+	xaball		: $XABALL (),
+	xabsum		: $XABSUM (),
+	fab		: $FAB (),
+	rab		: $RAB (FAB = fab),
+	xabptr		: REF $BBLOCK,
+	semantics	: VOLATILE $BBLOCK[XAB$K_SEMANTICS_MAX_LEN],
+	semantics_len	: VOLATILE,
+	tld_ptr		: REF VECTOR [,WORD],
+	tld_len,
+	fabptr		: REF $BBLOCK,
+	rabptr		: REF $BBLOCK,
+	used_open_rab,
+	status;
+
+    MACRO
+	abyte	= 0,0, 8,0 %,
+	aword	= 0,0,16,0 %,
+	along	= 0,0,32,0 %;
+
+
+    INIT_DYNDESC (fdlstr);
+
+    XTRACE ('%MXDBG, Generating FDL string for /FOREIGN file....');
+
+    used_open_rab = 0;
+
+    !
+    !  First, try opening the file using $OPEN and get the FAB and XAB
+    !  info using $DISPLAY.  This way, we handle all files, including
+    !  indexed files.
+    !
+    IF (open_rab NEQA 0) AND (.open_rab [RAB$L_FAB] NEQA 0)
+    THEN
+	BEGIN
+	LOCAL open_fab : REF $FAB_DECL, open_nam : REF $NAM_DECL,
+		ptr : REF $BBLOCK;
+
+	open_fab = .open_rab[RAB$L_FAB];
+
+	!
+	!  We need to get the filename.  Instead of using whatever's
+	!  stored in the FAB, go the NAM block, if there is one, and
+	!  use either the resultant string or the expanded string.
+	!
+	IF ((open_nam = .open_fab [FAB$L_NAM]) NEQA 0)
+	THEN
+	    IF ((fab [FAB$B_FNS] = .open_nam [NAM$B_RSL]) NEQU 0)
+	    THEN
+		BEGIN
+		fab [FAB$L_FNA] = .open_nam [NAM$L_RSA];
+		XTRACE ('%MXDBG, Using NAM RS !AD',.fab[FAB$B_FNS],.fab[FAB$L_FNA]);
+		END
+	    ELSE
+		IF ((fab [FAB$B_FNS] = .open_nam [NAM$B_ESL]) NEQU 0)
+		THEN
+		    BEGIN
+		    fab [FAB$L_FNA] = .open_nam [NAM$L_ESA];
+		XTRACE ('%MXDBG, Using NAM ES !AD',.fab[FAB$B_FNS],.fab[FAB$L_FNA]);
+		    END;
+
+	!
+	!  If neither was found, then just use name stored in the FAB.
+	!
+	IF (.fab [FAB$B_FNS] EQLU 0)
+	THEN
+	    BEGIN
+	    fab [FAB$B_FNS] = .open_fab[FAB$B_FNS];
+	    fab [FAB$L_FNA] = .open_fab[FAB$L_FNA];
+	    END;
+
+	fab [FAB$L_XAB] = xabsum;
+	xabsum [XAB$L_NXT] = xabitm;
+
+	semantics_len = 0;
+	$ITMLST_INIT (ITMLST = itm_item_list,
+			(ITMCOD = XAB$_STORED_SEMANTICS,
+			 BUFSIZ = XAB$K_SEMANTICS_MAX_LEN,
+			 BUFADR = semantics,
+			 RETLEN = semantics_len));
+
+	XTRACE ('%MXDBG, Attempting to open !AD', .fab[FAB$B_FNS],
+				.fab[FAB$L_FNA]);
+	!
+	!  Open the named file, using $DISPLAY.  Only an XABSUM is there.
+	!
+	status = $OPEN (FAB = fab);
+	XTRACE ('%MXDBG, $OPEN status = !XL', .status);
+	XTRACE ('%MXDBG, Semantics length: !XL, first bytes: !XL',
+			.semantics_len, .semantics);
+	IF (.status)
+	THEN
+	    BEGIN
+	    !
+	    !  Add the appropriate XABs (FHC, multiple ALLs and KEYs)
+	    !
+	    IF (.semantics_len NEQU 0)
+	    THEN
+		BEGIN
+		xabitm [XAB$L_NXT] = xabfhc;
+		itm_item_list[0,ITM$W_BUFSIZ] = .semantics_len;	!Store length
+		END
+	    ELSE
+		xabsum [XAB$L_NXT] = xabfhc;
+
+	    xabfhc [XAB$L_NXT] = 0;			!Make FHC the end
+
+	    !
+	    !  If the file is indexed, we need to allocate an XABKEY and
+	    !  an XABALL for *each* key that's defined.
+	    !
+	    IF (.fab [FAB$B_ORG] EQLU FAB$C_IDX)
+	    THEN
+		BEGIN
+		XTRACE ('%MXDBG, Indexed file.  NOK: !UL, NOA: !UL',
+				.xabsum [XAB$B_NOK], .xabsum [XAB$B_NOA]);
+		DECR i FROM .xabsum [XAB$B_NOK]-1 TO 0 DO
+		    BEGIN
+		    LOCAL xabptr : REF $BBLOCK;
+		    LIB$GET_VM (%REF(XAB$C_KEYLEN), xabptr);
+		    $XABKEY_INIT (XAB = .xabptr, KREF = .i,
+					NXT = .fab [FAB$L_XAB]);
+		    fab [FAB$L_XAB] = .xabptr;
+		    END;
+		DECR i FROM .xabsum [XAB$B_NOA]-1 TO 0 DO
+		    BEGIN
+		    LOCAL xabptr : REF $BBLOCK;
+		    LIB$GET_VM (%REF(XAB$C_ALLLEN), xabptr);
+		    $XABALL_INIT (XAB = .xabptr, AID = .i,
+				  NXT = .fab [FAB$L_XAB]);
+		    fab [FAB$L_XAB] = .xabptr;
+		    END;
+		END
+	    ELSE
+		!
+		!  If not an indexed file, just use on XABALL.
+		!
+		xabfhc [XAB$L_NXT] = xaball;
+
+	    !
+	    !  Call $DISPLAY to fill in all the XABs.
+	    !
+	    $DISPLAY (FAB = fab);
+	    $CLOSE (FAB = fab);
+
+!	    XTRACE ('%MXDBG, Dumping XAB addresses');
+!	    xabptr = .fab[FAB$L_XAB];
+!	    WHILE (.xabptr[XAB$L_NXT] NEQA 0) DO
+!		BEGIN
+!		XTRACE ('    XAB = !XL', .xabptr);
+!		xabptr = .xabptr[XAB$L_NXT];
+!		END;
+
+	    used_open_rab = 1;
+
+	    END;
+	!
+	!  We don't the file name showing up in the FDL string, so
+	!  get rid of it in the FAB.
+	!
+	fab [FAB$B_FNS] = fab [FAB$L_FNA] = 0;		!Get rid of name
+
+	END;
+
+    !
+    !  If an error occurred using $OPEN, then use the TLD info we were
+    !  given.
+    !
+    IF NOT(.used_open_rab)
+    THEN
+	BEGIN
+	tld_len = .tld [DSC$W_LENGTH];		!Length of the TLD
+	tld_ptr = .tld [DSC$A_POINTER];		!Address of the TLD
+
+	fab [FAB$L_XAB]= xabfhc;		!Build the chain of XABs
+	xabfhc [XAB$L_NXT] = xaball;		!Need at least the FHC and ALL
+	xaball [XAB$L_NXT] = 0;
+
+	XTRACE ('%MXDBG, tld_len = !UL', .tld_len);
+	XTRACE ('%MXDBG, tld_ptr = !XL', .tld_ptr);
+
+	!
+	!  Instead of calling a subroutine to run through the TLD looking for
+	!  specific codes, just run through the TLD using a SELECT for each
+	!  code that's present.  A lot more efficient.
+	!
+	WHILE (.tld_len GTR 0) DO
+	    BEGIN
+	    LOCAL	item_code, item_size, item_addr : REF $BBLOCK;
+
+	    !
+	    !  The TLD is arranged as a VECTOR[,WORD] array.  Element [0]
+	    !  is the item code for that item, element [1] is the size of
+	    !  that item, and element [2] is the starting address for the
+	    !  data for that item.
+	    !
+	    item_code = .tld_ptr[0];
+	    item_size = .tld_ptr[1];
+	    item_addr =  tld_ptr[2];
+
+	    XTRACE ('%MXDBG, item code = !2UL, size = !2UL, addr = !XL',
+				.item_code, .item_size, .item_addr);
+
+	    SELECTONE .item_code OF
+		SET
+		[CNF_C_MRS] :	fab [FAB$W_MRS]		= .item_addr[aword];
+		[CNF_C_MRN] :	fab [FAB$L_MRN]		= .item_addr[along];
+		[CNF_C_FSZ] :	fab [FAB$B_FSZ]		= .item_addr[abyte];
+		[CNF_C_BKS] :	fab [FAB$B_BKS]	=
+				xaball [XAB$B_BKZ]	= .item_addr[abyte];
+		[CNF_C_GBC] :	fab [FAB$W_GBC]		= .item_addr[aword];
+		[CNF_C_FOP] :	fab [FAB$L_FOP]		= .item_addr[along];
+		[CNF_C_AOP] :	xaball [XAB$B_AOP]	= .item_addr[abyte];
+		[CNF_C_FALQ] :	fab [FAB$L_ALQ] =
+				xaball [XAB$L_ALQ]	= .item_addr[along];
+		[CNF_C_DXQ] :	xaball [XAB$W_DEQ]	= .item_addr[aword];
+		[CNF_C_RFO] :	BEGIN
+				xabfhc [XAB$B_RFO]	= .item_addr[abyte];
+				fab [FAB$B_RFM]	= .item_addr[abyte] AND %X'0F';
+				fab [FAB$B_ORG]	= .item_addr[abyte] AND %X'F0';
+				END;
+				!    	rms->fab.fab$b_rfm = (*iptr) & ~0xf0;
+				!    	rms->fab.fab$b_org = (*iptr) & ~0x0f;
+		[CNF_C_ATR] :	fab [FAB$B_RAT] =
+				xabfhc[XAB$B_ATR]	= .item_addr[abyte];
+		[CNF_C_LRL] :	xabfhc [XAB$W_LRL]	= .item_addr[aword];
+		[CNF_C_BKZ] :	xabfhc [XAB$B_BKZ]	= .item_addr[abyte];
+		[CNF_C_HSZ] :	xabfhc [XAB$B_HSZ]	= .item_addr[abyte];
+		[CNF_C_MRZ] :	xabfhc [XAB$W_MRZ]	= .item_addr[aword];
+
+		[CNF_C_TAG] :
+			BEGIN
+			xaball [XAB$L_NXT] = xabitm;
+			itm_item_list[0,ITM$W_ITMCOD] = XAB$_STORED_SEMANTICS;
+			itm_item_list[0,ITM$W_BUFSIZ] =
+				(IF (.item_size GTRU XAB$K_SEMANTICS_MAX_LEN)
+				 THEN	XAB$K_SEMANTICS_MAX_LEN
+				 ELSE	.item_size);
+			itm_item_list[0,ITM$L_BUFADR] = .item_addr;
+			itm_item_list[0,ITM$L_RETLEN] = 0;
+			itm_item_list[1,ITM$W_ITMCOD] =
+			    itm_item_list[1,ITM$W_BUFSIZ] = 0;
+			END;
+		TES;
+
+	    !
+	    !  Recalculate TLD length and address.  Must subtract the
+	    !  item size, plus 4 bytes for the item code and size words.
+	    !
+	    tld_len = .tld_len - .item_size - 4;
+	    tld_ptr = .item_size + .item_addr;
+	    END;
+	END;
+
+    !
+    !  We now have a FAB, a RAB, and XABs that describe the target file.
+    !  Just call FDL$GENERATE to produce the FDL string.
+    !
+    fabptr = fab;			!FDL$GENERATE wants the addresses of
+    rabptr = rab;			!... pointers to the FAB and RAB
+    status = FDL$GENERATE (%REF(FDL$M_FDL_STRING), fabptr, rabptr,
+			0, 0, fdlstr);
+
+    XTRACE ('%MXDBG, FDL$GENERATE status = !XL', .status);
+    IF .status
+    THEN
+	BEGIN
+	squeeze_fdl_string (fdlstr, outstr);	!Clean up FDL string
+	XTRACE ('%MXDBG, FDL string: "!AS"', outstr);
+	END;
+
+    IF .used_open_rab AND				!If we allocated XABs
+	(.fab [FAB$B_ORG] EQLU FAB$C_IDX)		!... for an indexed file
+    THEN						!... then deallocate
+	WHILE ((xabptr = .fab [FAB$L_XAB]) NEQA 0) DO	!Loop through XABs,
+	    BEGIN					!... deallocating all
+	    fab [FAB$L_XAB] = .xabptr [XAB$L_NXT];	!... the XABKEYs and
+	    IF ((.xabptr [XAB$B_COD] EQLU XAB$C_ALL) OR	!... XABALLs
+		(.xabptr [XAB$B_COD] EQLU XAB$C_KEY))
+	    THEN
+		LIB$FREE_VM (%REF(.xabptr [XAB$B_BLN]), xabptr);
+	    END;
+
+    FREE_STRINGS (fdlstr);
+    RETURN (.status);
+
+END;
+
+
+%SBTTL 'SQUEEZE_FDL_STRING'
+ROUTINE squeeze_fdl_string (instr_a, outstr_a) =
+BEGIN
+!+
+!
+!  Routine:	SQUEEZE_FDL_STRING
+!
+!  Functional description:
+!
+!	This routine takes an FDL string, replaces all tabs with a blank,
+!	and squeezes multiple blanks to a single blank.
+!
+!  Inputs:
+!
+!	instr_a		- Address of descriptor for FDL string to be squeezed
+!	outstr_a	- Address of descriptor to receive squeezed string
+!
+!-
+   BIND
+	instr	= .instr_a	: $BBLOCK,
+	outstr	= .outstr_a	: $BBLOCK;
+
+   LOCAL
+	ptr2		: REF $BBLOCK,
+	ptr1		: REF $BBLOCK,
+	len, c, have_blank,
+	work_str	: $BBLOCK[DSC$K_S_BLN];
+
+   $INIT_DYNDESC (work_str);
+
+   ! First, reduce all multiple blanks to a single blank.
+
+   STR$COPY_DX (work_str, instr);		!Copy the string
+
+    have_blank = 0;
+    ptr2 = ptr1 = .work_str[DSC$A_POINTER];
+    len = .work_str[DSC$W_LENGTH];
+
+    !
+    !  The string should start with ``IDENT<TAB>...."xxxx";''.  If so, skip
+    !  over it so it's omitted from the string.
+    !
+    IF CH$EQL (6, .ptr1, 6, UPLIT(%STRING('IDENT',%CHAR(9))), 0)
+    THEN
+	BEGIN
+	ptr1 = CH$FIND_CH (.len, .ptr1, %C';');		!Find first ";"
+	WHILE (CH$RCHAR(.ptr1) EQLU %C';') DO
+		ptr1 = CH$PLUS (.ptr1, 1);		!Bump past ";;"
+	len = .len - CH$DIFF(.ptr1, .ptr2);		!Change length
+	END;
+
+    !
+    !  We have some bytes to play with because a) the IDENT was skipped
+    !  above and b) we're squeezing multiple blanks to one.  This lets
+    !  us add "\" before any quotes, since there shouldn't really be any.
+    !
+    DECR i FROM .len TO 0 DO
+	BEGIN
+	c = CH$RCHAR_A (ptr1);			!Read a character
+	IF (.c EQLU %C'"')			!If the character is a quote,
+	THEN					!... prefix it by "\" as per
+	    CH$WCHAR_A (%C'\', ptr2);		!... RFC822
+	IF (.c EQLU %C %CHAR(9)) THEN c = %C' ';!Convert tabs to a blank
+	IF (.c EQLU %C' ')			!Is it a blank?
+	THEN					!If so, then see if we already
+	    BEGIN
+	    IF NOT(.have_blank)			!... have a blank.  If not,
+	    THEN				!... then write this one out
+		CH$WCHAR_A (.c, ptr2);		!...
+	    END
+	ELSE					!Else, not a blank, write it
+	    CH$WCHAR_A (.c, ptr2);		!... out
+	have_blank = (.c EQLU %C' ');		!Set have_blank flag
+	END;
+    CH$FILL (%C' ', CH$DIFF(.ptr1, .ptr2), .ptr2-1);
+
+    STR$TRIM (outstr, work_str);		!Trim all trailing blanks
+    FREE_STRINGS (work_str);
+
+   SS$_NORMAL
+
+END;
+
+
+%SBTTL	'BASE64_ENCODE_COPY'
+GLOBAL ROUTINE base64_encode_copy (context_a, rab_a) =
+BEGIN
+!+
+!
+!  Routine:	BASE64_ENCODE_COPY
+!
+!  Functional description:
+!
+!	This routine uses block I/O to read the input file and then
+!	encodes it using base64 encoding (three bytes->four bytes).
+!	The encoded lines are added to the message text by calling
+!	MX_MSG_ADD_TEXT.
+!
+!  Inputs:
+!
+!	context_a	- Address of context block (used for debug info)
+!	rab_a		- Address of a RAB to use for $READing
+!
+!-
+    BIND
+	context	= .context_a	: MXPDEF,
+	rab	= .rab_a	: $BBLOCK;
+
+    BIND
+	debug		= context [MXP_L_DEBUG],
+	trace_unit	= context [MXP_L_TUNIT],
+	pctx		= context [MXP_L_PCTX];
+
+    LITERAL
+	mime_k_max_rec_len = 64;
+
+    LOCAL
+	buffer		: $BBLOCK[80],
+	buffer_d	: $BBLOCK[DSC$K_S_BLN],
+	sptr		: REF VECTOR[,BYTE],
+	dptr		: REF $BBLOCK,
+	big_buffer	: REF $BBLOCK,
+	big_buffer_size, len, llen, was_bio, status, x;
+
+    BIND
+	table =
+     UPLIT('ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/');
+
+    !
+    !  Initialize the string descriptor for the output buffer.
+    !
+    init_sdesc (buffer_d, mime_k_max_rec_len, buffer);
+
+    !
+    !  The easiest way to process the tuplets is to read in 3 "blocks" at
+    !  a time and process them.  That way, we're guaranteed that there
+    !  will only be leftover bytes to be encoded at the very end of the
+    !  file (since 3 blocks divided by 3 is an even number of tuplets).
+    !
+    !  Just to be safe, don't assume 512-byte blocks.  Instead, use the
+    !  size of the user buffer (RAB$W_RSZ) as the "block" size.
+    !
+    big_buffer_size = .rab [RAB$W_USZ] * 3;	!Calculate size
+    LIB$GET_VM (big_buffer_size, big_buffer);	!Allocate 3 blocks of memory
+
+    was_bio = .rab [RAB$V_BIO];			!Was the RAB set for block I/O?
+    IF NOT (.was_bio)				!If not, disconnect it and
+    THEN					!... make it block I/O
+	BEGIN
+	$DISCONNECT (RAB = rab);
+	rab [RAB$V_BIO] = 1;
+	$CONNECT (RAB = rab);
+	END;
+    XTRACE ('%MXDBG, base64-encoding file...');
+
+    dptr = buffer;				!Set destination pointer
+    llen = 0;					!Current line length
+
+    WHILE ($READ (RAB = rab)) DO
+	BEGIN
+	len = .rab [RAB$W_RSZ];			!Get the number of bytes read
+	CH$MOVE (.len, .rab [RAB$L_RBF], .big_buffer);
+
+	sptr = CH$PLUS (.big_buffer, .len);
+
+	status = $READ (RAB = rab);		!Read in second block
+	IF (.status)
+	THEN
+	    BEGIN
+	    len = .len + .rab [RAB$W_RSZ];	!Get the number of bytes read
+	    CH$MOVE (.rab[RAB$W_RSZ], .rab [RAB$L_RBF], .sptr);
+	    sptr = CH$PLUS (.big_buffer, .len);
+	    status = $READ (RAB = rab);		!Read in third block
+	    IF (.status)
+	    THEN
+		BEGIN
+		len = .len + .rab [RAB$W_RSZ];	!Get the number of bytes read
+		CH$MOVE (.rab[RAB$W_RSZ], .rab [RAB$L_RBF], .sptr);
+		END;
+	    END;
+
+	sptr = .big_buffer;			!Start at the beginning
+	!
+	!  Process the tuplets (groups of 3 bytes)
+	!
+	WHILE (.len GTRU 2) DO
+	    BEGIN
+	    LOCAL x, y;
+	    !
+	    !  byte 1: high 6 bits (1)
+	    !
+	    x = .sptr[0] ^ -2;
+	    CH$WCHAR_A (CH$RCHAR(CH$PLUS(table, .x)), dptr);
+	    !
+	    !  byte 2: low 2 bits (1), high 4 bits (2)
+	    !
+	    x = ((.sptr[0] ^ 4) + (.sptr[1] ^ -4)) AND %X'3F';
+	    CH$WCHAR_A (CH$RCHAR(CH$PLUS(table, .x)), dptr);
+	    !
+	    !  byte 3: low 4 bits (2), high 2 bits (3)
+	    !
+	    x = ((.sptr[1] ^ 2) + (.sptr[2] ^ -6)) AND %X'3F';
+	    CH$WCHAR_A (CH$RCHAR(CH$PLUS(table, .x)), dptr);
+	    !
+	    !  byte 4: low 6 bits (3)
+	    !
+	    x = .sptr[2] AND %X'3F';
+	    CH$WCHAR_A (CH$RCHAR(CH$PLUS(table, .x)), dptr);
+
+	    !
+	    !  If we have a full output line, then add it to the message
+	    !  text and reset our pointers to the buffer beginning.
+	    !
+	    IF ((llen = .llen + 4) EQLU mime_k_max_rec_len)
+	    THEN
+		BEGIN
+		MX_MSG_ADD_TEXT (pctx, buffer_d);
+!		LIB$PUT_OUTPUT (buffer_d);
+		llen = 0;
+		dptr = buffer;
+		END;
+
+	    !
+	    !  Finished with this tuplet, so adjust length and pointer
+	    !  by three bytes and loop to do the next three bytes.
+	    !
+	    len = .len - 3;
+	    sptr = .sptr + 3;
+	    END;	!WHILE (.len GTRU 2) DO....
+	
+	IF NOT(.status)			!If one of our $READs failed, then
+	THEN				!... exit the loop now.
+	    EXITLOOP;
+	END;		!WHILE ($READ....
+
+    !
+    !  We've processed the whole file, but there may still be one or
+    !  two bytes left over that must be encoded.  The "=" is used to
+    !  pad the encoded bytes to 4 bytes.
+    !
+    SELECTONE .len OF
+	SET
+	   [0]	: ;			!No bytes left over; do nothing.
+	   [1]	:			!1 byte left over, pad with "="
+		BEGIN			!Need two trailing bytes
+		!  byte 1: high 6 bits
+		CH$WCHAR_A (CH$RCHAR(CH$PLUS(table,(.sptr[0] ^ -2))), dptr);
+		!  byte 2: low 2 bits
+		CH$WCHAR_A (CH$RCHAR(CH$PLUS(table,
+				((.sptr[0] ^ 4) AND %X'3F'))), dptr);
+		CH$WCHAR_A (%C'=', dptr);	!Byte 3
+		CH$WCHAR_A (%C'=', dptr);	!Byte 4
+		END;
+	   [2]	:				!Need one trailing byte
+		BEGIN
+		!  byte 1: high 6 bits
+		CH$WCHAR_A (CH$RCHAR(CH$PLUS(table,(.sptr[0] ^ -2))), dptr);
+		!  byte 2: low 2 bits, high 4 bits
+		x = ((.sptr[0] ^ 4) + (.sptr[1] ^ -4)) AND %X'3F';
+		CH$WCHAR_A (CH$RCHAR(CH$PLUS(table,.x)), dptr);
+		!  byte 3: low 2 bits
+		x = (.sptr[1] ^ 2) AND %X'3F';
+		CH$WCHAR_A (CH$RCHAR(CH$PLUS(table,.x)), dptr);
+		CH$WCHAR_A (%C'=', dptr);		!Byte 4
+		END;
+	TES;
+
+    !
+    !  Now write out the final line of the encoded file.
+    !
+    buffer_d [DSC$W_LENGTH] = CH$DIFF (.dptr, buffer);	!Final length
+    MX_MSG_ADD_TEXT (pctx, buffer_d);
+!    LIB$PUT_OUTPUT (buffer_d);
+
+    LIB$FREE_VM (big_buffer_size, big_buffer);		!Deallocate memory
+
+    IF NOT (.was_bio)				!If RAB was not originally set
+    THEN					!... for block I/O, then we
+	BEGIN					!... need to put it back the
+	$DISCONNECT (RAB = rab);		!... way it was.
+	rab [RAB$V_BIO] = 0;
+	$CONNECT (RAB = rab);
+	END;
+
+   SS$_NORMAL				!Always return success
+
+END;
+
+
+%SBTTL	'BASE64_ENCODE_COPY_STREAM'
+GLOBAL ROUTINE base64_encode_copy_stream (context_a, rab_a) =
+BEGIN
+!+
+!
+!  Routine:	BASE64_ENCODE_COPY_STREAM
+!
+!  Functional description:
+!
+!	This routine uses normal RMS record I/O to read the input file and then
+!	encodes it using base64 encoding (three bytes->four bytes).
+!	The encoded lines are added to the message text by calling
+!	MX_MSG_ADD_TEXT.
+!
+!  Inputs:
+!
+!	context_a	- Address of context block (used for debug info)
+!	rab_a		- Address of a RAB to use for $READing
+!
+!-
+    BIND
+	context	= .context_a	: MXPDEF,
+	rab	= .rab_a	: $BBLOCK;
+
+    BIND
+	debug		= context [MXP_L_DEBUG],
+	trace_unit	= context [MXP_L_TUNIT],
+	pctx		= context [MXP_L_PCTX];
+
+    LITERAL
+	mime_k_max_rec_len = 64;
+
+    LOCAL
+	buffer		: $BBLOCK[80],
+	buffer_d	: $BBLOCK[DSC$K_S_BLN],
+	sptr		: REF VECTOR[,BYTE],
+	dptr		: REF $BBLOCK,
+	bptr		: REF $BBLOCK,
+	big_buffer	: REF $BBLOCK,
+	old_rab_buffer	: REF $BBLOCK,
+	old_rab_bufsiz,
+	fab		: REF $FAB_DECL,
+	big_buffer_size, len, llen, was_bio, status, x, rlen;
+
+    BIND
+	table =
+     UPLIT('ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/');
+
+    fab = .rab [RAB$L_FAB];
+    !
+    !  Initialize the string descriptor for the output buffer.
+    !
+    init_sdesc (buffer_d, mime_k_max_rec_len, buffer);
+
+    !
+    !  The easiest way to process the tuplets is to read in 3 "blocks" at
+    !  a time and process them.  That way, we're guaranteed that there
+    !  will only be leftover bytes to be encoded at the very end of the
+    !  file (since 3 blocks divided by 3 is an even number of tuplets).
+    !
+    !  Just to be safe, don't assume 512-byte blocks.  Instead, use the
+    !  size of the user buffer (RAB$W_RSZ) as the "block" size.
+    !
+    big_buffer_size = 64*1024+3;		!Calculate size
+    LIB$GET_VM (big_buffer_size, big_buffer);	!Allocate 3 blocks of memory
+
+    was_bio = .rab [RAB$V_BIO];			!Was the RAB set for block I/O?
+    IF (.was_bio)				!If so, disconnect it and
+    THEN					!... make it non-block I/O
+	BEGIN
+	$DISCONNECT (RAB = rab);
+	rab [RAB$V_BIO] = 0;
+	old_rab_buffer = .rab [RAB$L_UBF];	!Save the original buffer info
+	old_rab_bufsiz = .rab [RAB$W_USZ];
+	rab [RAB$L_UBF] = .big_buffer;		!Use our own big buffer
+	rab [RAB$W_USZ] = .big_buffer_size-4;
+	$CONNECT (RAB = rab);
+	END
+    ELSE
+	BEGIN
+	$DISCONNECT (RAB = rab);
+	old_rab_buffer = .rab [RAB$L_UBF];	!Save the original buffer info
+	old_rab_bufsiz = .rab [RAB$W_USZ];
+	rab [RAB$L_UBF] = .big_buffer;		!Use our own big buffer
+	rab [RAB$W_USZ] = .big_buffer_size-4;
+	$CONNECT (RAB = rab);
+	END;
+    XTRACE ('%MXDBG, base64-encoding file...');
+
+    dptr = buffer;				!Set destination pointer
+    llen = 0;					!Current line length
+    rlen = 0;
+
+    !
+    !  In the loop below, [RAB$L_UBF] will get updated as needed to allow
+    !  for leftover characters (1 or 2).
+    !
+    WHILE ($GET (RAB = rab)) DO
+	BEGIN
+	len = .rab [RAB$W_RSZ];			!Get the number of bytes read
+!	CH$MOVE (.len, .rab [RAB$L_RBF], .bptr);
+
+	sptr = CH$PLUS (.rab [RAB$L_RBF], .len);
+	IF (.fab [FAB$B_RAT] NEQU 0)		!Carriage control?  Add <LF>
+	THEN					!... if so
+	    BEGIN
+	    len = .len+1;
+	    CH$WCHAR_A (%CHAR(10), sptr);
+	    END;
+
+	len = .len + CH$DIFF(.rab [RAB$L_RBF], .big_buffer);
+	sptr = .big_buffer;			!Start at the beginning
+	bptr = .big_buffer;
+	rlen = 0;
+	!
+	!  Process the tuplets (groups of 3 bytes)
+	!
+	WHILE (.len GTRU 2) DO
+	    BEGIN
+	    LOCAL x, y;
+	    !
+	    !  byte 1: high 6 bits (1)
+	    !
+	    x = .sptr[0] ^ -2;
+	    CH$WCHAR_A (CH$RCHAR(CH$PLUS(table, .x)), dptr);
+	    !
+	    !  byte 2: low 2 bits (1), high 4 bits (2)
+	    !
+	    x = ((.sptr[0] ^ 4) + (.sptr[1] ^ -4)) AND %X'3F';
+	    CH$WCHAR_A (CH$RCHAR(CH$PLUS(table, .x)), dptr);
+	    !
+	    !  byte 3: low 4 bits (2), high 2 bits (3)
+	    !
+	    x = ((.sptr[1] ^ 2) + (.sptr[2] ^ -6)) AND %X'3F';
+	    CH$WCHAR_A (CH$RCHAR(CH$PLUS(table, .x)), dptr);
+	    !
+	    !  byte 4: low 6 bits (3)
+	    !
+	    x = .sptr[2] AND %X'3F';
+	    CH$WCHAR_A (CH$RCHAR(CH$PLUS(table, .x)), dptr);
+
+	    !
+	    !  If we have a full output line, then add it to the message
+	    !  text and reset our pointers to the buffer beginning.
+	    !
+	    IF ((llen = .llen + 4) EQLU mime_k_max_rec_len)
+	    THEN
+		BEGIN
+		MX_MSG_ADD_TEXT (pctx, buffer_d);
+!		LIB$PUT_OUTPUT (buffer_d);
+		llen = 0;
+		dptr = buffer;
+		END;
+
+	    !
+	    !  Finished with this tuplet, so adjust length and pointer
+	    !  by three bytes and loop to do the next three bytes.
+	    !
+	    len = .len - 3;
+	    sptr = .sptr + 3;
+	    END;	!WHILE (.len GTRU 2) DO....
+	
+	!Copy up to two remaining bytes to beginning of buffer
+	rlen = .len;		!Number of bytes left over
+	IF (.len EQLU 2)
+	THEN
+	    BEGIN
+	    CH$WCHAR_A (CH$RCHAR_A (sptr), bptr);
+	    len = .len - 1;
+	    END;
+	IF (.len EQLU 1)
+	THEN
+	    BEGIN
+	    CH$WCHAR_A (CH$RCHAR_A (sptr), bptr);
+	    len = .len - 1;
+	    END;
+
+	rab [RAB$L_UBF] = .bptr;
+
+	END;		!WHILE ($READ....
+
+    !
+    !  We've processed the whole file, but there may still be one or
+    !  two bytes left over that must be encoded.  The "=" is used to
+    !  pad the encoded bytes to 4 bytes.
+    !
+    sptr = .big_buffer;
+    SELECTONE .rlen OF
+	SET
+	   [0]	: ;			!No bytes left over; do nothing.
+	   [1]	:			!1 byte left over, pad with "="
+		BEGIN			!Need two trailing bytes
+		!  byte 1: high 6 bits
+		CH$WCHAR_A (CH$RCHAR(CH$PLUS(table,(.sptr[0] ^ -2))), dptr);
+		!  byte 2: low 2 bits
+		CH$WCHAR_A (CH$RCHAR(CH$PLUS(table,
+				((.sptr[0] ^ 4) AND %X'3F'))), dptr);
+		CH$WCHAR_A (%C'=', dptr);	!Byte 3
+		CH$WCHAR_A (%C'=', dptr);	!Byte 4
+		END;
+	   [2]	:				!Need one trailing byte
+		BEGIN
+		!  byte 1: high 6 bits
+		CH$WCHAR_A (CH$RCHAR(CH$PLUS(table,(.sptr[0] ^ -2))), dptr);
+		!  byte 2: low 2 bits, high 4 bits
+		x = ((.sptr[0] ^ 4) + (.sptr[1] ^ -4)) AND %X'3F';
+		CH$WCHAR_A (CH$RCHAR(CH$PLUS(table,.x)), dptr);
+		!  byte 3: low 2 bits
+		x = (.sptr[1] ^ 2) AND %X'3F';
+		CH$WCHAR_A (CH$RCHAR(CH$PLUS(table,.x)), dptr);
+		CH$WCHAR_A (%C'=', dptr);		!Byte 4
+		END;
+	TES;
+
+    !
+    !  Now write out the final line of the encoded file.
+    !
+    buffer_d [DSC$W_LENGTH] = CH$DIFF (.dptr, buffer);	!Final length
+    MX_MSG_ADD_TEXT (pctx, buffer_d);
+!    LIB$PUT_OUTPUT (buffer_d);
+
+    LIB$FREE_VM (big_buffer_size, big_buffer);		!Deallocate memory
+
+    IF (.was_bio)				!If RAB was not originally set
+    THEN					!... for block I/O, then we
+	BEGIN					!... need to put it back the
+	$DISCONNECT (RAB = rab);		!... way it was.
+	rab [RAB$V_BIO] = 1;
+	rab [RAB$L_UBF] = .old_rab_buffer;
+	rab [RAB$W_USZ] = .old_rab_bufsiz;
+	$CONNECT (RAB = rab);
+	END
+    ELSE
+	BEGIN
+	$DISCONNECT (RAB = rab);
+	rab [RAB$L_UBF] = .old_rab_buffer;
+	rab [RAB$W_USZ] = .old_rab_bufsiz;
+	$CONNECT (RAB = rab);
+	END;
+
+
+   SS$_NORMAL				!Always return success
+
+END;
+
+
+GLOBAL ROUTINE base64_get_content_type (context_a, outstr_a, open_rab_a) =
+BEGIN
+!++
+! FUNCTIONAL DESCRIPTION:
+!
+!	This routine generates a Content-Type string based on the name
+!	of the file opened by VMS Mail.
+!
+!	The string generated will look like one of these:
+!
+!		application/octet-stream; name="noname.xxx"
+!		video/jpeg; name="xxx.jpg"
+!
+! RETURNS:  	cond_value, longword (unsigned), write only, by value
+!
+! PROTOTYPE:
+!
+!   BASE64_GET_CONTENT_TYPE (context, outstr, rab)
+!
+! context:  unsigned_longword, longword (unsigned), ignored, by reference
+! outstr:   descriptor, write only, by reference
+! rab:	    address of open rab, read only, by reference
+!
+! IMPLICIT INPUTS:  None.
+!
+! IMPLICIT OUTPUTS: None.
+!
+! COMPLETION CODES:
+!
+!   SS$_NORMAL:	    	normal successful completion.
+!
+! SIDE EFFECTS:
+!
+!   None.
+!--
+    BIND
+	context	= .context_a	: MXPDEF,	!The context block
+	outstr	= .outstr_a	: $BBLOCK,	!Desc. to receive FDL string
+	open_rab= .open_rab_a	: $BBLOCK;	!The open RAB from VMS Mail
+
+    BIND
+	debug		= context [MXP_L_DEBUG],
+	trace_unit	= context [MXP_L_TUNIT];
+
+    LOCAL
+	open_fab	: REF $FAB_DECL,
+	open_nam	: REF $NAM_DECL,
+	status;
+
+    MACRO
+	abyte	= 0,0, 8,0 %,
+	aword	= 0,0,16,0 %,
+	along	= 0,0,32,0 %;
+
+
+    XTRACE ('%MXDBG, Getting Content-Type name for /FOREIGN file....');
+
+    !
+    !  We should have NAM blocks filled in already.  Make sure we do.
+    !
+    status = (open_rab NEQA 0) AND
+	     ((open_fab = .open_rab [RAB$L_FAB]) NEQA 0) AND
+	     ((open_nam = .open_fab [FAB$L_NAM]) NEQA 0) AND
+	     (.open_nam [NAM$B_NAME]+.open_nam [NAM$B_TYPE] GTRU 0);
+
+    IF (.status)
+    THEN
+	BEGIN
+	LOCAL	ptr		: REF $BBLOCK,
+		dptr		: REF $BBLOCK,
+		type_ptr	: REF $BBLOCK,
+		fname		: $BBLOCK [NAM$C_MAXRSS],
+		ftype		: $BBLOCK [NAM$C_MAXRSS],
+		fname_len,
+		ftype_len;
+		
+	fname_len = .open_nam [NAM$B_NAME];
+	ptr = .open_nam [NAM$L_NAME];
+	dptr = fname;
+
+	INCR i FROM 0 TO .fname_len-1 DO
+	    BEGIN
+	    LOCAL char;
+	    char = CH$RCHAR_A (ptr);
+	    IF (.char GEQU %C'A') AND (.char LEQU %C'Z')
+	    THEN
+		char = .char + %X'20';		!Make it lowercase
+	    CH$WCHAR_A (.char, dptr);
+	    END;
+
+	ftype_len = .open_nam [NAM$B_TYPE];
+	ptr = .open_nam [NAM$L_TYPE];
+	dptr = ftype;
+
+	INCR i FROM 0 TO .ftype_len-1 DO
+	    BEGIN
+	    LOCAL char;
+	    char = CH$RCHAR_A (ptr);
+	    IF (.char GEQU %C'A') AND (.char LEQU %C'Z')
+	    THEN
+		char = .char + %X'20';		!Make it lowercase
+	    CH$WCHAR_A (.char, dptr);
+	    END;
+	
+	!
+	!  Determine the file type.  We currently recognize:
+	!
+	!	.JPEG, .JPG, .GIF, .MPEG, and other
+	!
+	!  For efficiency, compare them as longwords and bytes.
+	!
+	IF (.ftype_len EQLU 4) AND (.ftype[0,0,32,0] EQLU '.jpg') THEN
+	    type_ptr = image_jpeg
+	ELSE IF (.ftype_len EQLU 4) AND (.ftype[0,0,32,0] EQLU '.gif') THEN
+	    type_ptr = image_gif
+	ELSE IF (.ftype_len EQLU 5) AND (.ftype[0,0,32,0] EQLU '.mpe') AND
+		(.ftype [4,0,8,0] EQLU %C'g') THEN
+	    type_ptr = video_mpeg
+	ELSE IF (.ftype_len EQLU 5) AND (.ftype[0,0,32,0] EQLU '.jpe') AND
+		(.ftype [4,0,8,0] EQLU %C'g') THEN
+	    type_ptr = image_jpeg
+	ELSE IF (.ftype_len EQLU 4) AND (.ftype[0,0,32,0] EQLU '.wav') THEN
+	    type_ptr = audio_wav
+	ELSE
+	    type_ptr = other;
+
+	LIB$SYS_FAO (%ASCID'!AS; name="!AD!AD"', 0, outstr,
+			.type_ptr, .fname_len, fname, .ftype_len, ftype);
+
+	END
+    ELSE
+	STR$COPY_DX (outstr, %ASCID'application/octet-stream; name="noname.xxx"');
+
+    XTRACE ('%MXDBG, Content-Type: !AS', outstr);
+
+    RETURN (SS$_NORMAL);
+
+END;
+
+END
+ELUDOM

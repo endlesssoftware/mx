@@ -1,0 +1,959 @@
+%TITLE 'MX_MAILSHRP'
+MODULE MX_MAILSHRP (IDENT='V2.9') =
+BEGIN
+!++
+! FACILITY: 	    Message Exchange
+!
+! ABSTRACT: 	    Privileged shareable image routines for MX_MAILSHR.
+!
+! MODULE DESCRIPTION:
+!
+!   The routines in this module make up the privileged shareable image
+!   for MX's VMS Mail interface.  They could also be used as a callable
+!   interface by other applications.
+!
+! AUTHOR:   	    M. Madison
+!
+! Copyright (c) 2008, Matthew Madison.
+! 
+! All rights reserved.
+! 
+! Redistribution and use in source and binary forms, with or without
+! modification, are permitted provided that the following conditions
+! are met:
+! 
+!     * Redistributions of source code must retain the above
+!       copyright notice, this list of conditions and the following
+!       disclaimer.
+!     * Redistributions in binary form must reproduce the above
+!       copyright notice, this list of conditions and the following
+!       disclaimer in the documentation and/or other materials provided
+!       with the distribution.
+!     * Neither the name of the copyright owner nor the names of any
+!       other contributors may be used to endorse or promote products
+!       derived from this software without specific prior written
+!       permission.
+! 
+! THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
+! "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
+! LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
+! A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
+! OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
+! SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
+! LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
+! DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
+! THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
+! (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
+! OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+!
+! CREATION DATE:    26-JUN-1991
+!
+! MODIFICATION HISTORY:
+!
+!   26-JUN-1991	V1.0	Madison	    Initial coding.
+!   14-NOV-1991	V1.0-1	Madison	    Wasn't putting origin address in QENT.
+!   19-NOV-1991	V1.0-2	Madison	    Wasn't setting RSZ on final SRAB PUT.
+!   20-NOV-1991	V1.0-3	Madison	    Put RAT=CR on message text file.
+!   23-JAN-1992	V1.0-4	Madison	    Clean up context in SEND, CANCEL.
+!   17-DEC-1992 V1.1	Goatley     Modified to handle FLQ_DIR subdirectories.
+!   26-JAN-1993 V1.1-1	Goatley     Added messages if err opening FLQ file.
+!   11-FEB-1993 V1.1-2	Goatley     Renamed MX_MSG_* routines to MXP_MSG_*.
+!   10-MAR-1993 V1.2	Goatley     Changed PROBEW to $PROBE for AXP.
+!   23-MAR-1993 V1.2-1	Goatley     Updated INFO__RECIPREC value.
+!   15-NOV-1993	V2.0	Goatley     Modified to work with relative system file.
+!   15-DEC-1993 V2.0-1	Goatley     Added check for MX_SHUTDOWN logical.
+!   10-FEB-1994 V2.1	Goatley     Modify to work with FLQ V2.
+!    6-MAY-1994 V2.2	Altmayer    Re-structure lock value block (use IPC.R32)
+!   11-MAY-1994 V2.3	Altmayer    Add GRPW lock
+!   12-MAR-1997	V2.3-1	Madison	    Updated INFO__RECIPREC value.
+!   01-MAY-1997	V2.4	Madison	    Handle addresses w/o <>'s.
+!   05-MAY-1997	V2.4-1	Madison	    Pass along ENV_FROM string.
+!   29-AUG-1997	V2.5	Madison	    RCPT change.
+!   22-APR-1998	V2.6	Madison	    Allow +folder as from address; remove
+!   	    	    	    	    system version dependencies; remove NOTIFY_ROUTER.
+!   16-JUL-1998	V2.7	Madison	    Message size limit.
+!   04-NOV-1998	V2.7-1	Madison	    Fix message size check code.
+!   23-APR-2001 V2.8    Madison     Add flag for encoding bypass.
+!   22-DEC-2001 V2.8-1  Madison     Enable EXQUOTA on writes.
+!   10-NOV-2004 V2.9    Madison     IA64 port.
+!--
+
+    LIBRARY 'SYS$LIBRARY:LIB';
+    LIBRARY 'MX_SRC_COMMON:MX';
+    LIBRARY 'MX_SRC_COMMON:FLQ';
+    LIBRARY 'MX_MAILSHRP_DEFS';
+    LIBRARY 'MX_SRC_COMMON:FIELDS';
+    LIBRARY 'MX_SRC_COMMON:DEBUG';
+    LIBRARY 'MX_SRC_COMMON:IPC';
+
+    COMPILETIME
+    	__DBG = (%VARIANT AND 2) EQL 2;
+
+    FORWARD ROUTINE
+    	MXP_MSG_INIT,
+    	MXP_MSG_SET_FROM,
+    	MXP_MSG_ADD_ADDRESS,
+    	MXP_MSG_ADD_HEADER,
+    	MXP_MSG_ADD_TEXT,
+    	MXP_MSG_SEND,
+    	MXP_MSG_CANCEL,
+    	MAKE_FROM_ADDRESS   : NOVALUE;
+
+    LITERAL
+    	PCTX_COUNT  = 32;  ! note FFC won't work if this is > 32!
+
+    OWN
+    	PCTX_ARRAY  : VECTOR [PCTX_COUNT,LONG] INITIAL (REP PCTX_COUNT OF (0)),
+    	PCTX_INUSE  : BITVECTOR [PCTX_COUNT] INITIAL (0);
+
+    MACRO
+    	INFO_L_DATACODE	= 0,0,32,0%,
+    	INFO_L_LW   	= 4,0,32,0%,
+    	INFO_W_COUNT	= 4,0,16,0%,
+    	INFO_W_STRLEN	= 6,0,16,0%,
+    	INFO_T_STR  	= 8,0, 0,0%;
+
+    LITERAL
+    	INFO__ORIGIN	    = 327,
+    	INFO__ORGSENDER	    = 413,
+    	INFO__FROMADR	    = 769,
+    	INFO__RECIPADR	    = 501,
+    	INFO__RECIPREC	    = 984,
+    	INFO__DSN_HDRSONLY  = 156,
+    	INFO__CONTAINS8BIT  = 685,
+    	INFO__ENVFROMHOST   = 234,
+    	FLQ_K_MAXENTRY	    = 32767;
+
+    EXTERNAL ROUTINE
+    	G_HAT (LIB$ADD_TIMES, LIB$PUT_OUTPUT);
+
+    EXTERNAL LITERAL
+	MX__FLQERR,
+	MX__FLQLCK,
+	MX__NOMAILNOW,
+    	MX__MSGTOOLARGE;
+
+    BIND
+	LNM$SYSTEM	= %ASCID'LNM$SYSTEM',
+    	LNM$FILE_DEV	= %ASCID'LNM$FILE_DEV';
+
+!
+! The following are needed by the $APROBE macro.  Since we are not
+! linking against the system image, we have to fake these ourselves.
+!
+%IF NOT %BLISS (BLISS32V) %THEN
+    GLOBAL
+    	MMG$GL_PAGE_SIZE,
+    	MMG$GL_BWP_MASK;
+%FI
+
+
+%SBTTL 'MXP_MSG_INIT'
+GLOBAL ROUTINE MXP_MSG_INIT (CTXNUM_A, ENTNUM_A) = 
+BEGIN
+!++
+! FUNCTIONAL DESCRIPTION:
+!
+!   Begins a message entry sequence.  Allocates and inits a context block,
+!   if a slot is available, and sets up a few things in the block.
+!
+! RETURNS:  	cond_value, longword (unsigned), write only, by value
+!
+! PROTOTYPE:
+!
+!   MXP_MSG_INIT
+!
+! IMPLICIT INPUTS:  None.
+!
+! IMPLICIT OUTPUTS: None.
+!
+! COMPLETION CODES:
+!
+!   SS$_NORMAL:	    	normal successful completion.
+!
+! SIDE EFFECTS:
+!
+!   None.
+!--
+    BIND
+    	CTXNUM	= .CTXNUM_A,
+    	ENTNUM	= .ENTNUM_A;
+
+    LOCAL
+    	LNMLST		: $ITMLST_DECL (ITEMS=1),
+    	PCTX		: REF PCTXDEF,
+    	HDRENT		: QENTDEF,
+    	SRAB		: $RAB_DECL,
+    	lock_rab	: $RAB_DECL,
+	start_point,
+        clear_sysprv,
+    	STATUS;
+
+%IF NOT %BLISS (BLISS32V) %THEN
+    BEGIN
+    	LOCAL
+    	    syilst	    	: $ITMLST_DECL (ITEMS=1);
+    	$ITMLST_INIT (ITMLST=syilst,
+    	    	    	(ITMCOD=SYI$_PAGE_SIZE, BUFSIZ=%ALLOCATION (MMG$GL_PAGE_SIZE), BUFADR=MMG$GL_PAGE_SIZE));
+    	IF NOT $GETSYIW (ITMLST=syilst) THEN MMG$GL_PAGE_SIZE = 8192;
+    	MMG$GL_BWP_MASK = .MMG$GL_PAGE_SIZE-1;
+    END;
+%FI
+
+    IF ENTNUM NEQA 0 THEN
+    	IF NOT $APROBE (ENTNUM, 4, WQ, PSL$C_USER) THEN
+    	    RETURN SS$_ACCVIO;
+
+    IF ($TRNLNM (TABNAM=LNM$SYSTEM, LOGNAM=%ASCID'MX_SHUTDOWN',
+		 ACMODE = %REF(PSL$C_EXEC)))
+    THEN
+	RETURN (MX__NOMAILNOW);
+
+    PCTX = INIT_PCTX (CTXNUM);
+    BEGIN
+    	BIND
+    	    PRV = PCTX [PCTX_Q_PRIVS]	: BLOCK [,BYTE],
+    	    PVC = PCTX [PCTX_Q_PRIVS]	: VECTOR [2,LONG];
+    	LOCAL
+    	    PP	: VECTOR [2,LONG];
+
+    	PRV [PRV$V_SYSPRV] = 1;
+    	PRV [PRV$V_EXQUOTA] = 1;
+
+    	DBGPRT ('MXP_MSG_INIT: Want priv mask !XL/!XL', .PRV [0,0,32,0],
+    	    	    .PRV [4,0,32,0]);
+    	STATUS = $SETPRV (PRVADR=PCTX [PCTX_Q_PRIVS], PRVPRV=PP, ENBFLG=1);
+    	IF NOT .STATUS THEN
+    	BEGIN
+    	    FREE_PCTX (CTXNUM);
+    	    RETURN .STATUS;
+    	END;
+    	DBGPRT ('MXP_MSG_INIT: Previous priv mask was !XL/!XL', .PP [0],.PP [1]);
+    	PVC [0] = .PVC [0] AND NOT .PP [0];
+    	PVC [1] = .PVC [1] AND NOT .PP [1];
+    	DBGPRT ('MXP_MSG_INIT: Priv-clear mask is !XL/!XL', .PVC [0], .PVC [1]);
+        BEGIN
+            BIND ppb = pp : BLOCK [,BYTE];
+            clear_sysprv = NOT .ppb [PRV$V_SYSPRV];
+        END;
+    END;
+
+    DBGPRT ('MXP_MSG_INIT: initalized context !UL, set privileges.', .CTXNUM);
+
+    status = FLQ_OPEN (FLQ__FULL, pctx [PCTX_X_QCTX]);
+    IF NOT .STATUS				!If an error occurred opening
+    THEN					!... the FLQ system file, then
+	BEGIN					!... print an informational
+	LOCAL _msg : VECTOR[2,LONG];		!... message so the user has
+	_msg[0] = 1;				!... some clue about it.
+	_msg[1] = (IF (.status EQLU RMS$_FLK)	!If the file is locked, then
+		   THEN				!... print a message telling
+			MX__FLQLCK		!... user to try again
+		   ELSE				!Otherwise, just say error
+			MX__FLQERR);		!... accessing queue file
+    	$SETPRV (PRVADR=PCTX [PCTX_Q_PRIVS], ENBFLG=0);
+	$PUTMSG (MSGVEC = _msg);		!Display the message
+    	FREE_PCTX (CTXNUM);
+    	RETURN .STATUS;
+	END;
+
+    DBGPRT ('MXP_MSG_INIT: opened system_queue file.');
+
+    BEGIN
+    	BIND
+    	    qent	= PCTX [PCTX_X_QENT]	: QENTDEF;
+    	FLQ_INIT_QENT (QENT);
+    	QENT [QENT_L_STATUS] = FLQ_K_STINP;
+    	QENT [QENT_V_LOCK] = 1;
+	qent [QENT_L_DSTPRC] = FLQ_K_MX_ROUTER;
+
+	status = FLQ_ADD (pctx [PCTX_X_QCTX], qent);
+    	IF ENTNUM NEQA 0 THEN ENTNUM = .QENT [QENT_L_ENTNUM];
+
+    END;
+
+    IF NOT .STATUS THEN			!Error adding to FLQ file
+    BEGIN
+    	FLQ_CLOSE (pctx [PCTX_X_QCTX]);
+    	$SETPRV (PRVADR=PCTX [PCTX_Q_PRIVS], ENBFLG=0);
+    	FREE_PCTX (CTXNUM);
+    	RETURN .STATUS;
+    END;
+
+    DBGPRT ('MXP_MSG_INIT: added entry to FLQ file.');
+
+    IF .STATUS THEN
+    BEGIN
+    	BIND
+    	    QENT    = PCTX [PCTX_X_QENT]    : QENTDEF,
+    	    SFAB    = PCTX [PCTX_X_SFAB]    : $FAB_DECL,
+    	    SRAB    = PCTX [PCTX_X_SRAB]    : $RAB_DECL,
+    	    TFAB    = PCTX [PCTX_X_TFAB]    : $FAB_DECL,
+    	    TRAB    = PCTX [PCTX_X_TRAB]    : $RAB_DECL,
+    	    HFAB    = PCTX [PCTX_X_HFAB]    : $FAB_DECL,
+    	    HRAB    = PCTX [PCTX_X_HRAB]    : $RAB_DECL;
+    	LOCAL
+    	    STRBUF  : VECTOR [255,BYTE] VOLATILE,
+    	    LEN	    : WORD,
+    	    STR	    : BLOCK [DSC$K_S_BLN,BYTE],
+    	    FLQBUF  : VECTOR [255,BYTE] VOLATILE,
+	    !STRBUF is used temporarily as the ESA buffer....
+	    FLQNAM  : $NAM (ESA=STRBUF, ESS=%ALLOCATION(STRBUF)),
+	    FLQFAB  : $FAB (FNM = 'MX_FLQ_DIR:.;', NAM = FLQNAM,
+				LNM_MODE=PSL$C_EXEC),
+    	    FLQLEN,
+    	    FLQSTR    : BLOCK [DSC$K_S_BLN,BYTE];
+
+    	DBGPRT ('MXP_MSG_INIT: added new entry to queue.');
+
+    	INIT_SDESC (STR, %ALLOCATION (STRBUF), STRBUF);
+    	INIT_SDESC (FLQSTR, %ALLOCATION (FLQBUF), FLQBUF);
+
+	!
+	!  Create the FLQ file names.  The FLQ_DIR subdirectory format
+	!  is used, where the subdirectory is one of [.0]--[.9], depending
+	!  on the last digit in the entry number.  For example:
+	!
+	!	DUA0:[MX.QUEUE.9]269.ext
+	!
+	STATUS = $PARSE (FAB=FLQFAB);		!Parse FLQ_DIR to get full spec
+	IF (.status)				!If successful....
+	THEN
+	    BEGIN
+	    FLQLEN = .FLQNAM[NAM$B_DEV] +	!Calculate length of device
+		     .FLQNAM[NAM$B_DIR] - 1;	!... and directory names
+	    $FAO(%ASCID'!AD.!UB!AD!UL',		!Format the string
+			FLQSTR, FLQSTR,		!....
+			.FLQLEN, .FLQNAM[NAM$L_ESA],	!Start with device name
+			.QENT [QENT_L_ENTNUM] MOD 10,	!Subdirectory value
+			1, .FLQNAM[NAM$L_NAME] - 1,	!The "]" or ">"
+			.QENT [QENT_L_ENTNUM]);		!Filename is entry #
+	    !
+            !  Here, FLQSTR points to a string like:
+	    !
+	    !		DUA0:[MX.QUEUE.9]269
+	    !
+	    !  This string will be used to create the separate filenames
+	    !  (.MSG_TEXT, .SRC_INFO, and .HDR_INFO).
+	    !
+	    $FAO (%ASCID'!AS.SRC_INFO', LEN, STR, FLQSTR);
+    	    $FAB_INIT (FAB=SFAB, FAC=PUT, RFM=VAR, MRS=0, FNA=.STR [DSC$A_POINTER],
+    	    			FNS=.LEN);
+    	    $RAB_INIT (RAB=SRAB, FAB=SFAB);
+
+    	    STATUS = $CREATE (FAB=SFAB);
+	    END;
+
+    	IF .STATUS THEN
+    	BEGIN
+    	    STATUS = $CONNECT (RAB=SRAB);
+    	    IF NOT .STATUS THEN $CLOSE (FAB=SFAB);
+    	END;
+
+    	IF .STATUS THEN
+    	BEGIN
+    	    DBGPRT ('MXP_MSG_INIT: created SRC_INFO file.');
+    	    $FAO (%ASCID'!AS.HDR_INFO', LEN, STR, FLQSTR);
+!    	    $FAO (%ASCID'FLQ_DIR:!UL.HDR_INFO', LEN, STR, .QENT [QENT_L_ENTNUM]);
+    	    $FAB_INIT (FAB=HFAB, FAC=PUT, RFM=VAR, MRS=0, FNA=.STR [DSC$A_POINTER],
+    	    	FNS=.LEN);
+    	    $RAB_INIT (RAB=HRAB, FAB=HFAB);
+
+    	    STATUS = $CREATE (FAB=HFAB);
+    	    IF .STATUS THEN
+    	    BEGIN
+    	    	DBGPRT ('MXP_MSG_INIT: created HDR_INFO file.');
+    	    	STATUS = $CONNECT (RAB=HRAB);
+    	    	IF NOT .STATUS THEN $CLOSE (FAB=HFAB);
+    	    END;
+
+    	    IF NOT .STATUS THEN
+    	    BEGIN
+    	    	$DISCONNECT (RAB=SRAB);
+    	    	$CLOSE (FAB=SFAB)
+    	    END;
+    	END;
+
+    	IF .STATUS THEN
+    	BEGIN
+	    $FAO (%ASCID'!AS.MSG_TEXT', LEN, STR, FLQSTR);
+    	    $FAB_INIT (FAB=TFAB, FAC=PUT, RFM=VAR, MRS=0, RAT=CR,
+    	    	FNA=.STR [DSC$A_POINTER], FNS=.LEN);
+    	    $RAB_INIT (RAB=TRAB, FAB=TFAB);
+
+    	    STATUS = $CREATE (FAB=TFAB);
+    	    IF .STATUS THEN
+    	    BEGIN
+    	    	DBGPRT ('MXP_MSG_INIT: created MSG_TEXT file.');
+    	    	STATUS = $CONNECT (RAB=TRAB);
+    	    	IF NOT .STATUS THEN $CLOSE (FAB=TFAB);
+    	    END;
+
+    	    IF NOT .STATUS THEN
+    	    BEGIN
+    	    	$DISCONNECT (RAB=SRAB);
+    	    	$CLOSE (FAB=SFAB);
+    	    	$DISCONNECT (RAB=HRAB);
+    	    	$CLOSE (FAB=HFAB);
+    	    END;
+    	END;
+    END;
+
+    $SETPRV (PRVADR=PCTX [PCTX_Q_PRIVS], ENBFLG=0);
+    IF NOT .STATUS THEN
+    BEGIN
+    	DBGPRT ('MXP_MSG_INIT: error status !XL.', .STATUS);
+    	FLQ_CLOSE (pctx [PCTX_X_QCTX]);
+    	FREE_PCTX (CTXNUM);
+    	RETURN .STATUS;
+    END;
+
+    IF .clear_sysprv THEN
+    BEGIN
+        BIND pvc = pctx [pctx_q_privs] : BLOCK [,BYTE];
+        pvc [PRV$V_SYSPRV] = 0;
+    END;
+
+    DBGPRT ('MXP_MSG_INIT: all done; returning normal status.');
+
+    SS$_NORMAL
+
+END; ! MXP_MSG_INIT
+
+%SBTTL 'MXP_MSG_SET_FROM'
+GLOBAL ROUTINE MXP_MSG_SET_FROM (CTXNUM_A, ENVFROM_A) = 
+BEGIN
+!++
+! FUNCTIONAL DESCRIPTION:
+!
+!   Defines the envelope FROM address for the message.  User must currently
+!   have SYSPRV set to use this call.
+!
+! RETURNS:  	cond_value, longword (unsigned), write only, by value
+!
+! PROTOTYPE:
+!
+!   MXP_MSG_SET_FROM
+!
+! IMPLICIT INPUTS:  None.
+!
+! IMPLICIT OUTPUTS: None.
+!
+! COMPLETION CODES:
+!
+!   SS$_NORMAL:	    	normal successful completion.
+!
+! SIDE EFFECTS:
+!
+!   None.
+!--
+    BIND
+    	CTXNUM	= .CTXNUM_A,
+    	ENVFROM	= .ENVFROM_A	: BLOCK [,BYTE];
+
+    LOCAL
+    	curpriv	: BLOCK [PRV$S_PRVDEF,BYTE],
+    	jpilst	: $ITMLST_DECL (ITEMS=1),
+    	PCTX	: REF PCTXDEF,
+    	status;
+
+    PCTX = VRFY_PCTX (CTXNUM);
+    IF .envfrom_a EQLA 0 THEN RETURN SS$_BADPARAM;
+
+    $ITMLST_INIT (ITMLST=jpilst,
+    	    	    (ITMCOD=JPI$_CURPRIV, BUFSIZ=PRV$S_PRVDEF, BUFADR=curpriv));
+    status = $GETJPIW (ITMLST=jpilst);
+    IF NOT .status THEN RETURN .status;
+
+    PROBE_DESCR (ENVFROM);
+    IF .envfrom [DSC$W_LENGTH] NEQ 0 THEN
+    BEGIN
+    	DBGPRT ('MXP_MSG_SET_FROM: privilege mask is !XL/!XL, SYSPRV=!UL',
+    	    	.CURPRIV [0,0,32,0], .CURPRIV [4,0,(PRV$S_PRVDEF-4)*8,0], .CURPRIV [PRV$V_SYSPRV]);
+    	IF NOT .CURPRIV [PRV$V_SYSPRV] THEN RETURN SS$_NOPRIV;
+
+    	PCTX [PCTX_W_ENVFROM] = MIN (PCTX_S_ENVFROM, .ENVFROM [DSC$W_LENGTH]);
+    	CH$MOVE (.PCTX [PCTX_W_ENVFROM], .ENVFROM [DSC$A_POINTER],
+    	    	    PCTX [PCTX_T_ENVFROM]);
+    	DBGPRT ('MXP_MSG_SET_FROM: Set envelope FROM address to: !AD',
+    	    	    .PCTX [PCTX_W_ENVFROM], PCTX [PCTX_T_ENVFROM]);
+    END;
+
+    SS$_NORMAL
+
+END; ! MXP_MSG_SET_FROM
+
+%SBTTL 'MXP_MSG_ADD_ADDRESS'
+GLOBAL ROUTINE MXP_MSG_ADD_ADDRESS (CTXNUM_A, ADDR_A, NOTIFY_FLAGS_a) = 
+BEGIN
+!++
+! FUNCTIONAL DESCRIPTION:
+!
+!   Adds an addressee to the envelope.
+!
+! RETURNS:  	cond_value, longword (unsigned), write only, by value
+!
+! PROTOTYPE:
+!
+!   MXP_MSG_ADD_ADDRESS
+!
+! IMPLICIT INPUTS:  None.
+!
+! IMPLICIT OUTPUTS: None.
+!
+! COMPLETION CODES:
+!
+!   SS$_NORMAL:	    	normal successful completion.
+!
+! SIDE EFFECTS:
+!
+!   None.
+!--
+    BIND
+    	CTXNUM	= .CTXNUM_A,
+    	ADDR	= .ADDR_A   	: BLOCK [DSC$K_S_BLN,BYTE],
+    	NOTIFY_FLAGS = .NOTIFY_FLAGS_A;
+
+    LOCAL
+    	PCTX	    : REF PCTXDEF,
+    	BUF	    : BLOCK [2048,BYTE],
+    	STATUS;
+
+    PCTX = VRFY_PCTX (CTXNUM);
+    PROBE_DESCR (ADDR);
+
+    PCTX [PCTX_L_ACOUNT] = .PCTX [PCTX_L_ACOUNT] + 1;
+
+    BEGIN
+    	BIND
+    	    SRAB    	= PCTX [PCTX_X_SRAB]    : $RAB_DECL,
+    	    RCPT	= BUF [INFO_T_STR]  	: RCPTDEF;
+    	LITERAL
+    	    remain  	= %ALLOCATION (BUF) - RCPT_S_RCPTDEF - 8;
+    	LOCAL
+    	    aptr;
+
+    	aptr = CH$PLUS (rcpt, RCPT_S_RCPTDEF);
+    	CH$FILL (%CHAR (0), RCPT_S_RCPTDEF, RCPT);
+    	IF CH$RCHAR (.ADDR [DSC$A_POINTER]) NEQ %C'<' THEN
+    	BEGIN
+    	    rcpt [rcpt_a_addr] = MIN (remain-TXT_S_TXTDEF, .ADDR [DSC$W_LENGTH]+2);
+    	    CH$WCHAR (%C'<', .aptr);
+    	    CH$MOVE (.rcpt [rcpt_a_addr]-2, .ADDR [DSC$A_POINTER], CH$PLUS (.aptr, 1));
+    	    CH$WCHAR (%C'>', CH$PLUS (.aptr, .rcpt [rcpt_a_addr]-1));
+    	END
+    	ELSE
+    	BEGIN
+    	    rcpt [rcpt_a_addr] = MIN (remain-TXT_S_TXTDEF, .ADDR [DSC$W_LENGTH]);
+    	    CH$MOVE (.rcpt [rcpt_a_addr], .ADDR [DSC$A_POINTER], .aptr);
+    	END;
+    	rcpt [RCPT_L_FLAGS] = .NOTIFY_FLAGS AND %X'1E';  ! only the DSN flags
+    	BUF [INFO_L_DATACODE] = INFO__RECIPREC;
+    	BUF [INFO_W_COUNT] = 0;
+    	SRAB [RAB$W_RSZ] = 8 + (BUF [INFO_W_STRLEN] = RCPT_S_RCPTDEF+.rcpt [rcpt_a_addr]);
+    	SRAB [RAB$L_RBF] = BUF;
+    	$SETPRV (PRVADR=PCTX [PCTX_Q_PRIVS], ENBFLG=1);
+    	STATUS = $PUT (RAB=SRAB);
+    	$SETPRV (PRVADR=PCTX [PCTX_Q_PRIVS], ENBFLG=0);
+    END;
+
+    IF .STATUS EQL RMS$_NORMAL THEN SS$_NORMAL ELSE .STATUS
+
+END; ! MXP_MSG_ADD_ADDRESS
+
+%SBTTL 'MXP_MSG_ADD_HEADER'
+GLOBAL ROUTINE MXP_MSG_ADD_HEADER (CTXNUM_A, CODE_A, HDR_A) = 
+BEGIN
+!++
+! FUNCTIONAL DESCRIPTION:
+!
+!   Adds a line to the message header file.
+!
+! RETURNS:  	cond_value, longword (unsigned), write only, by value
+!
+! PROTOTYPE:
+!
+!   MXP_MSG_ADD_HEADER
+!
+! IMPLICIT INPUTS:  None.
+!
+! IMPLICIT OUTPUTS: None.
+!
+! COMPLETION CODES:
+!
+!   SS$_NORMAL:	    	normal successful completion.
+!
+! SIDE EFFECTS:
+!
+!   None.
+!--
+    BIND
+    	CTXNUM	= .CTXNUM_A,
+    	CODE	= .CODE_A,
+    	HDR	= .HDR_A   	: BLOCK [DSC$K_S_BLN,BYTE];
+
+    LOCAL
+    	PCTX	: REF PCTXDEF,
+    	STATUS;
+
+    DBGPRT ('MXP_MSG_ADD_HEADER: verifying context !XL (!UL).', CTXNUM, .CTXNUM);
+    PCTX = VRFY_PCTX (CTXNUM);
+    IF NOT $APROBE (CODE, 4, RQ, PSL$C_USER) THEN RETURN SS$_ACCVIO;
+    DBGPRT ('MXP_MSG_ADD_HEADER: probing descriptor !XL.', HDR);
+    PROBE_DESCR (HDR);
+    DBGPRT ('MXP_MSG_ADD_HEADER: adding header, code=!UL, text=!AS', .CODE, HDR);
+
+    PCTX [PCTX_W_HDRCODE] = .CODE;
+    PCTX [PCTX_W_HDRSIZE] = MIN (PCTX_S_HDRBUF, .HDR [DSC$W_LENGTH]);
+    CH$MOVE (.PCTX [PCTX_W_HDRSIZE], .HDR [DSC$A_POINTER], PCTX [PCTX_T_HDRBUF]);
+
+    BEGIN
+    	BIND HRAB   = PCTX [PCTX_X_HRAB]    : $RAB_DECL;
+    	HRAB [RAB$W_RSZ] = .PCTX [PCTX_W_HDRSIZE] + 4;
+    	HRAB [RAB$L_RBF] = PCTX [PCTX_W_HDRCODE];
+    	$SETPRV (PRVADR=PCTX [PCTX_Q_PRIVS], ENBFLG=1);
+    	STATUS = $PUT (RAB=HRAB);
+    	$SETPRV (PRVADR=PCTX [PCTX_Q_PRIVS], ENBFLG=0);
+    	DBGPRT ('MXP_MSG_ADD_HEADER: RMS status was !XL', .STATUS);
+    END;
+
+    IF .STATUS EQL RMS$_NORMAL THEN SS$_NORMAL ELSE .STATUS
+
+END; ! MXP_MSG_ADD_HEADER
+
+%SBTTL 'MXP_MSG_ADD_TEXT'
+GLOBAL ROUTINE MXP_MSG_ADD_TEXT (CTXNUM_A, TEXT_A) = 
+BEGIN
+!++
+! FUNCTIONAL DESCRIPTION:
+!
+!   Adds a line to the message text file.
+!
+! RETURNS:  	cond_value, longword (unsigned), write only, by value
+!
+! PROTOTYPE:
+!
+!   MXP_MSG_ADD_TEXT
+!
+! IMPLICIT INPUTS:  None.
+!
+! IMPLICIT OUTPUTS: None.
+!
+! COMPLETION CODES:
+!
+!   SS$_NORMAL:	    	normal successful completion.
+!
+! SIDE EFFECTS:
+!
+!   None.
+!--
+    BIND
+    	CTXNUM	= .CTXNUM_A,
+    	TEXT	= .TEXT_A   	: BLOCK [DSC$K_S_BLN,BYTE];
+
+    LOCAL
+    	PCTX	: REF PCTXDEF,
+    	STATUS;
+
+    PCTX = VRFY_PCTX (CTXNUM);
+    PROBE_DESCR (TEXT);
+
+    PCTX [PCTX_L_SIZE] = .PCTX [PCTX_L_SIZE] + .TEXT [DSC$W_LENGTH];
+
+    BEGIN
+    	BIND TRAB   = PCTX [PCTX_X_TRAB]    : $RAB_DECL;
+    	TRAB [RAB$W_RSZ] = .TEXT [DSC$W_LENGTH];
+    	TRAB [RAB$L_RBF] = .TEXT [DSC$A_POINTER];
+    	$SETPRV (PRVADR=PCTX [PCTX_Q_PRIVS], ENBFLG=1);
+    	STATUS = $PUT (RAB=TRAB);
+    	$SETPRV (PRVADR=PCTX [PCTX_Q_PRIVS], ENBFLG=0);
+    END;
+
+    IF .STATUS EQL RMS$_NORMAL THEN SS$_NORMAL ELSE .STATUS
+
+END; ! MXP_MSG_ADD_TEXT
+
+%SBTTL 'MXP_MSG_SEND'
+GLOBAL ROUTINE MXP_MSG_SEND (CTXNUM_A, flags_a) = 
+BEGIN
+!++
+! FUNCTIONAL DESCRIPTION:
+!
+!   Sends a message.
+!
+! RETURNS:  	cond_value, longword (unsigned), write only, by value
+!
+! PROTOTYPE:
+!
+!   MXP_MSG_SEND  pctx
+!
+! IMPLICIT INPUTS:  None.
+!
+! IMPLICIT OUTPUTS: None.
+!
+! COMPLETION CODES:
+!
+!   SS$_NORMAL:	    	normal successful completion.
+!
+! SIDE EFFECTS:
+!
+!   None.
+!--
+    BIND
+    	CTXNUM	= .CTXNUM_A,
+    	flags	= .flags_a;
+
+    LOCAL
+    	PCTX	: REF PCTXDEF,
+    	HDRENT	: QENTDEF,
+    	SRAB	: $RAB_DECL,
+    	MAXSIZE,
+    	STATUS;
+
+    PCTX = VRFY_PCTX (CTXNUM);
+    BEGIN
+    	BIND
+    	    PRV = PCTX [PCTX_Q_PRIVS]	: BLOCK [,BYTE],
+    	    PVC = PCTX [PCTX_Q_PRIVS]	: VECTOR [2,LONG];
+    	LOCAL
+    	    PP	: VECTOR [2,LONG];
+
+    	PRV [PRV$V_SYSPRV] = 1;
+    	PRV [PRV$V_EXQUOTA] = 1;
+    	PRV [PRV$V_SYSLCK] = 1;
+
+    	STATUS = $SETPRV (PRVADR=PCTX [PCTX_Q_PRIVS], PRVPRV=PP, ENBFLG=1);
+    	IF NOT .STATUS THEN
+    	BEGIN
+    	    FREE_PCTX (CTXNUM);
+    	    RETURN .STATUS;
+    	END;
+    	PVC [0] = .PVC [0] AND NOT .PP [0];
+    	PVC [1] = .PVC [1] AND NOT .PP [1];
+    END;
+
+    STATUS = FLQ_GET_MAXSIZE (pctx [PCTX_X_QCTX], MAXSIZE);
+    IF .STATUS AND .MAXSIZE NEQU 0 THEN
+    BEGIN
+    	DBGPRT ('MXP_MSG_SEND: Message size is !UL, max size is !UL', .pctx [PCTX_L_SIZE], .maxsize);
+    	IF (.PCTX [PCTX_L_SIZE] GTRU .MAXSIZE) THEN STATUS = MX__MSGTOOLARGE;
+    END;
+    IF NOT .STATUS THEN
+    BEGIN
+    	BIND TFAB = PCTX [PCTX_X_TFAB] : $FAB_DECL;
+    	TFAB [FAB$V_DLT] = 1;
+    	DBGPRT ('MXP_MSG_SEND: message rejected; too big');
+    END;
+    $DISCONNECT (RAB=PCTX [PCTX_X_TRAB]);
+    $CLOSE (FAB=PCTX [PCTX_X_TFAB]);
+    $DISCONNECT (RAB=PCTX [PCTX_X_HRAB]);
+    $CLOSE (FAB=PCTX [PCTX_X_HFAB]);
+
+    IF .STATUS AND .PCTX [PCTX_W_ENVFROM] EQL 0 THEN
+    BEGIN
+    	LOCAL
+    	    SDSC    : BLOCK [DSC$K_S_BLN,BYTE];
+
+    	INIT_SDESC (SDSC, PCTX_S_ENVFROM, PCTX [PCTX_T_ENVFROM]);
+    	MAKE_FROM_ADDRESS (SDSC, PCTX [PCTX_W_ENVFROM]);
+    END;
+
+
+    IF .STATUS THEN
+    BEGIN
+    	BIND
+    	    SRAB    = PCTX [PCTX_X_SRAB]    : $RAB_DECL;
+    	LOCAL
+    	    jpilst  : $ITMLST_DECL (ITEMS=1),
+    	    BUF	    : BLOCK [2048,BYTE],
+    	    LNMLST  : $ITMLST_DECL (ITEMS=1);
+
+    	DBGPRT ('MXP_MSG_SEND: Envelope FROM address is: !AD, 8bit=!UL',
+    	    	.PCTX [PCTX_W_ENVFROM], PCTX [PCTX_T_ENVFROM], .flags<0,1,0>);
+
+    	BUF [INFO_L_DATACODE] = INFO__ORIGIN;
+    	BUF [INFO_L_LW] = MX_K_ORG_VMSMAIL;
+    	SRAB [RAB$W_RSZ] = 8;
+    	SRAB [RAB$L_RBF] = BUF;
+    	$PUT (RAB=SRAB);
+    	BUF [INFO_L_DATACODE] = INFO__ORGSENDER;
+    	SRAB [RAB$W_RSZ] = 20;
+    	BUF [INFO_W_COUNT] = 0;
+    	$ITMLST_INIT (ITMLST=jpilst,
+    	    	    	(ITMCOD=JPI$_USERNAME, BUFSIZ=32, BUFADR=buf [INFO_T_STR], RETLEN=buf [INFO_W_STRLEN]));
+    	$GETJPIW (ITMLST=jpilst);
+    	$PUT (RAB=SRAB);
+    	BUF [INFO_L_DATACODE] = INFO__FROMADR;
+    	BUF [INFO_W_STRLEN] = .PCTX [PCTX_W_ENVFROM];
+    	CH$MOVE (.PCTX [PCTX_W_ENVFROM], PCTX [PCTX_T_ENVFROM],
+    	    	    BUF [INFO_T_STR]);
+    	SRAB [RAB$W_RSZ] = 8 + .PCTX [PCTX_W_ENVFROM];
+    	$PUT (RAB=SRAB);
+    	IF .flags<0,1,0> THEN
+    	BEGIN
+    	    BUF [INFO_L_DATACODE] = INFO__CONTAINS8BIT;
+    	    BUF [INFO_L_LW]        = (IF .flags<3,1,0> THEN 2 ELSE 0);
+    	    SRAB [RAB$W_RSZ]	  = 8;
+    	    $PUT (RAB=SRAB);
+    	END;
+    	IF .flags<1,2,0> NEQU 0 THEN
+    	BEGIN
+    	    BUF [INFO_L_DATACODE] = INFO__DSN_HDRSONLY;
+    	    BUF [INFO_L_LW]        = (IF .flags<1,1,0> THEN 1 ELSE 2);
+    	    SRAB [RAB$W_RSZ]	  = 8;
+    	    $PUT (RAB=SRAB);
+    	END;
+    	BUF [INFO_L_DATACODE] = INFO__ENVFROMHOST;
+    	BUF [INFO_L_LW] = 0;
+    	$ITMLST_INIT (ITMLST=LNMLST,
+    	    (ITMCOD=LNM$_STRING, BUFSIZ=%ALLOCATION (BUF)-8,
+    	     BUFADR=BUF [INFO_T_STR], RETLEN=BUF [INFO_W_STRLEN]));
+    	IF $TRNLNM (LOGNAM=%ASCID'MX_ENVELOPE_FROM_HOST', TABNAM=LNM$FILE_DEV,
+    	    	    ACMODE=%REF (PSL$C_EXEC), ITMLST=LNMLST) THEN
+    	BEGIN
+    	    SRAB [RAB$W_RSZ] = .BUF [INFO_W_STRLEN] + 8;
+    	    $PUT (RAB=SRAB);
+    	END;
+    	$DISCONNECT (RAB=SRAB);
+    END;
+
+    $CLOSE (FAB=PCTX [PCTX_X_SFAB]);
+
+    BEGIN
+    	BIND
+    	    QENT    = PCTX [PCTX_X_QENT]	: QENTDEF;
+	LOCAL
+    	    updstatus,
+	    x;
+
+	QENT [QENT_W_ORGADR] = MINU (QENT_S_ORGADR, .PCTX [PCTX_W_ENVFROM]);
+	CH$MOVE (.QENT [QENT_W_ORGADR], PCTX [PCTX_T_ENVFROM],
+		QENT [QENT_T_ORGADR]);
+	QENT [QENT_L_STATUS] = (IF .STATUS THEN FLQ_K_STRDY ELSE FLQ_K_STCAN);
+	QENT [QENT_L_SIZE] = .PCTX [PCTX_L_ACOUNT] * .PCTX [PCTX_L_SIZE];
+    	qent [QENT_L_ORIGIN] = MX_K_ORG_VMSMAIL;
+
+	updstatus = FLQ_UPDATE (pctx [PCTX_X_QCTX], pctx [PCTX_X_QENT], x);
+    	IF .status THEN status = .updstatus;
+    END;
+
+    FLQ_CLOSE (pctx [PCTX_X_QCTX]);
+
+    $SETPRV (PRVADR=PCTX [PCTX_Q_PRIVS], ENBFLG=0);
+
+    FREE_PCTX (CTXNUM);
+
+    IF .STATUS EQL RMS$_NORMAL THEN SS$_NORMAL ELSE .STATUS
+
+END; ! MXP_MSG_SEND
+
+%SBTTL 'MXP_MSG_CANCEL'
+GLOBAL ROUTINE MXP_MSG_CANCEL (CTXNUM_A) = 
+BEGIN
+!++
+! FUNCTIONAL DESCRIPTION:
+!
+!   Cancels a message in progress.
+!
+! RETURNS:  	cond_value, longword (unsigned), write only, by value
+!
+! PROTOTYPE:
+!
+!   MXP_MSG_CANCEL  pctx
+!
+! IMPLICIT INPUTS:  None.
+!
+! IMPLICIT OUTPUTS: None.
+!
+! COMPLETION CODES:
+!
+!   SS$_NORMAL:	    	normal successful completion.
+!
+! SIDE EFFECTS:
+!
+!   None.
+!--
+    BIND
+    	CTXNUM	= .CTXNUM_A;
+
+    LOCAL
+    	PCTX	: REF PCTXDEF,
+    	STATUS;
+
+    PCTX = VRFY_PCTX (CTXNUM);
+
+    $DISCONNECT (RAB=PCTX [PCTX_X_TRAB]);
+    $CLOSE (FAB=PCTX [PCTX_X_TFAB]);
+    $DISCONNECT (RAB=PCTX [PCTX_X_HRAB]);
+    $CLOSE (FAB=PCTX [PCTX_X_HFAB]);
+    $DISCONNECT (RAB=PCTX [PCTX_X_SRAB]);
+    $CLOSE (FAB=PCTX [PCTX_X_SFAB]);
+
+    BEGIN
+	BIND
+	    qent = pctx [PCTX_X_QENT] : QENTDEF;
+
+	QENT [QENT_L_STATUS] = FLQ_K_STCAN;
+	FLQ_UPDATE (pctx [PCTX_X_QCTX], qent);
+    END;
+
+    FLQ_CLOSE (pctx [PCTX_X_QCTX]);
+
+    FREE_PCTX (CTXNUM);
+
+    SS$_NORMAL
+
+END; ! MXP_MSG_CANCEL
+
+%SBTTL 'MAKE_FROM_ADDRESS'
+ROUTINE MAKE_FROM_ADDRESS (ADR_A, LEN_A) : NOVALUE = 
+BEGIN
+!++
+! FUNCTIONAL DESCRIPTION:
+!
+!   Uses the user's username to create an envelope FROM address.
+!   (Just copies it in, trimming blanks.)
+!
+! RETURNS:  	cond_value, longword (unsigned), write only, by value
+!
+! PROTOTYPE:
+!
+!   MAKE_FROM_ADDRESS  adr, len
+!
+! IMPLICIT INPUTS:  None.
+!
+! IMPLICIT OUTPUTS: None.
+!
+! COMPLETION CODES:
+!
+!   SS$_NORMAL:	    	normal successful completion.
+!
+! SIDE EFFECTS:
+!
+!   None.
+!--
+    BIND
+    	ADR 	= .ADR_A    	: BLOCK [DSC$K_S_BLN,BYTE],
+    	LEN 	= .LEN_A    	: WORD;
+
+    LOCAL
+    	username    : VECTOR [32,BYTE],
+    	jpilst	    : $ITMLST_DECL (ITEMS=1),
+    	ulen	    : VOLATILE WORD,
+    	status,
+    	CP;
+
+    $ITMLST_INIT (ITMLST=jpilst,
+    	(ITMCOD=JPI$_USERNAME, BUFSIZ=%ALLOCATION (username), BUFADR=username, RETLEN=ulen));
+    status = $GETJPIW (ITMLST=jpilst);
+    IF NOT .status THEN ulen = 0;
+
+    WHILE .ulen GTRU 0 AND CH$RCHAR (CH$PLUS (username, .ulen-1)) EQL %C' ' DO ulen = .ulen - 1;
+
+    len = MINU (.ulen, .adr [DSC$W_LENGTH]);
+    CH$MOVE (.len, username, .adr [DSC$A_POINTER])
+
+END;  ! MAKE_FROM_ADDRESS
+
+END
+ELUDOM

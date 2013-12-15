@@ -1,0 +1,318 @@
+%TITLE 'IDENTIFIERS'
+MODULE IDENTIFIERS (IDENT='V1.0',
+    	ADDRESSING_MODE (EXTERNAL=LONG_RELATIVE, NONEXTERNAL=LONG_RELATIVE)) =
+BEGIN
+!++
+! FACILITY: 	    MX
+!
+! ABSTRACT: 	    Process identifier routines.
+!
+! MODULE DESCRIPTION:
+!
+!   This module contains routines that check for identifiers held by
+!   a particular user.
+!
+! AUTHOR:   	    Hunter Goatley
+!
+! Copyright (c) 2008, Matthew Madison and Hunter Goatley.
+! 
+! All rights reserved.
+! 
+! Redistribution and use in source and binary forms, with or without
+! modification, are permitted provided that the following conditions
+! are met:
+! 
+!     * Redistributions of source code must retain the above
+!       copyright notice, this list of conditions and the following
+!       disclaimer.
+!     * Redistributions in binary form must reproduce the above
+!       copyright notice, this list of conditions and the following
+!       disclaimer in the documentation and/or other materials provided
+!       with the distribution.
+!     * Neither the name of the copyright owner nor the names of any
+!       other contributors may be used to endorse or promote products
+!       derived from this software without specific prior written
+!       permission.
+! 
+! THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
+! "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
+! LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
+! A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
+! OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
+! SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
+! LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
+! DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
+! THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
+! (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
+! OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+!
+! CREATION DATE:    15-DEC-1993
+!
+! MODIFICATION HISTORY:
+!
+!   15-DEC-1993	V1.0	Goatley     Initial coding.
+!--
+    LIBRARY 'SYS$LIBRARY:STARLET';
+    LIBRARY 'MX_SRC_COMMON:FIELDS';
+
+    FORWARD ROUTINE
+	holds_identifier,
+	get_held_identifiers,
+	free_identifiers_memory;
+
+    EXTERNAL ROUTINE
+    	LIB$FREE_VM	: ADDRESSING_MODE(GENERAL),
+    	LIB$GET_VM	: ADDRESSING_MODE(GENERAL);
+
+    _DEF (NODE)
+	NODE_L_FLINK	= _LONG,
+	NODE_L_ID	= _LONG
+    _ENDDEF (NODE);
+
+
+%SBTTL	'HOLDS_IDENTIFIER'
+GLOBAL ROUTINE holds_identifier (identifier_a, head_a) =
+BEGIN
+!+
+!
+!  Routine:	HOLDS_IDENTIFIER
+!
+!  Functional Description:
+!
+!	This routine determines whether or not a particular UIC holds
+!	a particular identifier.
+!
+!  Environment:
+!
+!	User-mode code.
+!
+!  Formal parameters:
+!
+!	identifier_a	- Address of descriptor for identifier name
+!	head_a		- Address of linked-list head
+!
+!  Implicit inputs:
+!
+!	None.
+!
+!  Outputs:
+!
+!	None.
+!
+!  Returns:
+!
+!	R0	- Status (1 for match, 0 for no match)
+!		 	 SS$_NOSUCHID
+!			 Errors from $ASCTOID
+!
+!  Side effects:
+!
+!	Calls $ASCTOID.
+!
+!-
+BIND
+	identifier	= .identifier_a : $BBLOCK,
+	head		= .head_a;
+
+LOCAL
+	node		: REF NODEDEF,		!Pointer nodes in list
+	match		: INITIAL(0),		!Match was made on identifier
+	id_value;				!Value of identifier
+
+REGISTER
+	status		: UNSIGNED LONG;
+
+    IF ((node = .head) EQLU 0)			!Initialize node to point to
+    THEN					!... first node in list
+	RETURN (SS$_NOSUCHID);			!... Return error if no nodes
+
+    !
+    !  Get binary value of ASCII identifier.
+    !
+    status = $ASCTOID (NAME = identifier, ID = id_value);
+    IF NOT(.status) THEN RETURN (.status);
+
+    !
+    !  Loop through the singly-linked list of held identifiers looking for
+    !  a match.
+    !
+    DO						!Loop looking for a match
+	BEGIN					!... exiting when match is
+	match = (.node[NODE_L_ID] EQLU .id_value);	!... found or list is
+	node = .node[NODE_L_FLINK];			!... exhausted
+	END
+    UNTIL (.match OR (.node EQLU 0));
+
+    RETURN (.match);				!Return match value
+
+END;						!End of routine
+
+
+%SBTTL	'GET_HELD_IDENTIFIERS'
+GLOBAL ROUTINE get_held_identifiers (uic_a, head_a) =
+BEGIN
+!+
+!
+!  Routine:	GET_HELD_IDENTIFIERS
+!
+!  Functional Description:
+!
+!	This routine collects all of the identifiers held by a particular
+!	UIC and stores them in a singly-linked list.
+!
+!  Environment:
+!
+!	User-mode code.
+!
+!  Formal parameters:
+!
+!	uic_a		- Address of longword UIC
+!	head_a		- Address of longword to receive list head
+!
+!  Implicit inputs:
+!
+!	None.
+!
+!  Outputs:
+!
+!	None.
+!
+!  Returns:
+!
+!	R0	- Status
+!
+!  Side effects:
+!
+!	Calls $FIND_HELD and $FINISH_RDB.
+!
+!-
+BIND
+	uic		= .uic_a,
+	head		= .head_a;
+
+LOCAL
+	jpi_itmlst	: $ITMLST_DECL (ITEMS = 1),
+	holder		: VECTOR [2, LONG],	!Rights holder information
+	contxt		: INITIAL(0),		!$FIND_HELD context variable
+	node		: REF NODEDEF,		!Identifier node
+	prev_node	: REF NODEDEF,		!Previous node
+	held_id_value,				!Value of identifier
+	id_value;				!Value of identifier
+
+REGISTER
+	status		: UNSIGNED LONG;
+
+! Get binary value of identifier
+! Call FIND_HELD looking for a match
+! Return success or error
+
+    IF (uic EQLA 0) OR (.uic EQLU 0)		!If UIC was omitted or is 0,
+    THEN					!... then get it using $GETJPI
+	BEGIN
+	$ITMLST_INIT (ITMLST = jpi_itmlst,
+		(ITMCOD = JPI$_UIC,
+		 BUFSIZ = 4,
+		 BUFADR = holder[0]));
+	$GETJPIW (ITMLST = jpi_itmlst);
+	END
+    ELSE
+	holder[0] = .uic;			!Otherwise, use the passed UIC
+
+    holder[1] = 0;				!The second longword must be 0
+
+    head = prev_node = node = 0;
+
+    WHILE (status = $FIND_HELD (HOLDER = holder,
+				ID     = held_id_value,
+				CONTXT = contxt))
+      DO
+	BEGIN
+	!
+	!  Allocate a paltry 8 bytes for the identifier node.  This is a
+	!  really cheesy way to do it, but the only other real alternative
+	!  is to use an array.  While most sites don't use identifiers much,
+	!  using an array imposes a limit that I'd just as soon not impose.
+	!  So instead we have the overhead of calling LIB$GET_VM for a measly
+	!  quadword.  Yuck.
+	!
+	status = LIB$GET_VM (%REF(NODE_S_NODEDEF), node);
+	IF (.prev_node EQLU 0)			!Do we have a previous node?
+	THEN					!If not, point the head and
+	    head = prev_node = .node		!... previous node to this one
+	ELSE					!Here, there is a previous node
+	    BEGIN				!...  so update the FLINK in
+	    prev_node[NODE_L_FLINK] = .node;	!...  the previous node to
+	    prev_node = .node;			!...  point to this one, which
+	    END;				!...  is now the previous node
+	node[NODE_L_FLINK] = 0;			!For this node, set FLINK to 0
+	node[NODE_L_ID] = .held_id_value;	!Store the ID value in the node
+	END;
+
+    IF (.status NEQU SS$_NOSUCHID)		!If we exited because of some
+    THEN					!...  kind of error, try
+	status = $FINISH_RDB (CONTXT = contxt)	!...  calling $FINISH_RDB
+    ELSE
+	status = SS$_NORMAL;
+
+    RETURN (.status);				!Return status value
+
+END;						!End of routine
+
+
+%SBTTL	'FREE_IDENTIFIERS_MEMORY'
+GLOBAL ROUTINE free_identifiers_memory (head_a) =
+BEGIN
+!+
+!
+!  Routine:	FREE_IDENTIFIERS_MEMORY
+!
+!  Functional Description:
+!
+!	This routine deallocates the entries in the identifiers linked list.
+!
+!  Environment:
+!
+!	User-mode code.
+!
+!  Formal parameters:
+!
+!	head_a		- Address of longword to receive list head
+!
+!  Implicit inputs:
+!
+!	None.
+!
+!  Outputs:
+!
+!	None.
+!
+!  Returns:
+!
+!	R0	- Status
+!
+!  Side effects:
+!
+!	Calls LIB$FREE_VM.
+!
+!-
+    BIND
+	head	= .head_a;
+
+    LOCAL
+	node		: REF NODEDEF,
+	next_node	: REF NODEDEF;
+
+    node = .head;
+    WHILE (.node NEQA 0) DO				!While there is a node,
+	BEGIN						!... deallocate the
+	next_node = .node [NODE_L_FLINK];		!... memory for it
+	LIB$FREE_VM (%REF(NODE_S_NODEDEF), node);
+	node = .next_node;
+	END;
+
+    RETURN (SS$_NORMAL);
+
+END;
+
+END
+ELUDOM

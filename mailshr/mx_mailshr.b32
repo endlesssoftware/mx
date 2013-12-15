@@ -1,0 +1,1988 @@
+%TITLE 'MX_MAILSHR'
+MODULE MX_MAILSHR (IDENT = 'V2.13-1') =
+BEGIN
+!++
+! FACILITY: 	    Message Exchange
+!
+! ABSTRACT:
+!
+!   This module provides the VMS MAIL foreign protocol interface to
+!   Message Exchange.
+!
+! MODULE DESCRIPTION:
+!
+!   This module contains routine MAIL$PROTOCOL for MX-to-VMS and VMS-to-MX
+!   mail exchange.
+!
+! AUTHOR:   	    M. Madison
+!
+! Copyright (c) 2008, Matthew Madison.
+! 
+! All rights reserved.
+! 
+! Redistribution and use in source and binary forms, with or without
+! modification, are permitted provided that the following conditions
+! are met:
+! 
+!     * Redistributions of source code must retain the above
+!       copyright notice, this list of conditions and the following
+!       disclaimer.
+!     * Redistributions in binary form must reproduce the above
+!       copyright notice, this list of conditions and the following
+!       disclaimer in the documentation and/or other materials provided
+!       with the distribution.
+!     * Neither the name of the copyright owner nor the names of any
+!       other contributors may be used to endorse or promote products
+!       derived from this software without specific prior written
+!       permission.
+! 
+! THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
+! "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
+! LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
+! A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
+! OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
+! SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
+! LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
+! DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
+! THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
+! (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
+! OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+!       
+! CREATION DATE:    21-OCT-1991
+!
+! MODIFICATION HISTORY:
+!
+!   21-OCT-1991	V2.0	Madison	    Complete rewrite using MX_MAILSHRP routines.
+!   18-NOV-1991	V2.0-1	Madison	    Set envelope from, if possible.
+!   04-MAR-1992	V2.1	Madison	    Check to-list lengths.
+!   13-MAR-1992	V2.1-1	Madison	    Change to-list warnings to comments.
+!   08-APR-1992	V2.1-2	Madison	    Make username translations case-blind.
+!   13-MAY-1992	V2.1-3	Madison	    Strip comments from distribution file lines.
+!   13-MAY-1992	V2.1-3A	Gege	    Added SMTP input file processing
+!   14-JAN-1993 V2.2	Goatley     Changed version number, slight mods.
+!   18-JAN-1993 V2.2-1	Goatley     Added support for MX aliases.
+!   26-JAN-1993 V2.2-2	Goatley     Fixed translation of logical -> list.
+!   11-FEB-1993 V2.2-3	Goatley     Added MX_MSG_* routines that call MXP_MSG*.
+!   25-FEB-1993 V2.2-4	Goatley     Added .DIS open check to prevent accvio.
+!   10-APR-1993 V2.3	Goatley     Added support for MIME with SEND/FOREIGN.
+!   16-DEC-1993 V2.4	Goatley     Add identifier support, restricted usage.
+!   19-JUN-1996 V2.5	Goatley     Modified to support multiple addr. aliases.
+!   27-OCT-1996 V2.5-1	Goatley	    Allow user-definable MX_FROM_HDR (Mizoguchi)
+!   05-JAN-1997	V2.6	Madison	    Eliminate MDMLIB.
+!   28-APR-1997	V2.7	Madison	    Flag messages containing 8bit characters.
+!   01-MAY-1997	V2.8	Madison	    New address formatting routine.
+!   09-MAY-1997	V2.8-1	Madison	    Use LOWERCASE qualifier on VMS MAIL addresses.
+!   14-OCT-1997 V2.9	Goatley     Add 1st support for non-VMS MIME encoding.
+!   16-FEB-1998	V2.9-1	Madison	    Disable quoted-printable if Kanji support is on.
+!   24-FEB-1998	V2.9-2	Madison	    Signal parse errors in CKUSER callout.
+!   22-APR-1998	V2.10	Madison	    Add /FROM= support.
+!   27-APR-1998	V2.10-1	Madison	    Fix /FOREIGN/TYPE=255.
+!   17-JUN-1998	V2.10-2	Madison	    Another fix for /FOREIGN/TYPE=255.
+!   12-JUL-1998	V2.11	Madison	    Rudimentary DSN support.
+!   08-OCT-1998	V2.11-1	Madison	    Add ignore-8bit logical name.
+!   28-JAN-2001 V2.12   Madison     Character conversion support.
+!   23-APR-2001 V2.13   Madison     Restore ignore-8bit functionality.
+!   20-JUL-2001 V2.13-1 Madison     Fix ACCVIO when signalling msgtoolarge errors.
+!--
+
+    LIBRARY 'SYS$LIBRARY:STARLET';
+    LIBRARY 'MX_SRC_COMMON:FLQ';		! GG
+    LIBRARY 'MX_SRC_COMMON:MX';
+    LIBRARY 'MX_SRC_COMMON:FIELDS';
+    LIBRARY 'MX_SRC_COMMON:DEBUG';
+    LIBRARY 'MX_SRC_COMMON:QP';
+    LIBRARY 'MX_SRC_COMMON:CHARCONV';
+    LIBRARY 'MX_MAILSHR_LIB';
+
+    COMPILETIME
+	__DBG = (%VARIANT AND 2) EQL 2;
+
+    FORWARD ROUTINE
+	explode_addr,
+	print_que		: NOVALUE,
+	write_header_dispose	: NOVALUE,
+	write_smtp_header	: NOVALUE,
+    	MAIL$PROTOCOL,
+    	trim_blanks 	    	: NOVALUE,
+    	is_from_tag,
+    	is_folder_name,
+    	encode_string	    	: NOVALUE,
+	MX_MSG_INIT, MX_MSG_SET_FROM, MX_MSG_ADD_ADDRESS,
+    	MX_MSG_ADD_HEADER, MX_MSG_ADD_TEXT, MX_MSG_SEND, MX_MSG_CANCEL;
+
+    EXTERNAL LITERAL
+    	CLI$_PRESENT, MX__MAIDLVR, MX__BASE64, MX__RFC822, MX__NOFAKE,
+	MX__NOACCESS, MX__BADDSNCTL, MX$_FACILITY;
+
+    EXTERNAL ROUTINE
+    	STRIP_COMMENTS,
+    	PARSE_DSN_CONTROL,
+	generate_fdl_string,
+	base64_encode_copy,
+	base64_encode_copy_stream,
+	base64_get_content_type,
+	get_held_identifiers,
+	holds_identifier,
+	free_identifiers_memory,
+    	G_HAT (LIB$SYS_FAO, LIB$GET_VM, LIB$FREE_VM, LIB$SYS_TRNLOG,
+	    LIB$GET_VM_PAGE, LIB$FREE_VM_PAGE,
+    	    STR$COPY_DX, STR$CONCAT, STR$APPEND, STR$FREE1_DX, STR$COMPARE,
+    	    STR$GET1_DX, STR$POS_EXTR, STR$LEFT, STR$TRIM, STR$POSITION,
+    	    STR$TRANSLATE, STR$RIGHT, STR$PREFIX, STR$COPY_R, STR$UPCASE,
+	    STR$ANALYZE_SDESC,
+    	    STR$LEN_EXTR, CLI$GET_VALUE, CLI$PRESENT, LIB$PUT_OUTPUT,
+    	    MXP_MSG_INIT, MXP_MSG_SET_FROM, MXP_MSG_ADD_ADDRESS,
+    	    MXP_MSG_ADD_HEADER, MXP_MSG_ADD_TEXT, MXP_MSG_SEND, MXP_MSG_CANCEL),
+    	G_HAT (MX_FILE_OPEN, MX_FILE_READ, MX_FILE_CLOSE, MX_MKDATE, MEM_GETTXT),
+    	G_HAT (CSL_PARSE, MX_FMT_LCL_ADDR, MX_TO_VMS, VMS_TO_ALIAS, MX_ALIAS_LOOKUP),
+    	G_HAT (CHARCONV_BEGIN, CHARCONV_CONVERT, CHARCONV_GET_CHARSET_NAME,
+    	    	CHARCONV_END, QP_ENCODE_STRING);
+
+    GLOBAL LITERAL
+    	MAIL$C_PROT_MAJOR = 2,
+    	MAIL$C_PROT_MINOR = 1;
+
+    LITERAL
+    	LNK_C_OUT_CONNECT  = 0,
+    	LNK_C_OUT_SENDER   = 1,
+    	LNK_C_OUT_CKUSER   = 2,
+    	LNK_C_OUT_TO       = 3,
+    	LNK_C_OUT_SUBJ     = 4,
+    	LNK_C_OUT_FILE     = 5,
+    	LNK_C_OUT_CKSEND   = 6,
+    	LNK_C_OUT_DEACCESS = 7,
+
+    	LNK_C_IN_CONNECT   = 8,
+    	LNK_C_IN_SENDER    = 9,
+    	LNK_C_IN_CKUSER    = 10,
+    	LNK_C_IN_TO        = 11,
+    	LNK_C_IN_SUBJ      = 12,
+    	LNK_C_IN_FILE      = 13,
+
+    	LNK_C_IO_READ      = 14,
+    	LNK_C_IO_WRITE     = 15,
+
+	LNK_C_IN_CC	   = 16,	! unused
+	LNK_C_OUT_CC	   = 17,
+	LNK_C_IN_ATTRIBS   = 18,
+	LNK_C_OUT_ATTRIBS  = 19,	! obligatoire si minor >=2
+
+    	LNK_C_FIRST 	   = LNK_C_OUT_CONNECT,
+    	LNK_C_LAST  	   = LNK_C_OUT_ATTRIBS;
+
+    LITERAL
+	BIGRECSIZ	= 65535;
+
+    MACRO
+	MIME_boundary	= 'MX-for-OpenVMS'%;
+
+    BIND
+	blank_line_d	= %ASCID'',
+	comma_space_d	= %ASCID', ',
+	two_dashes_d	= %ASCID'--',
+	lnm$file_dev_d	= %ASCID'LNM$FILE_DEV',
+	lnm$system_d	= %ASCID'LNM$SYSTEM',
+    	ignore_8bit_d	= %ASCID'MX_MAILSHR_IGNORE_8BIT';
+
+
+%SBTTL	'EXPLODE_ADDR'
+ROUTINE explode_addr (orig_a, dest_a, lclhst_a, cnt_a, hdrq_a) =
+BEGIN
+!+
+!
+!  Routine:	EXPLODE_ADDR
+!
+!  Functional Description:
+!
+!	This routine takes the original "To:" or "CC:" line from VMS Mail
+!	and explodes it into an MX address list for the RFC 822 headers.
+!
+!	This routine emulates the actions performed by VMS Mail---logicals
+!	are handled, as are MX aliases.
+!
+!  Formal parameters:
+!
+!	orig_a		Address of descriptor for original string
+!	dest_a		Address of descriptor for destination string
+!	lclhst_a	Address of descriptor for local host name
+!	cnt_a		Address of longword to hold "too many" count
+!	hdrq_a		Address of RFC822 header queue listhead
+!
+!  Implicit inputs:
+!
+!	None.
+!
+!  Outputs:
+!
+!	None.
+!
+!  Returns:
+!
+!	R0	- Status
+!
+!  Side effects:
+!
+!
+!-
+    BIND
+	orig	= .orig_a	: $BBLOCK,
+	dest	= .dest_a	: $BBLOCK,
+	lclhst	= .lclhst_a	: $BBLOCK,
+	cnt	= .cnt_a,
+	hdrq	= .hdrq_a	: QUEDEF;
+
+    LOCAL
+	tostr		: $BBLOCK[DSC$K_S_BLN],
+	tmpstr		: $BBLOCK[DSC$K_S_BLN],
+	tmp2		: $BBLOCK[DSC$K_S_BLN],
+	sdsc		: $BBLOCK[DSC$K_S_BLN],
+    	tdsc	    	: BLOCK [DSC$K_S_BLN,BYTE],
+    	lnmlst	    	: $ITMLST_DECL (ITEMS=1),
+    	lnmlen	    	: WORD,
+    	lnmbuf	    	: VECTOR [1024,BYTE],
+	tmpq		: QUEDEF,
+	rcpt		: REF TXTDEF,
+	translated	: INITIAL(0);
+
+    !
+    !  Initialize descriptors
+    !
+    init_dyndesc (tostr, tmpstr, tmp2);
+    sdsc [DSC$B_DTYPE] = DSC$K_DTYPE_T;
+    sdsc [DSC$B_CLASS] = DSC$K_CLASS_S;
+
+    DBGPRT ('   Parsing original To specification.');
+
+    translated = cnt = 0;
+    INIT_QUEUE (TMPQ);
+
+    !
+    !  Parse the comma-separated list into individual addresses.
+    !
+    DBGPRT ('   -- Parsing original To-list: !AS', orig);
+    CSL_PARSE (orig, tmpq);
+    DBGPRT ('   -- Parsed To-list into pieces.');
+
+    !
+    !  Start stepping through the queue, converting each address, if
+    !  necessary.
+    !
+    rcpt = .tmpq [QUE_L_HEAD];
+    WHILE NOT REMQUE (.tmpq [QUE_L_HEAD], rcpt) DO
+	BEGIN
+	LOCAL cp;
+	!
+	!  Set up descriptor to point to the address text.
+	!
+	sdsc [DSC$W_LENGTH] = .rcpt [TXT_W_LEN];
+	sdsc [DSC$A_POINTER] = rcpt [TXT_T_TEXT];
+	DBGPRT ('   -- Looking at !AS.', sdsc);
+    	lnmlen = (IF .rcpt [TXT_W_LEN] GTR %ALLOCATION (lnmbuf) THEN 
+    	    	    %ALLOCATION (lnmbuf) ELSE .rcpt [TXT_W_LEN]);
+    	CH$MOVE (.lnmlen, rcpt [TXT_T_TEXT], lnmbuf);
+	!
+	!  See if the string is a logical name.  Translate up to 10 times,
+	!  if necessary.
+	!
+	INCR i FROM 0 TO 9 DO
+    	BEGIN
+    	    $ITMLST_INIT (ITMLST=lnmlst,
+    	    	(ITMCOD=LNM$_STRING, BUFSIZ=%ALLOCATION (lnmbuf),
+    	    	    BUFADR=lnmbuf, RETLEN=lnmlen));
+    	    INIT_SDESC (tdsc, .lnmlen, lnmbuf);
+    	    IF NOT $TRNLNM (LOGNAM=tdsc, TABNAM=lnm$file_dev_d,
+    	    	    	ATTR=%REF (LNM$M_CASE_BLIND), ITMLST=lnmlst) THEN
+    	    	EXITLOOP;
+    	    translated = 1;
+    	END;
+
+    	trim_blanks(tdsc [DSC$A_POINTER], tdsc [DSC$W_LENGTH], 1);
+
+	!
+	!  If the string was a logical, it *could* be a comma-separated
+	!  list of more logicals or addresses.  Check to see if it was
+	!  translated....
+	!
+	IF (.translated)
+	THEN
+	    BEGIN
+	    !
+	    !  If it was translated, assume it's a comma-separated list
+	    !  and parse it again.  The results of the parse will be
+	    !  placed back in TMPQ to be processed on the iteration
+	    !  of the WHILE NOT REMQUE... loop and this node will be
+	    !  discarded.
+	    !
+	    translated = 0;			!Clear translated flag
+    	    DBGPRT ('   -- parsing list again: !AS.', tdsc);
+	    CSL_PARSE (tdsc, tmpq);		!Parse the comma-separated list
+	    END
+	ELSE
+	    BEGIN
+	    !
+	    !  It wasn't a logical, so it must be a "final" address.  Clean
+	    !  it up a little more (get rid of leading blanks, etc.), then
+	    !  determine whether or not it's a distribution list.
+	    !
+    	    DBGPRT ('   -- translated/trimmed to !AS.', tdsc);
+    	    trim_blanks (tdsc [DSC$A_POINTER], tdsc [DSC$W_LENGTH], 2);
+	    !
+	    !  Is it a distribution list (begins with "@")?
+	    !
+	    IF CH$RCHAR (.tdsc [DSC$A_POINTER]) EQL %C'@'
+	    THEN
+		!
+		!  Yes, it is a distribution list.  Open the file, read
+		!  in each record, and add the address the TMPQ queue of
+		!  addresses.  The addresses will then be processed on
+		!  future iterations of the WHILE NOT REMQUE... loop.
+		!
+		BEGIN
+		LOCAL u;
+		DBGPRT ('   -- Distribution list.');
+		tdsc [DSC$A_POINTER] = CH$PLUS (.tdsc [DSC$A_POINTER], 1);
+    	    	tdsc [DSC$W_LENGTH] = .tdsc [DSC$W_LENGTH] - 1;
+    	    	trim_blanks (tdsc [DSC$A_POINTER], tdsc [DSC$W_LENGTH], 2);
+		!
+		!  Open the distribution list.
+		!
+		IF (MX_FILE_OPEN (MX__FILE_READ, tdsc, u, %ASCID'.DIS'))
+		THEN
+		    BEGIN
+		    WHILE MX_FILE_READ (.u, tmpstr) DO
+			BEGIN
+			INCR i FROM 0 TO 9 DO
+			    IF $TRNLNM (LOGNAM=tmpstr, TABNAM=lnm$file_dev_d,
+				        ATTR=%REF (LNM$M_CASE_BLIND), ITMLST=lnmlst)
+    	    		    THEN STR$COPY_DX (tmpstr, tdsc)
+    	    	    	    ELSE EXITLOOP;
+    	    		STR$TRIM (tmp2, tmpstr);	!Trim trailing blanks
+    	    		STRIP_COMMENTS (tmp2, tmpstr);	!Strip .DIS comments
+			IF .tmpstr [DSC$W_LENGTH] GTR 0	!If there's an address,
+			THEN				!... then add it to the
+			    INSTXT (tmpstr, tmpq);	!... queue
+			END;
+		    MX_FILE_CLOSE (.u);			!Close the file
+		    END
+		ELSE
+    	    	    INSTXT (%ASCID %STRING ('X-Comment: To: header is',
+			' incomplete; missing distribution file.'),
+			.HDRQ[QUE_L_TAIL], MX_K_HDR_OTHER);
+		END
+	    ELSE
+		!
+		!  Here, the address was not distribution list.  Check to
+		!  to see if it's an MX alias and then convert it to a
+		!  valid RFC821 address.
+		!
+		BEGIN
+		LOCAL status;
+		!
+		! If there's no "@" in the address, see if it's an MX alias.
+		!
+		status = 0;
+		IF CH$FAIL(CH$FIND_CH(.tdsc [DSC$W_LENGTH],
+					.tdsc [DSC$A_POINTER], %C'@'))
+		THEN				!No "@" was found, so
+		    BEGIN			!... do alias lookup
+		    !
+		    !  Convert it from VMS format (MX%ADDR, MX%"ADDR", etc.)
+		    !  to just ADDR.
+		    !
+		    vms_to_alias (tdsc, tmp2);
+    	    	    DBGPRT ('   -- Converted to alias !AS.', TMP2);
+		    !
+		    !  N.B.: MX_ALIAS_LOOKUP does *not* modify TMPSTR in
+		    !  the event of a failure!
+		    !
+		    status = mx_alias_lookup (tmp2, tmpstr);
+		    DBGPRT ('   -- MX_ALIAS_LOOKUP status = !XL', .status);
+		    IF (.status)
+		    THEN
+			DBGPRT ('   -- MX alias address !AS', TMPSTR)
+    	    	    ELSE
+    	    	    	STR$COPY_DX (tmpstr, tdsc);
+		    END
+    	    	ELSE
+    	    	    STR$COPY_DX (tmpstr, tdsc);
+
+		IF (.status)
+		THEN
+		    BEGIN
+		    LOCAL offset;
+		    WHILE ((offset = CH$FIND_CH (.tmpstr [DSC$W_LENGTH],
+				.tmpstr [DSC$A_POINTER], %CHAR(0))) NEQU 0) DO
+			CH$WCHAR (%C',', .offset);
+	    	    DBGPRT ('   -- parsing alias list again: !AS.', tmpstr);
+		    CSL_PARSE (tmpstr, tmpq);		!Parse the comma-separated list
+		    END
+		ELSE
+		    BEGIN
+		    !
+		    !  Convert the VMS address to a valid MX address.
+		    !
+		    status = MX_FMT_LCL_ADDR (MX__FMT_TO OR FMT_M_LOWERCASE, tmpstr, tmp2);
+		    DBGPRT ('   -- Converted to MX address !AS, status=!XL', tmp2, .status);
+		    !
+		    !  If our string is not too long, then add this address to
+		    !  the list.  Otherwise, bump the count of missing addresses.
+		    !
+		    IF .status AND .tostr [DSC$W_LENGTH]+.tmp2 [DSC$W_LENGTH] LSS 1000
+		    THEN
+		    	BEGIN
+		    	IF .tostr [DSC$W_LENGTH] GTR 0 THEN
+			    STR$APPEND (tostr, comma_space_d);
+		    	STR$APPEND (tostr, tmp2);
+		    	DBGPRT ('   -- TOSTR now reads: !AS', tostr);
+    	    	    	END
+		    ELSE
+		    	cnt = .cnt + 1;
+		    END;
+	    	END;
+	    END;
+	FREETXT (rcpt);			!Release memory held be RCPT
+	END;
+
+   STR$COPY_DX (dest, tostr);		!Copy result to caller
+
+   FREE_STRINGS (tostr, tmpstr, tmp2);	!Free up string memory
+
+   SS$_NORMAL
+
+END;	! ROUTINE EXPLODE_ADDR
+
+
+ROUTINE PRINT_QUE (context: REF mxpdef, hdrq_a) : NOVALUE =
+ BEGIN
+    	BIND
+		DEBUG		= CONTEXT [MXP_L_DEBUG],
+		TRACE_UNIT	= CONTEXT [MXP_L_TUNIT],
+		hdrq		= .hdrq_a : QUEDEF;
+	LOCAL
+		link		: REF TXTDEF;
+
+	link= .hdrq[QUE_L_HEAD];
+	WHILE .link NEQ hdrq DO
+	 BEGIN
+		XTRACE ('%MXDBG, Link type= !UL, value=!AD.',
+			.link[TXT_W_CODE], .link[TXT_W_LEN], link[TXT_T_TEXT]);
+		link= .link [TXT_L_FLINK];
+	 END;
+ END;
+
+ROUTINE	write_header_dispose (context	: REF mxpdef,
+			      hdrq_a)	 : NOVALUE =
+!+
+!	writes header file & disposes of memory header
+!-
+ BEGIN
+	LOCAL
+		HDR			: REF TXTDEF,
+		PREVIOUS_PRIVILEGES	: VECTOR [2,LONG];
+	BIND
+		HDRQ		= .hdrq_a	: quedef,
+		DEBUG		= CONTEXT [MXP_L_DEBUG],
+		TRACE_UNIT	= CONTEXT [MXP_L_TUNIT];
+
+	print_que (.context, .hdrq_a);
+
+!	dispose of memory header
+	WHILE NOT REMQUE (.HDRQ [QUE_L_HEAD], HDR) DO
+	 BEGIN
+	    LOCAL	descr : VECTOR [2,LONG],
+	    		status;
+
+	    descr[0]= .hdr[txt_w_len];
+	    descr[1]=  hdr[txt_t_text];
+	    status= MX_MSG_ADD_HEADER (context[MXP_L_PCTX] ,
+	    			       hdr[txt_w_code],
+	    			       descr);
+	    XTRACE ('%MXDBG, Add HEADER !SW, status= !XL', .hdr[txt_w_code], 
+	    	    .status);
+    	    FREETXT (hdr);
+	 END;
+	XTRACE ('%MXDBG, HDR_INFO, SRC_INFO written.');
+ END;
+
+ROUTINE write_smtp_header (	context: REF mxpdef,
+				hdrq_a,
+				smtp_hdrq_a) : NOVALUE =
+BEGIN
+!+
+!	build new header according to user file header
+!	concatenates mail & user headers and then throws away
+!	duplicate headers items found in mail header
+!-
+    BIND
+	debug		= context [MXP_L_DEBUG],
+	trace_unit	= context [MXP_L_TUNIT],
+	hdrq		= .hdrq_a	: QUEDEF,
+	smtp_hdrq	= .smtp_hdrq_a	: QUEDEF;
+
+    LOCAL
+    	smtpq	    	: QUEDEF,
+    	mergeq	    	: QUEDEF,
+	hdr		: REF TXTDEF,
+	curlink		: REF TXTDEF,
+	smtplink	: REF TXTDEF,
+	nxtlink		: REF TXTDEF;
+
+    EXTERNAL ROUTINE
+	G_HAT (PARSE_HDRS);
+
+    XTRACE ('SMTP HDR queue');
+    print_que (.context, smtp_hdrq);
+    XTRACE ('MX HDR queue');
+    print_que (.context, hdrq);
+
+!
+!	build header from message contents
+!
+    INIT_QUEUE (smtpq);
+    PARSE_HDRS (smtp_hdrq, smtpq);
+
+    XTRACE ('SMTP HDR modified queue');
+    print_que (.context, hdrq);
+!
+!	dispose of text header
+!
+    WHILE NOT REMQUE (.smtp_hdrq[QUE_L_HEAD], hdr) DO freetxt (hdr);
+!
+!	Remove duplicates
+!
+    INIT_QUEUE (mergeq);
+    WHILE NOT REMQUE (.hdrq [QUE_L_HEAD], curlink) DO
+    BEGIN
+    	smtplink = .smtpq [QUE_L_HEAD];
+    	WHILE .smtplink NEQA smtpq [QUE_L_HEAD] DO
+    	BEGIN
+    	    IF .smtplink [TXT_W_CODE] EQL .curlink [TXT_W_CODE] THEN EXITLOOP;
+    	    smtplink = .smtplink [TXT_L_FLINK];
+    	END;
+    	IF .smtplink EQLA smtpq [QUE_L_HEAD] THEN
+    	    INSQUE (.curlink, .mergeq [QUE_L_TAIL])
+    	ELSE
+    	BEGIN
+    	    XTRACE ('%MXDBG, removed Link type= !UL, value=!AD.',
+    	    	    	.curlink[TXT_W_CODE], .curlink[TXT_W_LEN], curlink[TXT_T_TEXT]);
+    	    FREETXT (curlink);
+    	END;
+    END;
+
+!   	Append headers from message
+
+    WHILE NOT REMQUE (.smtpq [QUE_L_HEAD], hdr) DO
+    	INSQUE (.hdr, .mergeq [QUE_L_TAIL]);
+!
+!	now write the header
+!
+    write_header_dispose(.context, mergeq);
+
+END; ! write_smtp_header
+
+
+%SBTTL 'MAIL$PROTOCOL'
+GLOBAL ROUTINE MAIL$PROTOCOL (CONTEXT_A, CODE, P1_A, P2_A, P3_A, P4_A,
+    	    	P5_A, P6_A, P7_A, P8_A, P9_A) =
+BEGIN
+!++
+! FUNCTIONAL DESCRIPTION:
+!
+!   VMS Mail "foreign" protocol routine for MX.
+!
+! RETURNS:  	cond_value, longword (unsigned), write only, by value
+!
+! PROTOTYPE:
+!
+!   MAIL$PROTOCOL context, code, ...
+!
+! context:  unsigned_longword, longword (unsigned), ignored, by reference
+! code:	    unsigned_longword, longword (unsigned), read only, by value
+! ...:	    varying argument list
+!
+! IMPLICIT INPUTS:  None.
+!
+! IMPLICIT OUTPUTS: None.
+!
+! COMPLETION CODES:
+!
+!   SS$_NORMAL:	    	normal successful completion.
+!
+! SIDE EFFECTS:
+!
+!   None.
+!--
+
+    BUILTIN ACTUALCOUNT;
+
+    BIND
+    	CONTEXT = .CONTEXT_A : REF MXPDEF;
+
+    LOCAL
+    	PREVIOUS_PRIVILEGES : VECTOR [2, LONG],
+    	RMSTAT,
+    	STATUS;
+
+    DBGPRT ('%MXDBG, ARGCNT=!UL, ctx=!XL, code=!XL',
+    	    ACTUALCOUNT(), ..CONTEXT_A, .CODE);
+    IF .CODE EQL LNK_C_IO_WRITE THEN DBGPRT ('  IO_WRITE: !AS', .P1_A);
+    IF .CODE EQL 18 THEN DBGPRT ('  code 18: !XL, !AS', ..P1_A, .P2_A);
+    IF .CODE EQL 16 THEN DBGPRT ('  code 16: !XL=!AS', .P1_A, .P1_A);
+
+    CASE .CODE FROM LNK_C_FIRST TO LNK_C_LAST OF
+    SET
+    	[LNK_C_OUT_CONNECT] :
+!
+!	P1:	protocol_desc
+!	P2:	node_desc
+!	P3:	MAIL$_LOGLINK
+!	P4:RAT	P5:RFM	 P6:mail$gl_sysflags<16,16,0> P7:0 P8:ORG
+!	P9:	1 si attachment (FOREIGN)
+!	returns status;
+!
+    	    BEGIN
+    	    	LOCAL STR : BLOCK [DSC$K_S_BLN,BYTE];
+    	    	DBGPRT ('[LNK_C_OUT_CONNECT]');
+    	    	INIT_DYNDESC (STR);
+    	    	STATUS = LIB$GET_VM (%REF (MXP_S_MXPDEF), CONTEXT);
+    	    	IF NOT .STATUS THEN
+    	    	BEGIN
+    	    	    SIGNAL (.STATUS);
+    	    	    RETURN .STATUS;
+    	    	END;
+    	    	CH$FILL (%CHAR (0), MXP_S_MXPDEF, .CONTEXT);
+
+    	    	DBGPRT ('   -- got context block; checking for restricted access');
+		!
+		!  See if MX usage is restricted to users holding the
+		!  MX_MAIL_ACCESS identifier.
+		!
+		IF ($TRNLNM (TABNAM=lnm$system_d,
+			     LOGNAM=%ASCID'MX_RESTRICT_USAGE',
+			     ACMODE = %REF(PSL$C_EXEC)))
+		THEN
+		    BEGIN
+		    DBGPRT ('   -- access restricted, checking for MX_MAIL_ACCESS identifier');
+		    status = get_held_identifiers (0,
+					context [MXP_L_IDENTIFIERS]);
+		    IF (.status)
+		    THEN
+			status = holds_identifier (%ASCID'MX_MAIL_ACCESS',
+					context [MXP_L_IDENTIFIERS]);
+		    DBGPRT ('   -- access status is !XL', .status);
+		    IF NOT(.status)		!If any error occurred, then
+		    THEN			!... do not allow MX access
+			status = MX__NOACCESS;
+		    END;
+
+		IF (.status)
+		THEN
+		    BEGIN
+		    DBGPRT ('   -- calling MX_MSG_INIT.');
+		    status = MX_MSG_INIT (CONTEXT [MXP_L_PCTX],
+	    	    	    	    CONTEXT [MXP_L_ENTNUM]);
+		    END;
+
+    	    	IF NOT(.status)
+		THEN
+		    BEGIN
+		    IF (.context [MXP_L_IDENTIFIERS])
+		    THEN
+			free_identifiers_memory (context [MXP_L_IDENTIFIERS]);
+
+    	    	    LIB$FREE_VM (%REF (MXP_S_MXPDEF), CONTEXT);
+    	    	    CONTEXT = 0;
+    	    	    PUT_ERRMSG (.STATUS);	!Was SIGNAL
+    	    	    RETURN .STATUS;
+		    END;
+    	    	
+    %IF %VARIANT %THEN
+    	    	CONTEXT [MXP_L_DEBUG] =
+    	    	    $TRNLNM (LOGNAM=%ASCID'MX_VMSMAIL_OUT_DEBUG',TABNAM=lnm$file_dev_d);
+    	    	IF .CONTEXT [MXP_L_DEBUG] THEN
+    	    	    CONTEXT [MXP_L_DEBUG] = MX_FILE_OPEN (MX__FILE_WRITE,
+    	    	    	%ASCID'MX_VMSMAIL_OUT_LOG', CONTEXT [MXP_L_TUNIT],
+    	    	    	%ASCID'MX_LOCAL_DIR:.LOG');
+    	    	BEGIN
+    	    	    BIND
+		    	DEBUG	    = CONTEXT [MXP_L_DEBUG],
+		    	TRACE_UNIT  = CONTEXT [MXP_L_TUNIT];
+    	    	    XTRACE ('%MXDBG, debug logging started');
+    	    	END;
+    %FI
+		IF $TRNLNM (LOGNAM=%ASCID'MX_VMSMAIL_SHOW_ADDR',TABNAM=lnm$file_dev_d)
+		THEN
+		    context [MXP_V_SHOW_ADDR] = 1;
+		IF $TRNLNM (LOGNAM=%ASCID'MX_VMSMAIL_SHOW_INFO',TABNAM=lnm$file_dev_d)
+		THEN
+		    context [MXP_V_SHOW_INFO] = 1;
+    	    	FREE_STRINGS (STR);
+    	    	BEGIN
+    	    	    LOCAL
+    	    	    	buf 	: VECTOR [256,BYTE],
+    	    	    	len 	: WORD,
+    	    	    	lnmlst	: $ITMLST_DECL (ITEMS=1);
+
+    	    	    $ITMLST_INIT (ITMLST=lnmlst,
+    	    	    	    	    (ITMCOD=LNM$_STRING, BUFSIZ=%ALLOCATION (buf), BUFADR=buf, RETLEN=len));
+    	    	    IF $TRNLNM (LOGNAM=%ASCID'MX_VMSMAIL_DSN_CONTROL', TABNAM=lnm$file_dev_d, ITMLST=lnmlst) THEN
+    	    	    BEGIN
+    	    	    	LOCAL status;
+    	    	    	status = PARSE_DSN_CONTROL (context, buf, .len);
+    	    	    	IF NOT .status THEN
+    	    	    	BEGIN
+    	    	    	    context [MXP_V_DSN_HDRSONLY] = 0;
+    	    	    	    context [MXP_V_DSN_FULL] = 0;
+    	    	    	    context [MXP_L_NTFYFLGS] = 0;
+    	    	    	    SIGNAL (MX__BADDSNCTL, 0);
+    	    	    	END;
+    	    	    END;
+    	    	END;
+
+    	    	INIT_DYNDESC (CONTEXT [MXP_Q_ORIG_SENDER],
+    	    	    CONTEXT [MXP_Q_ORIG_TO], CONTEXT [MXP_Q_SUBJECT],
+    	    	    CONTEXT [MXP_Q_ORIG_CC], CONTEXT [MXP_Q_TOSTR],
+    	    	    CONTEXT [MXP_Q_FDL_STRING], context [MXP_Q_MIME_BOUNDARY]);
+
+    	    	INIT_SDESC (CONTEXT [MXP_Q_LCLHST], 0, CONTEXT [MXP_T_LCLHST]);
+
+    	    	BEGIN
+    	    	    BIND  lhdsc  = CONTEXT [MXP_Q_LCLHST] : BLOCK [,BYTE];
+    	    	    LOCAL lnmlst : $ITMLST_DECL (ITEMS=1);
+    	    	    $ITMLST_INIT (ITMLST=lnmlst,
+    	    	    	(BUFSIZ=MXP_S_LCLHST, ITMCOD=LNM$_STRING,
+    	    	    	 BUFADR=CONTEXT [MXP_T_LCLHST], RETLEN=lhdsc [DSC$W_LENGTH]));
+    	    	    $TRNLNM (LOGNAM=%ASCID'MX_VMSMAIL_LOCALHOST', TABNAM=lnm$system_d,
+    	    	    	     ACMODE=%REF (PSL$C_EXEC), ITMLST=lnmlst);
+    	    	END;
+
+    	    	BEGIN
+    	    	    LOCAL
+                        dsc     : BLOCK [DSC$K_S_BLN,BYTE],
+                        udsc    : BLOCK [DSC$K_S_BLN,BYTE],
+                        uname   : VECTOR [64,BYTE],
+                        jpilst  : $ITMLST_DECL (ITEMS=1);
+
+                    INIT_SDESC (udsc, %ALLOCATION (uname), uname);
+                    $ITMLST_INIT (ITMLST=jpilst,
+                        (ITMCOD=JPI$_USERNAME, BUFSIZ=.udsc [DSC$W_LENGTH],
+                         BUFADR=uname, RETLEN=udsc [DSC$W_LENGTH]));
+                    IF NOT $GETJPIW (ITMLST=jpilst) THEN
+                        udsc [DSC$W_LENGTH] = 0;
+                    WHILE .udsc [DSC$W_LENGTH] GTR 0 AND
+                            CH$RCHAR (CH$PLUS (uname, .udsc [DSC$W_LENGTH]-1)) EQL %C' ' DO
+                        udsc [DSC$W_LENGTH] = .udsc [DSC$W_LENGTH] - 1;
+    	    	    INIT_SDESC (dsc, MXP_S_CSNAME, context [MXP_T_CSNAME]);
+    	    	    IF CHARCONV_BEGIN (CHARCONV__LOCAL_TO_NETWORK, context [MXP_L_CSCVT_CTX],
+    	    	    	    	       context [MXP_W_CSNAME], dsc, 0, udsc) THEN
+    	    	    BEGIN
+    	    	    	dsc [DSC$W_LENGTH] = MXP_S_CSNAME;
+    	    	    	CHARCONV_GET_CHARSET_NAME (context [MXP_L_CSCVT_CTX],
+    	    	    	    	    	       	   CHARCONV__NETWORK_CHARSET,
+    	    	    	    	    	           context [MXP_W_CSNAME], dsc);
+    	    	    END
+    	    	    ELSE
+    	    	    	context [MXP_L_CSCVT_CTX] = 0;
+    	    	END;
+
+    	    END;
+
+!
+!	P1: node desc;	P2: sender desc
+!	returns status;
+!
+    	[LNK_C_OUT_SENDER] :
+    	    BEGIN
+    	    	BIND
+    	    	    DEBUG = CONTEXT [MXP_L_DEBUG],
+    	    	    TRACE_UNIT = CONTEXT [MXP_L_TUNIT];
+    	    	LOCAL
+    	    	    SYSPRV  : BLOCK [8,BYTE],
+    	    	    PRVPRV  : BLOCK [8,BYTE];
+
+    	    	XTRACE ('%MXDBG, [LNK_C_OUT_SENDER] (sender=!AS)', .P2_A);
+    	    	STR$COPY_DX (CONTEXT [MXP_Q_ORIG_SENDER], .P2_A);
+    	    	CH$FILL (%CHAR (0), 8, sysprv);
+    	    	SYSPRV [PRV$V_SYSPRV] = 1;
+    	    	$SETPRV (PRVADR=SYSPRV, PRVPRV=PRVPRV, ENBFLG=1);
+    	    	STATUS = MX_MSG_SET_FROM (CONTEXT [MXP_L_PCTX],
+    	    	    CONTEXT [MXP_Q_ORIG_SENDER]);
+    	    	IF NOT .PRVPRV [PRV$V_SYSPRV] THEN
+    	    	    $SETPRV (PRVADR=SYSPRV, ENBFLG=0);
+    	    	XTRACE ('%MXDBG, status=!XL from MX_MSG_SET_FROM', .STATUS);
+    	    END;
+
+!
+!	P1: node desc; P2: to line desc
+!	returns status;
+!
+    	[LNK_C_OUT_TO] :
+    	    BEGIN
+    	    	BIND
+    	    	    DEBUG = CONTEXT [MXP_L_DEBUG],
+    	    	    TRACE_UNIT = CONTEXT [MXP_L_TUNIT];
+    	    	XTRACE ('%MXDBG, [LNK_C_OUT_TO]');
+    	    	STR$COPY_DX (CONTEXT [MXP_Q_ORIG_TO], .P2_A);
+    	    END;
+!
+!	P1: node desc;	P2: CC desc;
+!	returns status;
+!
+    	[LNK_C_OUT_CC] :
+    	    BEGIN
+    	    	BIND
+    	    	    DEBUG = CONTEXT [MXP_L_DEBUG],
+    	    	    TRACE_UNIT = CONTEXT [MXP_L_TUNIT];
+    	    	XTRACE ('%MXDBG, [LNK_C_OUT_CC]');
+    	    	STR$COPY_DX (CONTEXT [MXP_Q_ORIG_CC], .P2_A);
+    	    END;
+!
+!	P1: node desc;	P2: subject desc;
+!	returns status;
+!
+    	[LNK_C_OUT_SUBJ] :
+    	    BEGIN
+    	    	LOCAL do_encode;
+    	    	BIND
+    	    	    subj  = context [MXP_Q_SUBJECT] : BLOCK [DSC$K_S_BLN,BYTE],
+    	    	    DEBUG = CONTEXT [MXP_L_DEBUG],
+    	    	    TRACE_UNIT = CONTEXT [MXP_L_TUNIT];
+    	    	XTRACE ('%MXDBG, [LNK_C_OUT_SUBJ], Subject=!AS', subj);
+    	    	do_encode = 0;
+    	    	IF .context [MXP_L_CSCVT_CTX] NEQA 0 THEN
+    	    	BEGIN
+    	    	    LOCAL   csstat, didcvt;
+    	    	    XTRACE ('%MXDBG,   csconv context=!XL', .context [MXP_L_CSCVT_CTX]);
+    	    	    csstat = CHARCONV_CONVERT (context [MXP_L_CSCVT_CTX], .p2_a, 0,
+    	    	    	    	    	    	    context [MXP_Q_SUBJECT], didcvt);
+    	    	    IF .csstat THEN
+    	    	    BEGIN
+    	    	    	do_encode = .didcvt;
+    	    	    	XTRACE ('%MXDBG,   did_conversion=!UL', .didcvt);
+    	    	    END;
+    	    	END
+    	    	ELSE
+    	    	    STR$COPY_DX (subj, .p2_a);
+    	    	    
+    	    	XTRACE ('%MXDBG,   do_encode=!UL', .do_encode);
+    	    	IF NOT .do_encode AND .subj [DSC$W_LENGTH] GTRU 0 THEN
+    	    	    INCRA cp FROM .subj [DSC$A_POINTER] TO CH$PLUS (.subj [DSC$A_POINTER], .subj [DSC$W_LENGTH]-1) DO
+    	    	    	IF (CH$RCHAR (.cp) LSSU %C' ' AND CH$RCHAR (.cp) NEQU %CHAR (9)) OR CH$RCHAR (.cp) GTRU %X'7F' THEN
+    	    	    	BEGIN
+    	    	    	    do_encode = 1;
+    	    	    	    EXITLOOP;
+    	    	    	END;
+    	    	XTRACE ('%MXDBG,   do_encode=!UL, charset=!AD', .do_encode, .context [MXP_W_CSNAME], context [MXP_T_CSNAME]);
+    	    	IF .do_encode THEN
+    	    	BEGIN
+    	    	    encode_string (QP__HDR_TEXT, context [MXP_Q_SUBJECT],
+    	    	    	    	   context [MXP_Q_SUBJECT], .context [MXP_W_CSNAME],
+    	    	    	    	   context [MXP_T_CSNAME], .debug, .trace_unit);
+    	    	    XTRACE ('%MXDBG,   subject now: !AS', context [MXP_Q_SUBJECT]);
+    	    	END;
+    	    END;
+!
+!	P1: node desc; P2: user desc;
+!	returns status;
+!
+    	[LNK_C_OUT_CKUSER] :
+    	    BEGIN
+    	    	BIND
+    	    	    DEBUG   	= CONTEXT [MXP_L_DEBUG],
+    	    	    TRACE_UNIT	= CONTEXT [MXP_L_TUNIT],
+    	    	    TOSTR   	= CONTEXT [MXP_Q_TOSTR] : BLOCK [,BYTE],
+    	    	    NSCNT   	= CONTEXT [MXP_L_NONSPECCNT];
+    	    	LOCAL
+     	    	    RCPT    : REF TXTDEF,
+    	    	    STR	    : BLOCK [DSC$K_S_BLN,BYTE],
+    	    	    STR2    : BLOCK [DSC$K_S_BLN,BYTE],
+		    str3    : $BBLOCK [DSC$K_S_BLN],
+    	    	    str4    : BLOCK [DSC$K_S_BLN,BYTE],
+		    status,
+    	    	    status2;
+
+    	    	XTRACE ('%MXDBG, [LNK_C_OUT_CKUSER]');
+
+    	    	IF STR$COMPARE (.P2_A, %ASCID %CHAR (0)) NEQ 0 THEN
+    	    	BEGIN
+		    LOCAL __p2_len : VOLATILE, __p2_addr : VOLATILE REF $BBLOCK;
+    	    	    XTRACE ('%MXDBG, address from VMS Mail is !AS', .p2_a);
+    	    	    INIT_DYNDESC (STR, STR2, str4);
+		    !
+		    !  If there's no "@" in the address, see if it's an alias.
+		    !  First, analyze the descriptor so CH$FIND_CH can be used.
+		    !
+		    !  Note: under AXP, we *must* clear out the high byte
+		    !  in the word length passed to CH$FIND_CH because
+		    !  that actually calls OTS$SEARCH, which requires
+		    !  a *longword* length, not a word as under VAX.
+		    !
+		    __p2_len = 0;		!Zero it all (incl. high byte)
+		    STR$ANALYZE_SDESC (.p2_a, __p2_len, __p2_addr);
+		    status = 0;			!Set status to 0
+		    IF CH$FAIL(CH$FIND_CH (.__p2_len, .__p2_addr, %C'@'))
+		    THEN			!Here, there's no "@" so try
+			BEGIN			!... to look up the alias
+			XTRACE ('%MXDBG, checking for MX alias');
+			status = mx_alias_lookup (.p2_a, STR2);
+			XTRACE ('%MXDBG, MX_ALIAS_LOOKUP status = !XL',.status);
+			IF (.status)
+			THEN
+			    XTRACE ('%MXDBG, MX alias address is !AS', STR2)
+			ELSE
+			    STR$COPY_DX (str2, .p2_a);
+			END
+		    ELSE
+			STR$COPY_DX (str2, .p2_a);
+		    str3 [DSC$B_DTYPE] = DSC$K_DTYPE_T;
+		    str3 [DSC$B_CLASS] = DSC$K_CLASS_S;
+		    WHILE (.str2 [DSC$W_LENGTH] NEQU 0) DO
+			BEGIN
+			LOCAL len : VOLATILE, ptr : VOLATILE REF $BBLOCK,
+				offset : VOLATILE;
+			offset = CH$FIND_CH (.str2 [DSC$W_LENGTH],
+				.str2 [DSC$A_POINTER], %CHAR(0));
+
+			IF (.offset NEQU 0)
+			THEN
+			    offset = .offset - .str2 [DSC$A_POINTER];
+			XTRACE ('%MXDBG, offset is !UL', .offset);
+			str3 [DSC$W_LENGTH] = (IF (.offset NEQU 0)
+					       THEN .offset
+					       ELSE .str2 [DSC$W_LENGTH]);
+			str3 [DSC$A_POINTER] = .str2 [DSC$A_POINTER];
+			XTRACE ('%MXDBG, STR3 is !AS', str3);
+			STR$CONCAT (str, %ASCID'MX%"', str3, %ASCID'"');
+			XTRACE ('%MXDBG, STR is !AS', str);
+			status2 = MX_FMT_LCL_ADDR (MX__FMT_TO OR FMT_M_LOWERCASE, str, str4);
+    	    	    	IF NOT .status2 THEN
+    	    	    	    BEGIN
+    	    	    	    SIGNAL (MAIL$_PARSEFAIL, 1, str, .status2);
+    	    	    	    FREE_STRINGS (str, str2, str4);
+    	    	    	    RETURN .status2;
+    	    	    	    END;
+			XTRACE ('%MXDBG, STR4 is !AS', str4);
+    	    	    	STR$COPY_DX (str, str4);
+
+			!
+			!  Display the rewritten addresses if user wants to see
+			!  them (by defining MX_VMSMAIL_SHOW_ADDR).
+			!
+			PUT_OUT ('  MX rewrote !AS!AS as !AS',
+				(IF .status THEN %ASCID'alias ' ELSE blank_line_d),
+				.p2_a, STR);
+			XTRACE ('%MXDBG, MX address is !AS', STR);
+			MX_MSG_ADD_ADDRESS (CONTEXT [MXP_L_PCTX], STR, CONTEXT [MXP_L_NTFYFLGS]);
+			IF .TOSTR [DSC$W_LENGTH]+.STR [DSC$W_LENGTH] LSS 1000
+			THEN
+			    BEGIN
+			    IF .TOSTR [DSC$W_LENGTH] GTR 0 THEN
+    	    		    	    STR$APPEND (TOSTR, comma_space_d);
+			    STR$APPEND (TOSTR, STR);
+			    END
+			ELSE NSCNT = .NSCNT + 1;
+
+			IF (.offset NEQU 0)
+			THEN
+			    STR$RIGHT (str2, str2, %REF(.offset+2))
+			ELSE
+			    STR$FREE1_DX (str2);
+			END;
+
+    	    	    CONTEXT [MXP_V_DIDONE] = 1;
+    	    	    FREE_STRINGS (STR, STR2, str4);
+    	    	END;
+    	    END;
+!
+!	P1: Attachment (foreign) flag;	P2: TLD descriptor
+!	returns status
+!
+	[LNK_C_OUT_ATTRIBS] :
+	    begin
+    	    	BIND
+    	    	    DEBUG   	= CONTEXT [MXP_L_DEBUG],
+    	    	    TRACE_UNIT	= CONTEXT [MXP_L_TUNIT];
+
+		local
+			itmptr : REF VECTOR[,WORD],
+			itmsiz,
+			itmend;
+
+		bind
+			tld_desc= .p2_a : $BBLOCK[DSC$S_DSCDEF];
+
+		XTRACE ('%MXDBG, [LNK_C_OUT_ATTRIBS] Foreign=!UL',.p1_a);
+		if .p1_a then	! uncomment to force the use of FOREIGN mails
+		begin
+			itmptr= .tld_desc[dsc$a_pointer];
+			itmend= .itmptr+.tld_desc[dsc$w_length];
+			XTRACE ('%MXDBG, TLD size=!UL',.tld_desc[dsc$w_length]);
+			while .itmptr lssu .itmend do
+			 begin
+				local	itmtyp,itmsiz;
+
+				itmtyp= .itmptr[0];
+				itmsiz= .itmptr[1];
+!				XTRACE ('%MXDBG, TLD attr type:!XW size:!XW',
+!					.itmtyp,.itmsiz);
+				if .itmtyp eqlu 1 then ! user flags
+				 begin
+					local	uflags;
+					bind	valptr= itmptr[2] : long;
+
+					CONTEXT[MXP_L_FORTYPE]= .valptr;
+					XTRACE ('%MXDBG, User flags: :!XL',
+						.CONTEXT[MXP_L_FORTYPE]);
+				 end;
+				itmptr= .itmptr+.itmsiz+4;
+			 end;
+		context [MXP_L_FOREIGN] = 1;
+		IF (.context[MXP_L_FORTYPE] EQLU 0)
+		THEN
+		    STR$COPY_DX (context[MXP_Q_FDL_STRING], tld_desc);
+
+		!
+		!  In order to resend SMTP files, the running user must
+		!  hold the MX_FAKE_RFC822 identifier.  If not held, then
+		!  print an error message letting the user know.
+		!
+		IF (.context[MXP_L_FORTYPE] EQLU 255)
+		THEN
+		    BEGIN
+		    !
+		    !  If this user's identifiers haven't been fetched yet,
+		    !  then do that now.
+		    !
+		    IF (.context [MXP_L_IDENTIFIERS] EQLU 0)
+		    THEN
+			get_held_identifiers (0, context [MXP_L_IDENTIFIERS]);
+		    !
+		    !  If user does not hold the MX_FAKE_RFC822 identifier,
+		    !  then print the "unauthorized" error message.
+		    !
+		    IF NOT(holds_identifier(%ASCID'MX_FAKE_RFC822',
+				context [MXP_L_IDENTIFIERS]))
+		    THEN
+			BEGIN
+			PUT_ERRMSG (MX__NOFAKE);	!Display the error
+			RETURN (MX__NOFAKE);		!And return it so MAIL
+			END;				!... cancels the send
+		    END;
+		END;
+
+		SS$_NORMAL
+	    END;
+!
+!	P1: node desc;	P2:RAB;	P3: error routine
+!	returns status
+!
+    	[LNK_C_OUT_FILE] :
+    	    BEGIN
+
+    	    	BIND
+    	    	    DEBUG   	= CONTEXT [MXP_L_DEBUG],
+    	    	    TRACE_UNIT	= CONTEXT [MXP_L_TUNIT],
+    	    	    INRAB   	= .P2_A	    	    	    	: $RAB_DECL,
+    	    	    ORIG_TO 	= CONTEXT [MXP_Q_ORIG_TO]   	: BLOCK [,BYTE],
+    	    	    ORIG_CC 	= CONTEXT [MXP_Q_ORIG_CC]   	: BLOCK [,BYTE],
+    	    	    ORIG_SENDER = CONTEXT [MXP_Q_ORIG_SENDER]	: BLOCK [,BYTE],
+    	    	    SUBJ    	= CONTEXT [MXP_Q_SUBJECT]   	: BLOCK [,BYTE],
+    	    	    LCLHST  	= CONTEXT [MXP_Q_LCLHST]    	: BLOCK [,BYTE],
+    	    	    TOSTR   	= CONTEXT [MXP_Q_TOSTR]	    	: BLOCK [,BYTE],
+    	    	    PCTX    	= CONTEXT [MXP_L_PCTX],
+    	    	    NSCNT   	= CONTEXT [MXP_L_NONSPECCNT];
+
+    	    	LOCAL
+    	    	    TMPQ    	: QUEDEF,
+    	    	    RCPT    	: REF TXTDEF,
+    	    	    TIMVEC  	: VECTOR [2, LONG],
+    	    	    SDSC    	: BLOCK [DSC$K_S_BLN,BYTE],
+    	    	    TMPSTR  	: BLOCK [DSC$K_S_BLN,BYTE],
+    	    	    TMP2    	: BLOCK [DSC$K_S_BLN,BYTE],
+    	    	    RTOSTR  	: BLOCK [DSC$K_S_BLN,BYTE],
+    	    	    STR	    : BLOCK [DSC$K_S_BLN,BYTE],
+    	    	    SIGFILE : BLOCK [DSC$K_S_BLN,BYTE],
+    	    	    NODENAM : BLOCK [DSC$K_S_BLN,BYTE],
+    	    	    lnmlst  : $ITMLST_DECL (ITEMS=1),
+    	    	    lnmlen  : WORD,
+    	    	    flags, 
+    	    	    ignore_8bit,
+    	    	    WAS_BIO,
+    	    	    DISPLAY_ORIGINAL_TO,
+    	    	    DO_SIGNATURE,
+		    do_base64_encode,
+	    	    get_header,			! gg++
+	    	    privileges: vector [long,2],! gg+
+                    HDRQ    : QUEDEF,		! gg++
+	    	    MSGHDRQ : QUEDEF,		! gg++
+    	    	    lnmbuf  : VECTOR [256,BYTE];
+
+    	    	%IF __DBG %THEN SIGNAL (SS$_DEBUG); %FI
+
+    	    	XTRACE ('%MXDBG, [LNK_C_OUT_FILE]');
+    	    	XTRACE ('%MXDBG, Orig to=!AS, Orig sender=!AS, Subj=!AS', ORIG_TO, ORIG_SENDER, SUBJ);
+
+    	    	IF NOT .CONTEXT [MXP_V_DIDONE] THEN
+    	    	BEGIN
+    	    	    MX_MSG_CANCEL (CONTEXT [MXP_L_PCTX]);
+    	    	    FREE_STRINGS (CONTEXT [MXP_Q_ORIG_SENDER],
+    	    	    	CONTEXT [MXP_Q_ORIG_TO], CONTEXT [MXP_Q_SUBJECT],
+			CONTEXT [MXP_Q_FDL_STRING], context [MXP_Q_FDL_STRING]);
+
+		    IF (.context [MXP_L_IDENTIFIERS])
+		    THEN
+			free_identifiers_memory (context [MXP_L_IDENTIFIERS]);
+
+    	    	    IF .context [MXP_L_CSCVT_CTX] NEQU 0 THEN
+    	    	    	CHARCONV_END (context [MXP_L_CSCVT_CTX]);
+    	    	    LIB$FREE_VM (%REF (MXP_S_MXPDEF), CONTEXT);
+    	    	    CONTEXT = 0;
+    	    	    RETURN SS$_NORMAL;
+    	    	END;
+
+    	    	!+
+    	    	!   Switch to record I/O mode for text-oriented sends
+    	    	!-
+    	    	was_bio = 0;
+		IF NOT .context [MXP_L_FOREIGN] OR (.context [MXP_L_FORTYPE] EQL 255) THEN
+    	    	BEGIN
+    	    	    was_bio = .INRAB [RAB$V_BIO];
+    	    	    IF .was_bio THEN
+    	    	    BEGIN
+    	    	    	$DISCONNECT (RAB=INRAB);
+    	    	    	INRAB [RAB$V_BIO] = 0;
+    	    	    	$CONNECT (RAB=INRAB);
+    	    	    END;
+    	    	END;
+
+    	    	!+
+    	    	! Check for /FROM= on the first line of the message
+    	    	!-
+    	    	IF NOT .context [MXP_L_FOREIGN] THEN
+    	    	BEGIN
+                    ignore_8bit = $TRNLNM (LOGNAM=ignore_8bit_d, TABNAM=lnm$file_dev_d);
+    	    	    status = $GET (RAB=inrab);
+    	    	    IF .status AND .inrab [RAB$W_RSZ] NEQ 0 THEN
+    	    	    BEGIN
+    	    	    	LOCAL
+    	    	    	    cp,
+    	    	    	    len : WORD;
+    	    	    	cp = .inrab [RAB$L_RBF];
+    	    	    	len = .inrab [RAB$W_RSZ];
+    	    	    	trim_blanks (cp, len, 3);
+    	    	    	IF is_from_tag (cp, len) THEN
+    	    	    	BEGIN
+    	    	    	    ! If it's +folder_name, then it is OK for non-prived users.
+    	    	    	    ! Otherwise, must have SYSPRV.
+    	    	    	    IF NOT is_folder_name (cp, len) THEN
+    	    	    	    BEGIN
+    	    	    	    	LOCAL
+    	    	    	    	    prcprv : BLOCK [8,BYTE],
+    	    	    	    	    jpilst : $ITMLST_DECL (ITEMS=1);
+    	    	    	    	CH$FILL (%CHAR (0), 8, prcprv);
+    	    	    	    	$ITMLST_INIT (ITMLST=jpilst,
+    	    	    	    	    (ITMCOD=JPI$_PROCPRIV, BUFADR=prcprv, BUFSIZ=%ALLOCATION (prcprv)));
+    	    	    	    	$GETJPIW (ITMLST=jpilst);
+    	    	    	    	IF .prcprv [PRV$V_SYSPRV] THEN STR$COPY_R (orig_sender, len, .cp);
+    	    	    	    END
+    	    	    	    ELSE
+    	    	    	    BEGIN
+    	    	    	    	LOCAL
+    	    	    	    	    jpilst  : $ITMLST_DECL (ITEMS=1),
+    	    	    	    	    uname   : BLOCK [32,BYTE],
+    	    	    	    	    dsc	    : BLOCK [DSC$K_S_BLN,BYTE],
+    	    	    	    	    dsc2    : BLOCK [DSC$K_S_BLN,BYTE];
+    	    	    	    	INIT_SDESC (dsc, %ALLOCATION (uname), uname);
+    	    	    	    	$ITMLST_INIT (ITMLST=jpilst,
+    	    	    	    	    (ITMCOD=JPI$_USERNAME, BUFSIZ=%ALLOCATION (uname), BUFADR=uname, RETLEN=dsc [DSC$W_LENGTH]));
+    	    	    	    	$GETJPIW(ITMLST=jpilst);
+    	    	    	    	trim_blanks (dsc [DSC$A_POINTER], dsc [DSC$W_LENGTH], 1);
+    	    	    	    	INIT_SDESC (dsc2, .len, .cp);
+    	    	    	    	STR$CONCAT (orig_sender, dsc, dsc2);
+    	    	    	    END;
+    	    	    	END
+    	    	    	ELSE $REWIND (RAB=inrab);
+    	    	    END
+    	    	    ELSE $REWIND (RAB=inrab);
+    	    	END
+    	    	ELSE
+    	    	    ignore_8bit = 1;
+
+    	    	INIT_QUEUE (hdrq);
+    	    	INIT_DYNDESC (TMPSTR, SIGFILE, STR, RTOSTR, TMP2, NODENAM);
+    	    	$ITMLST_INIT (ITMLST=lnmlst,
+    	    	    (ITMCOD=LNM$_STRING,BUFSIZ=%ALLOCATION (lnmbuf),
+    	    	     BUFADR=lnmbuf, RETLEN=lnmlen));
+    	    	status = $TRNLNM (LOGNAM=%ASCID'MX_SIGNATURE', TABNAM=lnm$file_dev_d, ITMLST=lnmlst);
+    	    	IF .status THEN STR$COPY_R (SIGFILE, lnmlen, lnmbuf);
+    	    	DO_SIGNATURE = .STATUS AND (.SIGFILE [DSC$W_LENGTH] GTR 0) AND .context [MXP_L_FOREIGN] EQLU 0;
+
+    	    	$TRNLNM (LOGNAM=%ASCID'MX_NODE_NAME', TABNAM=lnm$system_d,
+    	    	    	 ACMODE=%REF (PSL$C_EXEC), ITMLST=lnmlst);
+    	    	STR$COPY_R (NODENAM, lnmlen, lnmbuf);
+
+
+    	    	IF $TRNLNM (LOGNAM=%ASCID'MX_REPLY_TO', TABNAM=lnm$file_dev_d, ITMLST=lnmlst) THEN
+    	    	    STR$COPY_R (RTOSTR, lnmlen, lnmbuf);
+
+
+    	    	MX_MKDATE (0, TMPSTR, 0);
+    	    	INSTXT (TMPSTR, .HDRQ[QUE_L_TAIL], MX_K_HDR_DATE);	! gg++
+
+    	    	XTRACE ('%MXDBG,   about to format From: address');
+    	    	MX_FMT_LCL_ADDR (MX__FMT_FROM OR FMT_M_LOWERCASE, orig_sender, tmpstr, 0, flags);
+    	    	INSTXT (tmpstr, .hdrq [QUE_L_TAIL], MX_K_HDR_FROM);
+    	    	XTRACE ('%MXDBG, RFC822 From=!AS', tmpstr);
+
+    	    	IF .RTOSTR [DSC$W_LENGTH] NEQ 0 THEN
+    	    	BEGIN
+    	    	    INSTXT (RTOSTR, .HDRQ[QUE_L_TAIL], MX_K_HDR_REPLY_TO);! gg++
+    	    	    STR$FREE1_DX (RTOSTR);
+    	    	END;
+
+    	    	SDSC [DSC$B_DTYPE] = DSC$K_DTYPE_T;
+    	    	SDSC [DSC$B_CLASS] = DSC$K_CLASS_S;
+
+    	    	DISPLAY_ORIGINAL_TO = .NSCNT GTR 0;
+
+    	    	IF (.FLAGS AND MX_M_FMT_DECNET) NEQ MX_M_FMT_DECNET !If not a DECnet address,
+		THEN				    	    	    !... then explode the "To:" list
+		    !
+		    !  Explode the "To:" list into individual addresses.
+		    !
+		    explode_addr (CONTEXT [MXP_Q_ORIG_TO], TOSTR, LCLHST,
+					NSCNT, hdrq);
+
+    	    	IF .NSCNT GTR 0 THEN
+    	    	BEGIN
+    	    	    XTRACE ('%MXDBG, ... To: header too long by !UL entries',
+    	    	    	    	.NSCNT);
+    	    	    DISPLAY_ORIGINAL_TO = 1;
+    	    	    LIB$SYS_FAO (%ASCID %STRING ('X-Comment: To: header was',
+    	    	    	' truncated; missing !UL entries.'), 0, TMPSTR, .NSCNT);
+    	    	    INSTXT (TMPSTR, .HDRQ[QUE_L_TAIL], MX_K_HDR_OTHER);	! gg++
+    	    	END;
+    	    	STR$CONCAT (TMPSTR, %ASCID'%MXDBG, To header: ', TOSTR);
+    	    	%IF __DBG %THEN LIB$PUT_OUTPUT (TMPSTR); %FI
+    	    	INSTXT (TOSTR, .HDRQ[QUE_L_TAIL], MX_K_HDR_TO);	! gg++
+
+    	    	XTRACE ('%MXDBG, CC: !AS', ORIG_CC);
+    	    	IF .ORIG_CC [DSC$W_LENGTH] GTR 0 AND
+    	    	    	(.flags AND MX_M_FMT_DECNET) NEQ MX_M_FMT_DECNET THEN 
+    	    	BEGIN
+    	    	    LOCAL CCNSCNT;
+		    !
+		    !  Explode "CC:" list into individual addresses.
+		    !
+		    explode_addr (CONTEXT [MXP_Q_ORIG_CC], TOSTR, LCLHST,
+					ccnscnt, hdrq);
+
+    	    	    IF .CCNSCNT GTR 0 THEN
+    	    	    BEGIN
+    	    	    	XTRACE ('%MXDBG, ... CC: header too long by !UL entries',
+    	    	    	    	.NSCNT);
+    	    	    	LIB$SYS_FAO (%ASCID %STRING ('X-Comment: CC: header was',
+    	    	    	' truncated; missing !UL entries.'), 0, TMPSTR, .NSCNT);
+	    	    	INSTXT (TMPSTR, .HDRQ[QUE_L_TAIL], MX_K_HDR_OTHER);!gg++
+    	    	    	DISPLAY_ORIGINAL_TO = 1;
+    	    	    END;
+    	    	    INSTXT (TOSTR, .HDRQ[QUE_L_TAIL], MX_K_HDR_CC);	! gg++
+    	    	    XTRACE ('%MXDBG, CC header: !AS', TOSTR);
+    	    	END;
+
+    	    	IF .DISPLAY_ORIGINAL_TO OR
+    	    	    	(.FLAGS AND MX_M_FMT_DECNET) EQL MX_M_FMT_DECNET THEN
+    	    	BEGIN
+    	    	    STR$CONCAT (TMPSTR, %ASCID'X-VMSmail-To: ', ORIG_TO);
+    	    	    INSTXT (TMPSTR, .HDRQ[QUE_L_TAIL], MX_K_HDR_OTHER);	! gg++
+    	    	    IF .ORIG_CC [DSC$W_LENGTH] GTR 0 THEN
+    	    	    BEGIN
+    	    	    	STR$CONCAT (TMPSTR, %ASCID'X-VMSmail-CC: ', ORIG_CC);
+    	    	        INSTXT (TMPSTR, .HDRQ[QUE_L_TAIL], MX_K_HDR_OTHER);!gg++
+    	    	    END;
+    	    	END;
+
+    	    	$GETTIM (TIMADR=TIMVEC);
+    	    	LIB$SYS_FAO (%ASCID'<!XL.!XL.!UL@!AS>', 0, TMPSTR, .TIMVEC[1],
+    	    	    .TIMVEC[0], .CONTEXT [MXP_L_ENTNUM], NODENAM);
+    	    	XTRACE ('%MXDBG, message id: !AS', TMPSTR);
+    	    	INSTXT (TMPSTR, .HDRQ[QUE_L_TAIL], MX_K_HDR_MESSAGE_ID);! gg++
+    	    	IF .SUBJ [DSC$W_LENGTH] GTRU 0 THEN
+    	    	    INSTXT (SUBJ, .HDRQ[QUE_L_TAIL], MX_K_HDR_SUBJECT);	! gg++
+
+		BEGIN
+		LOCAL d : REF $BBLOCK, tmp : $BBLOCK[DSC$K_S_BLN];
+		IF .context [MXP_L_FOREIGN] AND (.context [MXP_L_FORTYPE] EQLU 0)
+		THEN
+		    generate_fdl_string(context, context[MXP_Q_FDL_STRING],
+					context[MXP_Q_FDL_STRING],
+					inrab);
+
+		d = context[MXP_Q_FDL_STRING];
+		IF (do_base64_encode = (.d [DSC$W_LENGTH] GTRU 0))
+		THEN
+		    BEGIN
+		    XTRACE ('%MXDBG, including MIME BASE64 headers');
+		    INSTXT (%ASCID'1.0', .HDRQ[QUE_L_TAIL],
+				MX_K_HDR_MIME_VERSION);
+		    INSTXT (%ASCID'BASE64',
+				.HDRQ[QUE_L_TAIL], MX_K_HDR_MIME_C_T_E);
+		    INIT_SDESC (tmp, 4096, 0);
+		    LIB$GET_VM (%REF(4096), tmp [DSC$A_POINTER]);
+		    $FAO (%ASCID'APPLICATION/VMS-RMS; VMS-FDL="!AS"',
+				tmp, tmp, .d);
+		    INSTXT (tmp, .HDRQ[QUE_L_TAIL], MX_K_HDR_MIME_C_TYPE);
+		    LIB$FREE_VM (%REF(4096), .tmp [DSC$A_POINTER]);
+		    END;
+		END;
+
+		BEGIN
+		LOCAL d : REF $BBLOCK, tmp : $BBLOCK[DSC$K_S_BLN];
+		IF .context [MXP_L_FOREIGN] AND (.context [MXP_L_FORTYPE] EQLU 1)
+		THEN
+		    BEGIN
+		    LOCAL _timbuf : VECTOR[7,WORD];
+		    do_base64_encode = 2;
+		    XTRACE ('%MXDBG, including MIME BASE64 headers');
+		    $NUMTIM (TIMBUF = _timbuf);
+		    LIB$SYS_FAO (%ASCID %STRING(MIME_boundary,
+				'-!2ZL!2ZL!2ZL!2ZL'), 0,
+				context [MXP_Q_MIME_BOUNDARY], ._timbuf [3],
+				._timbuf[4], ._timbuf[5], ._timbuf[6]);
+		    INSTXT (%ASCID'1.0', .HDRQ[QUE_L_TAIL],
+				MX_K_HDR_MIME_VERSION);
+		    INIT_DYNDESC (tmp);
+		    base64_get_content_type (context, context[MXP_Q_FDL_STRING],
+					inrab);
+		   
+		    LIB$SYS_FAO (%ASCID'multipart/mixed; boundary="!AS"', 0,
+				str, context [MXP_Q_MIME_BOUNDARY]);
+		    INSTXT (str, .hdrq [QUE_L_TAIL], MX_K_HDR_MIME_C_TYPE);
+		    FREE_STRINGS (tmp);
+		    END;
+		END;
+
+    	    	IF NOT .context [MXP_L_FOREIGN] AND NOT .ignore_8bit AND .context [MXP_W_CSNAME] NEQU 0 THEN
+    	    	BEGIN
+    	    	    LOCAL
+    	    	    	buf 	: VECTOR [64,BYTE],
+    	    	    	dsc 	: BLOCK [DSC$K_S_BLN,BYTE];
+
+		    INSTXT (%ASCID'1.0', .HDRQ[QUE_L_TAIL], MX_K_HDR_MIME_VERSION);
+		    INSTXT (%ASCID'binary', .HDRQ[QUE_L_TAIL], MX_K_HDR_MIME_C_T_E);
+    	    	    
+    	    	    INIT_SDESC (dsc, %ALLOCATION (buf), buf);
+		    $FAO (%ASCID'text/plain; charset="!AD"', dsc [DSC$W_LENGTH], dsc,
+    	    	    	    .context [MXP_W_CSNAME], context [MXP_T_CSNAME]);
+		    INSTXT (dsc, .HDRQ[QUE_L_TAIL], MX_K_HDR_MIME_C_TYPE);
+    	    	END;
+
+!		If foreign type 255 then  merge message header and built header
+
+		get_header = .context [MXP_L_FOREIGN] AND (.context [MXP_L_FORTYPE] EQLU 255);
+	    	XTRACE ('%MXDBG, get_header= !UL.', .get_header);
+	    	IF .get_header THEN
+    	    	    INIT_QUEUE (msghdrq)
+	    	ELSE
+		    write_header_dispose (.context, hdrq);
+
+		XTRACE ('%MXDBG, SHOW_INFO is !XL', .context [MXP_L_SHOW_INFO]);
+		IF .context [MXP_V_SHOW_INFO] THEN LIB$PUT_OUTPUT (blank_line_d);
+
+		IF .do_base64_encode GTRU 0
+		THEN
+		    BEGIN
+		    PUT_MSG (MX__BASE64);
+		    IF (.do_base64_encode EQLU 1)
+		    THEN
+			base64_encode_copy (.context, inrab)
+		    ELSE
+			BEGIN
+			LOCAL	_str	: $BBLOCK [DSC$K_S_BLN],
+				ptr	: REF $BBLOCK,
+				x;
+			INIT_DYNDESC (_str);
+    	    	    	MX_MSG_ADD_TEXT (PCTX,
+				%ASCID'This is a MIME-encoded message.');
+    	    	    	MX_MSG_ADD_TEXT (PCTX, blank_line_d);
+			STR$CONCAT (_str, two_dashes_d, context [MXP_Q_MIME_BOUNDARY]);
+    	    	    	MX_MSG_ADD_TEXT (PCTX, _str);
+			LIB$SYS_FAO (%ASCID'Content-Type: !AS', 0, _str,
+					context [MXP_Q_FDL_STRING]);
+    	    	    	MX_MSG_ADD_TEXT (PCTX, _str);
+    	    	    	MX_MSG_ADD_TEXT (PCTX, %ASCID'Content-Transfer-Encoding: base64');
+			!
+			!  We need the filename, so look forwards in the
+			!  content-type string for the first quote.
+			!
+			ptr = context [MXP_Q_FDL_STRING];
+			x = .ptr [DSC$W_LENGTH];
+			ptr = .ptr [DSC$A_POINTER];
+			WHILE (.x GTRU 0) DO
+			    BEGIN
+			    IF (CH$RCHAR (.ptr) EQLU '"')
+			    THEN
+				EXITLOOP;
+			    x = .x - 1;
+			    ptr = .ptr + 1;
+			    END;
+			!Here, ptr points to '"' and x has remaining length
+			LIB$SYS_FAO (%ASCID'Content-Disposition: inline; filename=!AD',
+					0, _str, .x, .ptr);
+    	    	    	MX_MSG_ADD_TEXT (PCTX, _str);
+    	    	    	MX_MSG_ADD_TEXT (PCTX, blank_line_d);
+			base64_encode_copy_stream (.context, inrab);
+    	    	    	MX_MSG_ADD_TEXT (PCTX, blank_line_d);
+			STR$CONCAT (_str, two_dashes_d,
+				context [MXP_Q_MIME_BOUNDARY], two_dashes_d);
+    	    	    	MX_MSG_ADD_TEXT (PCTX, _str);
+			FREE_STRINGS (_str);
+			END;
+		    END
+		ELSE
+		BEGIN
+
+	    	IF .get_header THEN PUT_MSG (MX__RFC822);
+
+		BEGIN	!Copy file section
+		LOCAL
+		    bigbuff, old_usz, old_ubf, bbstat,
+    	    	    bigbuf2;
+
+		!
+		!  Allocate a really big buffer (64K-1 bytes) and
+		!  use that as the new input buffer so we can handle
+		!  files with records longer than 512 bytes (the length
+		!  of the user buffer supplied by callable mail).
+		!
+		bbstat = LIB$GET_VM_PAGE (%REF(2*(BIGRECSIZ+1)/512), bigbuff);
+		IF (.bbstat)				!Successful?
+		THEN
+		    BEGIN
+		    old_usz = .inrab [RAB$W_USZ];	!Save the old USZ and
+		    old_ubf = .inrab [RAB$L_UBF];	!... UBF values
+		    inrab [RAB$W_USZ] = BIGRECSIZ;	!Use our new big buffer
+		    inrab [RAB$L_UBF] = .bigbuff;	!...
+    	    	    bigbuf2 = CH$PLUS (.bigbuff, BIGRECSIZ+1);
+		    END
+    	    	ELSE
+    	    	    bigbuf2 = 0;
+
+	    	XTRACE ('%MXDBG, copying file...');
+    	    	WHILE (status = $GET (RAB=INRAB)) DO
+    	    	BEGIN
+	    	    IF .get_header THEN
+    	    	    BEGIN
+    	    	    	LOCAL
+    	    	    	    hdr: REF TXTDEF;
+
+	    		IF .inrab [RAB$W_RSZ] EQL 0 THEN
+	    		BEGIN
+    	    	    	    write_smtp_header (.context, hdrq, msghdrq);
+    	    	    	    get_header = 0;
+	    		END
+	    		ELSE
+	    		BEGIN
+    	    	    	    hdr = MEM_GETTXT (.inrab [RAB$W_RSZ], .inrab [RAB$L_RBF]);
+    	    	    	    INSQUE (.hdr, .msghdrq [QUE_L_TAIL]);
+	    		END;
+	    	    END	! get_header <> 0
+		    ELSE IF .DO_SIGNATURE AND .INRAB [RAB$W_RSZ] GTR 0 AND
+    	    	    	    CH$RCHAR (.INRAB [RAB$L_RBF]) EQL %C'/' THEN
+    	    	    BEGIN
+    	    	    	STR$COPY_R (TMPSTR, INRAB [RAB$W_RSZ], .INRAB [RAB$L_RBF]);
+    	    	    	STR$UPCASE (STR, TMPSTR);
+    	    	    	IF STR$POSITION (%ASCID'/SIGNATURE', STR) EQL 1 THEN
+    	    	    	BEGIN
+    	    	    	    LOCAL UNIT;
+    	    	    	    IF MX_FILE_OPEN (MX__FILE_READ, SIGFILE, UNIT) THEN
+    	    	    	    BEGIN
+			    	XTRACE ('%MXDBG, including /signature ...');
+    	    	    	    	WHILE MX_FILE_READ (.UNIT, STR) DO
+    	    	    	    	BEGIN
+    	    	    	    	    LOCAL ptr, len, dsc : BLOCK [DSC$K_S_BLN,BYTE];
+    	    	    	    	    ptr = .str [DSC$A_POINTER];
+    	    	    	    	    len = .str [DSC$W_LENGTH];
+    	    	    	    	    IF .context [MXP_L_CSCVT_CTX] NEQU 0 THEN
+    	    	    	    	    	IF CHARCONV_CONVERT (context [MXP_L_CSCVT_CTX], str, 0, tmpstr) THEN
+    	    	    	    	    	BEGIN
+    	    	    	    	    	    ptr = .tmpstr [DSC$A_POINTER];
+    	    	    	    	    	    len = .tmpstr [DSC$W_LENGTH];
+    	    	    	    	    	END;
+    	    	    	    	    IF NOT .ignore_8bit AND NOT .context [MXP_V_HAS8BIT] THEN
+    	    	    	    	    	IF .len GTRU 998 THEN   ! per MIME rules about 7bit
+    	    	    	    	    	    context [MXP_V_HAS8BIT] = 1
+    	    	    	    	    	ELSE
+    	    	    	    	    	INCR cp FROM .ptr TO CH$PLUS (.ptr, .len-1) DO
+    	    	    	    	    	BEGIN
+    	    	    	    	    	    LOCAL ch : BYTE;
+    	    	    	    	    	    ch = CH$RCHAR (.cp);
+    	    	    	    	    	    IF (.ch AND %X'80') EQLU %X'80' OR
+    	    	    	    	    	       (.ch LSSU %C' ' AND .ch NEQU %CHAR (9)) THEN
+    	    	    	    	    	    BEGIN
+    	    	    	    	    	    	context [MXP_V_HAS8BIT] = 1;
+    	    	    	    	    	    	EXITLOOP;
+    	    	    	    	    	    END;
+    	    	    	    	    	END;
+    	    	    	    	    INIT_SDESC (dsc, .len, .ptr);
+    	    	    	    	    MX_MSG_ADD_TEXT (PCTX, STR);
+    	    	    	    	END;
+    	    	    	    	MX_FILE_CLOSE (.UNIT);
+    	    	    	    END;
+    	    	    	    DO_SIGNATURE = 0;
+    	    	    	END
+    	    	    	ELSE IF STR$POSITION (%ASCID'/NOSIGNATURE', STR) EQL 1
+    	    	    	THEN DO_SIGNATURE = 0
+    	    	    	ELSE
+    	    	    	BEGIN
+    	    	    	    SDSC [DSC$W_LENGTH] = .INRAB [RAB$W_RSZ];
+    	    	    	    SDSC [DSC$A_POINTER] = .INRAB [RAB$L_RBF];
+    	    	    	    MX_MSG_ADD_TEXT (PCTX, SDSC);
+    	    	    	END;
+    	    	    END
+    	    	    ELSE
+    	    	    BEGIN
+    	    	    	LOCAL
+    	    	    	    ptr, len;
+    	    	    	ptr = .inrab [RAB$L_RBF];
+    	    	    	len = .inrab [RAB$W_RSZ];
+    	    	    	IF NOT .context [MXP_L_FOREIGN] AND .context [MXP_L_CSCVT_CTX] NEQU 0 AND .bigbuf2 NEQA 0 THEN
+    	    	    	BEGIN
+    	    	    	    LOCAL
+    	    	    	    	indsc	: BLOCK [DSC$K_S_BLN,BYTE],
+    	    	    	    	outdsc	: BLOCK [DSC$K_S_BLN,BYTE],
+    	    	    	    	status;
+    	    	    	    INIT_SDESC (indsc, .len, .ptr);
+    	    	    	    INIT_SDESC (outdsc, BIGRECSIZ, .bigbuf2);
+    	    	    	    status = CHARCONV_CONVERT (context [MXP_L_CSCVT_CTX], indsc, outdsc [DSC$W_LENGTH], outdsc);
+    	    	    	    IF .status THEN
+    	    	    	    BEGIN
+    	    	    	    	ptr = .bigbuf2;
+    	    	    	    	len = .outdsc [DSC$W_LENGTH];
+    	    	    	    END;
+    	    	    	END;
+    	    	    	IF NOT .ignore_8bit AND NOT .CONTEXT [MXP_V_HAS8BIT] THEN
+                            IF .len GTRU 998 THEN   ! per MIME rules about 7bit
+                                context [MXP_V_HAS8BIT] = 1
+                            ELSE
+    	    	    	    INCR CP FROM .ptr TO CH$PLUS (.ptr, .len-1) DO
+    	    	    	    BEGIN
+    	    	    	    	IF (CH$RCHAR (.CP) AND %CHAR (128)) EQL %CHAR (128) OR
+    	    	    	    	   (CH$RCHAR (.cp) LSSU %C' ' AND CH$RCHAR (.cp) NEQU %CHAR (9)) THEN
+    	    	    	    	BEGIN
+    	    	    	    	    CONTEXT [MXP_V_HAS8BIT] = 1;
+    	    	    	    	    EXITLOOP;
+    	    	    	    	END;
+    	    	    	    END;
+
+    	    	    	SDSC [DSC$W_LENGTH] = .len;
+    	    	    	SDSC [DSC$A_POINTER] = .ptr;
+    	    	    	MX_MSG_ADD_TEXT (PCTX, SDSC);
+    	    	    END;
+    	    	END;
+	    	XTRACE ('%MXDBG, file copied... (status = !XL)', .status);
+		IF (.bbstat)		!Using our own big buffer?
+		THEN
+		    BEGIN
+		    LIB$FREE_VM_PAGE (%REF(2*(BIGRECSIZ+1)/512), bigbuff);	!Free it up
+		    inrab [RAB$W_USZ] = .old_usz;		!And restore
+		    inrab [RAB$L_UBF] = .old_ubf;		!... origs
+		    END;
+		END;	!Copy file section
+!!!gg+
+!
+!	strange... header has not been written. empty file ?
+!
+	        if .get_header then write_smtp_header (.context, hdrq, msghdrq);
+!!!gg-
+    	    	IF .DO_SIGNATURE THEN
+    	    	    IF $TRNLNM (LOGNAM=%ASCID'MX_AUTO_SIGNATURE', TABNAM=lnm$file_dev_d) THEN
+    	    	    BEGIN
+    	    	    	LOCAL UNIT;
+    	    	    	XTRACE ('%MXDBG, autosig set, appending sig file.');
+    	    	    	IF MX_FILE_OPEN (MX__FILE_READ, SIGFILE, UNIT) THEN
+    	    	    	BEGIN
+    	    	    	    WHILE MX_FILE_READ (.UNIT, STR) DO
+    	    	    	    BEGIN
+    	    	    	    	LOCAL ptr, len, dsc : BLOCK [DSC$K_S_BLN,BYTE];
+    	    	    	    	ptr = .str [DSC$A_POINTER];
+    	    	    	    	len = .str [DSC$W_LENGTH];
+    	    	    	    	IF .context [MXP_L_CSCVT_CTX] NEQU 0 THEN
+    	    	    	    	    IF CHARCONV_CONVERT (context [MXP_L_CSCVT_CTX], str, 0, tmpstr) THEN
+    	    	    	    	    BEGIN
+    	    	    	    	    	ptr = .tmpstr [DSC$A_POINTER];
+    	    	    	    	    	len = .tmpstr [DSC$W_LENGTH];
+    	    	    	    	    END;
+    	    	    	    	IF NOT .ignore_8bit AND NOT .context [MXP_V_HAS8BIT] THEN
+    	    	    	    	    IF .len GTRU 998 THEN   ! per MIME rules about 7bit
+    	    	    	    	    	context [MXP_V_HAS8BIT] = 1
+                                    ELSE
+    	    	    	    	    INCR cp FROM .ptr TO CH$PLUS (.ptr, .len-1) DO
+    	    	    	    	    BEGIN
+    	    	    	    	    	LOCAL ch : BYTE;
+    	    	    	    	    	ch = CH$RCHAR (.cp);
+    	    	    	    	    	IF (.ch AND %X'80') EQLU %X'80' OR
+    	    	    	    	    	   (.ch LSSU %C' ' AND .ch NEQU %CHAR (9)) THEN
+    	    	    	    	    	BEGIN
+    	    	    	    	    	    context [MXP_V_HAS8BIT] = 1;
+    	    	    	    	    	    EXITLOOP;
+    	    	    	    	    	END;
+    	    	    	    	    END;
+    	    	    	    	INIT_SDESC (dsc, .len, .ptr);
+    	    	    	    	MX_MSG_ADD_TEXT (PCTX, STR);
+    	    	    	    END;
+    	    	    	    MX_FILE_CLOSE (.UNIT);
+    	    	    	END;
+    	    	    	DO_SIGNATURE = 0;
+    	    	    END;
+
+    	    	IF .WAS_BIO THEN
+    	    	BEGIN
+    	    	    $DISCONNECT (RAB=INRAB);
+    	    	    INRAB [RAB$V_BIO] = 1;
+    	    	    $CONNECT (RAB=INRAB);
+    	    	END;
+		END;	!IF .do_base64_encode....
+
+	    	XTRACE ('%MXDBG, Calling MX_MSG_SEND!AS...',
+    	    	    (IF .CONTEXT [MXP_V_HAS8BIT] THEN %ASCID' [8bit set]' ELSE blank_line_d));
+    	    	BEGIN
+    	    	    LOCAL FLAGS;
+    	    	    FLAGS = .CONTEXT [MXP_V_HAS8BIT];
+    	    	    IF .CONTEXT [MXP_V_DSN_HDRSONLY] THEN FLAGS = .FLAGS OR 2;
+    	    	    IF .CONTEXT [MXP_V_DSN_FULL] THEN FLAGS = .FLAGS OR 4;
+                    IF .ignore_8bit THEN FLAGS = .FLAGS OR 8;
+    	    	    STATUS = MX_MSG_SEND (PCTX, FLAGS);
+    	    	END;
+	    	XTRACE ('%MXDBG, MX_MSG_SEND status = !UL', .status);
+
+		IF .status
+		THEN
+		    PUT_MSG_FAO (MX__MAIDLVR, 1, .context [MXP_L_ENTNUM]);
+
+    	    	FREE_STRINGS (TOSTR, SIGFILE,
+    	    	    TMPSTR, SUBJ, ORIG_TO, ORIG_CC, ORIG_SENDER, STR,
+    	    	    NODENAM, TMP2);
+
+    	    	IF .DEBUG THEN MX_FILE_CLOSE (.TRACE_UNIT);
+
+		IF (.context [MXP_L_IDENTIFIERS])
+		THEN
+		    free_identifiers_memory (context [MXP_L_IDENTIFIERS]);
+
+    	    	IF .context [MXP_L_CSCVT_CTX] NEQU 0 THEN
+    	    	    CHARCONV_END (context [MXP_L_CSCVT_CTX]);
+    	    	LIB$FREE_VM (%REF (MXP_S_MXPDEF), CONTEXT);
+    	    	CONTEXT = 0;
+    	    	IF NOT .STATUS THEN
+    	    	BEGIN
+                    BIND s = STATUS : BLOCK [,BYTE];
+	    	    XTRACE ('%MXDBG, Exiting with error !UL', .status);
+                    IF .s [STS$V_FAC_NO] EQLU MX$_FACILITY THEN
+                        SIGNAL (.status, 0)
+                    ELSE
+    	    	        SIGNAL (.STATUS);
+    	    	    RETURN .STATUS;
+    	    	END;
+		XTRACE ('%MXDBG, Exiting with success!');
+    	    END;
+!
+!	no parameters (IOSUBS)
+!
+    	[LNK_C_OUT_DEACCESS] :
+    	    IF .CONTEXT NEQA 0 THEN
+    	    BEGIN
+    	    	BIND
+    	    	    DEBUG   	= CONTEXT [MXP_L_DEBUG],
+    	    	    TRACE_UNIT	= CONTEXT [MXP_L_TUNIT];
+
+    	    	XTRACE ('%MXDBG, [LNK_C_OUT_DEACCESS]');
+                MX_MSG_CANCEL (CONTEXT [MXP_L_PCTX]);
+    	    	FREE_STRINGS (CONTEXT [MXP_Q_ORIG_SENDER],
+    	    	    CONTEXT [MXP_Q_ORIG_TO], CONTEXT [MXP_Q_ORIG_CC],
+    	    	    CONTEXT [MXP_Q_SUBJECT], CONTEXT [MXP_Q_TOSTR],
+		    CONTEXT [MXP_Q_FDL_STRING], context [MXP_Q_MIME_BOUNDARY]);
+    	    	IF .DEBUG THEN MX_FILE_CLOSE (.TRACE_UNIT);
+
+		IF (.context [MXP_L_IDENTIFIERS])
+		THEN
+		    free_identifiers_memory (context [MXP_L_IDENTIFIERS]);
+
+    	    	IF .context [MXP_L_CSCVT_CTX] NEQU 0 THEN
+    	    	    CHARCONV_END (context [MXP_L_CSCVT_CTX]);
+    	    	LIB$FREE_VM (%REF (MXP_S_MXPDEF), CONTEXT);
+    	    	CONTEXT = 0;
+    	    END
+	   ELSE		DBGPRT ('[LNK_C_OUT_DEACCESS]: Null context');
+
+	[LNK_C_OUT_CKSEND] : DBGPRT ('[LNK_C_OUT_CKSEND]');
+
+    	[INRANGE] : 	DBGPRT ('%MXDBG, unknown code !UL (inrange)', .CODE);
+
+    	[OUTRANGE] :	DBGPRT ('%MXDBG, unknown code !UL (outrange)', .CODE);
+
+    TES;
+
+    SS$_NORMAL
+
+END; ! MAIL$PROTOCOL
+
+
+%SBTTL 'trim_blanks'
+ROUTINE trim_blanks (cp_a, len_a, flags) : NOVALUE = 
+BEGIN
+!++
+! FUNCTIONAL DESCRIPTION:
+!
+!   Trims leading and/or trailing blanks from a string.
+!   Tabs are treated as blanks.
+!
+!   flags<0,1,0> ==> trailing blanks
+!   flags<1,1,0> ==> leading blanks
+!
+! RETURNS:  	cond_value, longword (unsigned), write only, by value
+!
+! PROTOTYPE:
+!
+!   TRIM_BLANKS  cp, len, flags
+!
+! IMPLICIT INPUTS:  None.
+!
+! IMPLICIT OUTPUTS: None.
+!
+! COMPLETION CODES: None.
+!
+! SIDE EFFECTS:
+!
+!   None.
+!--
+    BIND
+    	cp  = .cp_a,
+    	len = .len_a	: WORD;
+
+    IF .flags<1,1,0> THEN
+    	WHILE .len GTRU 0 DO
+    	BEGIN
+    	    IF CH$RCHAR (.cp) NEQ %C' ' AND CH$RCHAR (.cp) NEQ %CHAR (9) THEN
+    	    	EXITLOOP;
+    	    len = .len - 1;
+    	    cp = CH$PLUS (.cp, 1);
+    	END;
+
+    IF .flags<0,1,0> THEN
+    	WHILE .len GTRU 0 AND (CH$RCHAR (CH$PLUS (.cp, .len-1)) EQL %C' ' OR CH$RCHAR (CH$PLUS (.cp, .len-1)) EQL %CHAR (9)) DO
+    	    len = .len - 1;
+
+END; ! trim_blanks
+
+%SBTTL 'is_from_tag'
+ROUTINE is_from_tag (cp_a, len_a) = 
+BEGIN
+!++
+! FUNCTIONAL DESCRIPTION:
+!
+!   Checks for presence of /FROM=something in string, updating the
+!   pointer and length to point to the "something" if the /FROM= is
+!   found.
+!
+!   String is assumed to be blank-trimmed before entry.  Comparisons
+!   are case-insensitive and conform to DCL-style parsing rules (blanks
+!   allowed around "/" and "=", ":" allowed in place of "=").
+!
+! RETURNS:  	1 or 0.
+!
+! PROTOTYPE:
+!
+!   IS_FROM_TAG  cp, len
+!
+! IMPLICIT INPUTS:  None.
+!
+! IMPLICIT OUTPUTS: None.
+!
+! COMPLETION CODES: 1 = yes, 0 = no.
+!
+! SIDE EFFECTS:
+!
+!   None.
+!--
+    BIND
+    	xcp  = .cp_a,
+    	xlen = .len_a	: WORD;
+
+    LOCAL
+    	cp,
+    	len : WORD;
+
+    cp = .xcp;
+    len = .xlen;
+    IF .len LSSU 6 THEN RETURN 0;
+    IF CH$RCHAR (.cp) NEQ %C'/' THEN RETURN 0;
+    cp = CH$PLUS (.cp, 1);
+    len = .len - 1;
+    trim_blanks (cp, len, 2);
+    IF .len LSSU 5 THEN RETURN 0;
+    IF CH$RCHAR (.cp) NEQ %C'F' AND CH$RCHAR (.cp) NEQ %C'f' THEN RETURN 0;
+    cp = CH$PLUS (.cp, 1); len = .len - 1;
+    IF CH$RCHAR (.cp) NEQ %C'R' AND CH$RCHAR (.cp) NEQ %C'r' THEN RETURN 0;
+    cp = CH$PLUS (.cp, 1); len = .len - 1;
+    IF CH$RCHAR (.cp) NEQ %C'O' AND CH$RCHAR (.cp) NEQ %C'o' THEN RETURN 0;
+    cp = CH$PLUS (.cp, 1); len = .len - 1;
+    IF CH$RCHAR (.cp) NEQ %C'M' AND CH$RCHAR (.cp) NEQ %C'm' THEN RETURN 0;
+    cp = CH$PLUS (.cp, 1); len = .len - 1;
+    trim_blanks (cp, len, 2);
+    IF .len LSSU 1 THEN RETURN 0;
+    IF CH$RCHAR (.cp) NEQ %C'=' AND CH$RCHAR (.cp) NEQ %C':' THEN RETURN 0;
+    cp = CH$PLUS (.cp, 1); len = .len - 1;
+    trim_blanks (cp, len, 2);
+    IF .len LSSU 1 THEN RETURN 0;
+
+    xcp = .cp;
+    xlen = .len;
+
+    1
+
+END; ! is_from_tag
+
+%SBTTL 'is_folder_name'
+GLOBAL ROUTINE is_folder_name (cp_a, len_a) = 
+BEGIN
+!++
+! FUNCTIONAL DESCRIPTION:
+!
+!   description
+!
+! RETURNS:  	cond_value, longword (unsigned), write only, by value
+!
+! PROTOTYPE:
+!
+!   x
+!
+! IMPLICIT INPUTS:  None.
+!
+! IMPLICIT OUTPUTS: None.
+!
+! COMPLETION CODES:
+!
+!   SS$_NORMAL:	    	normal successful completion.
+!
+! SIDE EFFECTS:
+!
+!   None.
+!--
+    BIND
+    	xcp  = .cp_a,
+    	xlen = .len_a	: WORD;
+    LOCAL
+    	cp,
+    	len : WORD;
+    BIND valid_chars = %ASCID'abcdefghijklmnopqrstuvxwyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-_' : BLOCK [,BYTE];
+
+    cp = .xcp;
+    len = .xlen;
+    IF .len LEQU 1 OR .len GTRU 40 OR CH$RCHAR (.cp) NEQ %C'+' THEN RETURN 0;
+    DO
+    BEGIN
+    	cp = CH$PLUS (.cp, 1);
+    	len = .len - 1;
+    	IF CH$FAIL (CH$FIND_CH (.valid_chars [DSC$W_LENGTH], .valid_chars [DSC$A_POINTER], CH$RCHAR (.cp))) THEN RETURN 0;
+    END
+    UNTIL .len LEQU 1;
+
+    1
+
+END;    
+
+%SBTTL 'encode_string'
+ROUTINE encode_string (qpcode, in_a, out_a, csnlen, csname_a, debug, trace_unit) : NOVALUE = 
+BEGIN
+!++
+! FUNCTIONAL DESCRIPTION:
+!
+!   description
+!
+! RETURNS:  	cond_value, longword (unsigned), write only, by value
+!
+! PROTOTYPE:
+!
+!   x
+!
+! IMPLICIT INPUTS:  None.
+!
+! IMPLICIT OUTPUTS: None.
+!
+! COMPLETION CODES:
+!
+!   SS$_NORMAL:	    	normal successful completion.
+!
+! SIDE EFFECTS:
+!
+!   None.
+!--
+    BIND
+    	inreal	= .in_a	    : BLOCK [,BYTE];
+
+    LOCAL
+    	tmp 	: BLOCK [DSC$K_S_BLN,BYTE],
+    	dsc 	: BLOCK [DSC$K_S_BLN,BYTE],
+    	indsc	: BLOCK [DSC$K_S_BLN,BYTE],
+    	pfx 	: BLOCK [DSC$K_S_BLN,BYTE],
+    	encbuf	: VECTOR [60,BYTE],
+    	pfxbuf	: VECTOR [64,BYTE],
+    	inptr,
+    	inremain,
+    	len,
+    	status;
+
+    INIT_DYNDESC (tmp);
+    
+    inremain = .inreal [DSC$W_LENGTH];
+    inptr    = .inreal [DSC$A_POINTER];
+
+    INIT_SDESC (pfx, %ALLOCATION (pfxbuf), pfxbuf);
+    $FAO (%ASCID'=?!AD?Q?', pfx [DSC$W_LENGTH], pfx, .csnlen, .csname_a);
+
+    WHILE .inremain GTRU 0 DO
+    BEGIN
+    	XTRACE ('inremain=!UL', .inremain);
+    	len = MINU (.inremain, 40);
+    	WHILE .len GTRU 0 DO
+    	BEGIN
+    	    INIT_SDESC (indsc, .len, .inptr);
+    	    INIT_SDESC (dsc, %ALLOCATION (encbuf), encbuf);    	    	
+    	    status = QP_ENCODE_STRING (.qpcode, indsc, dsc [DSC$W_LENGTH], dsc);
+    	    XTRACE ('  len=!UL, status=!XL', .len, .status);
+    	    IF .status THEN
+    	    	EXITLOOP;
+    	    len = .len - 1;
+    	END;
+    	IF .len EQLU 0 THEN
+    	BEGIN
+    	    STR$COPY_DX (.out_a, .in_a);
+    	    FREE_STRINGS (tmp);
+    	    RETURN;
+    	END;
+    	inremain = .inremain - .len;
+    	inptr = CH$PLUS (.inptr, .len);
+    	STR$APPEND (tmp, pfx);
+    	STR$APPEND (tmp, dsc);
+    	STR$APPEND (tmp, (IF .inremain GTRU 0 THEN %ASCID'?= ' ELSE %ASCID'?='));
+    	XTRACE ('Subject now: !AS', tmp);
+    END;
+
+    STR$COPY_DX (.out_a, tmp);
+
+    FREE_STRINGS (tmp);
+
+END;  ! encode_string
+
+
+CALL_MXP_RTN (MSG_INIT, (CTXNUM_A, ENTNUM_A), (.CTXNUM_A, .ENTNUM_A));
+CALL_MXP_RTN (MSG_SET_FROM, (CTXNUM_A, ENVFROM_A), (.CTXNUM_A, .ENVFROM_A));
+CALL_MXP_RTN (MSG_ADD_ADDRESS, (CTXNUM_A, ADDR_A, NTFY_A), (.CTXNUM_A, .ADDR_A, .NTFY_A));
+CALL_MXP_RTN (MSG_ADD_HEADER, (CTXNUM_A, CODE_A, HDR_A), (.CTXNUM_A, .CODE_A, .HDR_A));
+CALL_MXP_RTN (MSG_ADD_TEXT, (CTXNUM_A, TEXT_A), (.CTXNUM_A, .TEXT_A));
+CALL_MXP_RTN (MSG_SEND, (CTXNUM_A, has8bit_A), (.CTXNUM_A, .has8bit_A));
+CALL_MXP_RTN (MSG_CANCEL, (CTXNUM_A), (.CTXNUM_A));
+
+END
+ELUDOM

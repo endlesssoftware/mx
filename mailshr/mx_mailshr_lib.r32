@@ -1,0 +1,171 @@
+!+
+!  MX_MAILSHR.R32  -  Macros and literals for MX_MAILSHR
+!
+! Copyright (c) 2008, Matthew Madison.
+! 
+! All rights reserved.
+! 
+! Redistribution and use in source and binary forms, with or without
+! modification, are permitted provided that the following conditions
+! are met:
+! 
+!     * Redistributions of source code must retain the above
+!       copyright notice, this list of conditions and the following
+!       disclaimer.
+!     * Redistributions in binary form must reproduce the above
+!       copyright notice, this list of conditions and the following
+!       disclaimer in the documentation and/or other materials provided
+!       with the distribution.
+!     * Neither the name of the copyright owner nor the names of any
+!       other contributors may be used to endorse or promote products
+!       derived from this software without specific prior written
+!       permission.
+! 
+! THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
+! "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
+! LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
+! A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
+! OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
+! SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
+! LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
+! DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
+! THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
+! (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
+! OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+!
+!-
+    LIBRARY 'MX_SRC_COMMON:MX';
+    LIBRARY 'MX_SRC_COMMON:FIELDS';
+
+    !
+    !  Symbols for TLD item codes.
+    !
+    LITERAL
+	CNF_C_MSGTYPE	= 1,
+	CNF_C_MRS   	= 2,
+	CNF_C_MRN   	= 3,
+	CNF_C_FSZ   	= 4,
+	CNF_C_BKS   	= 5,
+	CNF_C_GBC   	= 6,
+	CNF_C_FOP   	= 7,
+	CNF_C_AOP   	= 8,
+	CNF_C_FALQ  	= 9,
+	CNF_C_TAG   	= 18,
+	CNF_C_DXQ   	= 10,
+	CNF_C_XALQ  	= 11,
+	CNF_C_RFO   	= 12,
+	CNF_C_ATR   	= 13,
+	CNF_C_LRL   	= 14,
+	CNF_C_BKZ   	= 15,
+	CNF_C_HSZ   	= 16,
+	CNF_C_MRZ   	= 17;
+
+    MACRO
+	PUT_OUT (CTRSTR) [] =
+	    BEGIN
+	    IF (.CONTEXT[MXP_V_SHOW_ADDR])
+	    THEN
+	    	BEGIN
+	    	    EXTERNAL ROUTINE
+	    	    	LIB$PUT_OUTPUT	: ADDRESSING_MODE (GENERAL)
+	    	    %IF NOT %NULL (%REMAINING) %THEN
+	    	    	    ,
+	    	    	    LIB$SYS_FAO 	: ADDRESSING_MODE (GENERAL),
+	    	    	    STR$FREE1_DX	: ADDRESSING_MODE (GENERAL);
+	    	    	LOCAL
+	    	    	    __DBGFAO    : BLOCK [DSC$K_S_BLN,BYTE];
+	    	    	$INIT_DYNDESC (__DBGFAO);
+	    	    	LIB$SYS_FAO (%ASCID CTRSTR, 0, __DBGFAO, %REMAINING);
+	    	    	LIB$PUT_OUTPUT (__DBGFAO);
+	    	    	STR$FREE1_DX (__DBGFAO);
+	    	    %ELSE
+	    	    	; LIB$PUT_OUTPUT (%ASCID CTRSTR);
+	    	    %FI
+	    	END;
+	    END
+	%,
+    	XTRACE (STR) [] =
+    	BEGIN
+    	    DBGPRT (STR %IF NOT %NULL (%REMAINING) %THEN ,%REMAINING %FI);
+    	    TRACE (STR %IF NOT %NULL (%REMAINING) %THEN ,%REMAINING %FI);
+    	END%;
+
+    MACRO
+	PUT_ERRMSG (code) =
+	    BEGIN
+	    LOCAL _msg : VECTOR[2,LONG];
+	    _msg[0] = 1;
+	    _msg[1] = code;
+	    $PUTMSG (MSGVEC = _msg);		!Display the message
+	    END%,
+	PUT_MSG (code) =
+	    BEGIN
+	    IF (.CONTEXT[MXP_V_SHOW_INFO])
+	    THEN
+		BEGIN
+		LOCAL _msg : VECTOR[2,LONG];
+		_msg[0] = 1;
+		_msg[1] = code;
+		$PUTMSG (MSGVEC = _msg);		!Display the message
+	    	END;
+	    END%,
+	PUT_MSG_FAO (code, cnt, arg) =
+	    BEGIN
+	    IF (.CONTEXT[MXP_V_SHOW_INFO])
+	    THEN
+		BEGIN
+		LOCAL _msg : VECTOR[4,LONG];
+		_msg[0] = 3;
+		_msg[1] = code;
+		_msg[2] = cnt;
+		_msg[3] = arg;
+		$PUTMSG (MSGVEC = _msg);		!Display the message
+	    	END;
+	    END%;
+
+    MACRO
+	CALL_MXP_RTN (rtn, args, args2) =
+            GLOBAL ROUTINE %NAME('MX_', rtn) args = RETURN %NAME('MXP_', rtn) args2%;
+
+    LITERAL
+    	MXP_S_LCLHST	= 256,
+    	MXP_S_CSNAME	= 32;
+
+    _DEF (MXP)
+    	MXP_L_PCTX  	    = _LONG,
+    	MXP_L_ENTNUM	    = _LONG,
+    	MXP_L_FLAGS 	    = _LONG,
+    	_OVERLAY (MXP_L_FLAGS)
+    	    MXP_V_DECNET    = _BIT,
+    	    MXP_V_DIDONE    = _BIT,
+    	    MXP_V_HAS8BIT   = _BIT,
+    	    MXP_V_DSN_HDRSONLY = _BIT,
+    	    MXP_V_DSN_FULL  = _BIT,
+    	_ENDOVERLAY
+    	MXP_Q_ORIG_SENDER   = _QUAD,
+    	MXP_Q_ORIG_TO	    = _QUAD,
+    	MXP_Q_ORIG_CC	    = _QUAD,
+    	MXP_Q_SUBJECT	    = _QUAD,
+    	MXP_Q_LCLHST	    = _QUAD,
+    	MXP_Q_TOSTR 	    = _QUAD,
+    	MXP_L_DEBUG 	    = _LONG,
+    	MXP_L_TUNIT 	    = _LONG,
+    	MXP_L_NONSPECCNT    = _LONG,
+	MXP_L_FORTYPE	    = _LONG,	! gg++  foreign type
+	MXP_L_SHOW_INFO	    = _LONG,
+	_OVERLAY (MXP_L_SHOW_INFO)
+	    MXP_V_SHOW_ADDR = _BIT,
+	    MXP_V_SHOW_INFO = _BIT,
+	_ENDOVERLAY
+	MXP_Q_FDL_STRING    = _QUAD,		!The FDL string
+	MXP_Q_MIME_BOUNDARY = _QUAD,		!The MIME boundary string
+	MXP_L_FOREIGN	    = _LONG,		!/FOREIGN was given
+	MXP_L_OPEN_RAB	    = _LONG,		!Address of RAB passed in
+	MXP_L_IDENTIFIERS   = _LONG,		!Address of identifier list
+    	MXP_L_NTFYFLGS	    = _LONG,
+    	MXP_L_CSCVT_CTX	    = _LONG,
+    	MXP_L_CS_CONVERTED  = _LONG,
+    	MXP_W_CSNAME	    = _WORD,
+    	MXP_T_LCLHST	    = _BYTES (MXP_S_LCLHST),
+    	MXP_T_CSNAME	    = _BYTES (MXP_S_CSNAME)
+    _ENDDEF (MXP);

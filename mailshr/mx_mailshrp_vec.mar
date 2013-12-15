@@ -1,0 +1,276 @@
+	.TITLE	MX_MAILSHRP_VEC
+	.IDENT	/V1.4-2/
+
+;++
+;
+; FACILITY: 	Message Exchange VMS MAIL Interface
+;
+; ABSTRACT: 	This module defines the exec-mode dispatch vectors for the
+;               MX_MAILSHRP privileged shareable image.
+;
+; AUTHOR:   	M. Madison
+;
+; Copyright (c) 2008, Matthew Madison.
+; 
+; All rights reserved.
+; 
+; Redistribution and use in source and binary forms, with or without
+; modification, are permitted provided that the following conditions
+; are met:
+; 
+;     * Redistributions of source code must retain the above
+;       copyright notice, this list of conditions and the following
+;       disclaimer.
+;     * Redistributions in binary form must reproduce the above
+;       copyright notice, this list of conditions and the following
+;       disclaimer in the documentation and/or other materials provided
+;       with the distribution.
+;     * Neither the name of the copyright owner nor the names of any
+;       other contributors may be used to endorse or promote products
+;       derived from this software without specific prior written
+;       permission.
+; 
+; THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
+; "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
+; LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
+; A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
+; OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
+; SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
+; LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
+; DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
+; THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
+; (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
+; OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+;
+; MODIFICATION HISTORY:
+;
+;   24-JUN-1991	V1.0	Madison	    Initial coding.
+;   06-OCT-1992 V1.1	Madison	    Update for Alpha.
+;   10-MAR-1993 V1.2	Goatley     Changed names from MX_* to MXP_*.
+;   06-JAN-1997	V1.3	Madison	    Eliminate need for ARCH_DEFS.
+;   28-APR-1997	V1.4	Madison	    MSG_SEND now take 2 args.
+;   22-APR-1998	V1.4-1	Madison	    Change bug check to ENOTME branch.
+;   12-JUL-1998 V1.4-2	Madison	    MSG_ADD_ADDRESS now takes 3 args.
+;
+;--
+	.NTYPE	R22TYPE,R22		; get symbol type for "R22"
+R22TYPE	=	<R22TYPE@-4&^XF>-5	; type 5 = register
+	.IF	EQ,R22TYPE
+EVAX	=	1
+BIGPAGE	=	1
+ADDRESSBITS =	32
+	.ENDC
+;
+	.LIBRARY "SYS$LIBRARY:LIB.MLB"
+
+;	DEFINE_SERVICE Name,Number_of_Arguments,Mode
+;
+
+	.MACRO	DEFINE_SERVICE,NAME,NARG=0
+
+.IF	DF,EVAX
+	.PSECT	$EXEC_TBL,QUAD,NOWRT,NOEXE
+	.ADDRESS NAME
+.IFF
+	.PSECT	$$$TRANSFER_VECTOR,PAGE,NOWRT,EXE,PIC
+	.ALIGN	QUAD			; Align entry points for speed and style
+	.TRANSFER	NAME		; Define name as universal symbol for entry
+	.MASK	NAME			; Use entry mask defined in main routine
+	CHME	#<ECODE_BASE+EXEC_COUNTER> ; Change to executive mode and execute
+	RET				; Return
+
+	.PSECT	EXEC_NARG,BYTE,NOWRT,EXE,PIC
+	.BYTE	NARG			; Define number of required arguments
+
+	.PSECT	USER_EXEC_DISP1,BYTE,NOWRT,EXE,PIC
+	.SIGNED_WORD	2+NAME-ECASE_BASE	; Make entry in exec mode CASE table
+.ENDC
+	EXEC_COUNTER=EXEC_COUNTER+1	; Advance counter
+	.ENDM	DEFINE_SERVICE		;
+;
+;	Equated Symbols
+;
+
+	$PHDDEF				; Define process header offsets
+	$PLVDEF				; Define PLV offsets and values
+	$SSDEF				; Define system status codes
+;
+;	Initialize counters for change mode dispatching codes
+;
+EXEC_COUNTER=0				; Exec code counter
+
+;
+;	Own Storage
+;
+.IF	DF,EVAX
+	.PSECT	$EXEC_TBL,QUAD,NOWRT,NOEXE
+EXEC_ROUTINES:
+	.PSECT	$KERNEL_TBL,QUAD,NOWRT,NOEXE
+KERNEL_ROUTINES:
+.IFF
+	.PSECT	EXEC_NARG,BYTE,NOWRT,EXE,PIC
+EXEC_NARG:				; Base of byte table containing the
+					;  number of required arguments.
+.ENDC
+	.PAGE
+	.SBTTL	Transfer Vector and Service Definitions
+;++
+; The use of transfer vectors to effect entry to the user written system services
+; enables some updating of the shareable image containing them without necessitating
+; a re-link of all programs that call them.  The PSECT containinng the transfer
+; vector will be positioned at the lowest virtual address in the shareable image
+; and so long as the transfer vector is not re-ordered, programs linked with
+; one version of the shareable image will continue to work with the next.
+;
+; Thus as additional services are added to a privileged shareable image, their
+; definitions should be added to the end of the following list to ensure that
+; programs using previous versions of it will not need to be re-linked.
+; To completely avoid relinking existing programs the size of the privileged
+; shareable image must not change so some padding will be required to provide
+; the opportunity for future growth.
+;--
+	DEFINE_SERVICE	MXP_MSG_INIT,2
+	DEFINE_SERVICE	MXP_MSG_SET_FROM,2
+	DEFINE_SERVICE	MXP_MSG_ADD_ADDRESS,3
+	DEFINE_SERVICE	MXP_MSG_ADD_HEADER,3
+	DEFINE_SERVICE	MXP_MSG_ADD_TEXT,2
+	DEFINE_SERVICE	MXP_MSG_SEND,2
+	DEFINE_SERVICE	MXP_MSG_CANCEL,1
+;
+; The base values used to generate the dispatching codes should be negative for
+; user services and must be chosen to avoid overlap with any other privileged
+; shareable images that will be used concurrently.  Their definition is
+; deferred to this point in the assembly to cause their use in the preceding
+; macro calls to be forward references that guarantee the size of the change
+; mode instructions to be four bytes.  This satisfies an assumption that is
+; made by for services that have to wait and be retried.  The PC for retrying
+; the change mode instruction that invokes the service is assumed to be 4 bytes 
+; less than that saved in the change mode exception frame.  Of course, the particular 
+; service routine determines whether this is possible.
+;
+; (1010 = MX [in roman numerals])
+;
+ECODE_BASE=-1010			; Base CHME code value for these services
+	.PAGE
+	.SBTTL	Change Mode Dispatcher Vector Block
+;++
+; This vector is used by the image activator to connect the privileged shareable
+; image to the VMS change mode dispatcher.  The offsets in the vector are self-
+; relative to enable the construction of position independent images.  The system
+; version number will be used by the image activator to verify that this shareable
+; image was linked with the symbol table for the current system.
+;
+;			Change Mode Vector Format		
+;
+;	   +------------------------------------------+
+;	   !             Vector Type Code             !   PLV$L_TYPE
+;	   !             (PLV$C_TYP_CMOD)             !
+;	   +------------------------------------------+
+;	   !                Reserved                  !
+;	   !                                          !
+;	   +------------------------------------------+
+;	   !      Kernel Mode Dispatcher Offset       !   PLV$L_KERNEL
+;	   !                                          !
+;	   +------------------------------------------+
+;	   !         Exec Mode Entry Offset           !   PLV$L_EXEC
+;	   !                                          !
+;	   +------------------------------------------+
+;	   !	   User Rundown Service Offset        !   PLV$L_USRUNDWN
+;	   !                                          !
+;	   +------------------------------------------+
+;	   !                Reserved                  !
+;	   !                                          !
+;	   +------------------------------------------+
+;	   !          RMS Dispatcher Offset           !   PLV$L_RMS  
+;	   !                                          !
+;	   +------------------------------------------+
+;	   !             Address Check                !   PLV$L_CHECK
+;	   !                                          !
+;	   +------------------------------------------+
+;
+;
+;
+	.PSECT	USER_SERVICES,PAGE,VEC,PIC,NOWRT,EXE
+
+.IF	DF,EVAX
+PVECT:	.BLKB	PLV$S_PLVDEF
+PVECT_END=.
+
+.=PVECT+PLV$L_TYPE
+	.LONG	PLV$C_TYP_CMOD
+.=PVECT+PLV$L_KERNEL_ROUTINE_COUNT
+	.LONG	0
+.=PVECT+PLV$PS_KERNEL_ROUTINE_LIST
+	.ADDRESS KERNEL_ROUTINES
+.=PVECT+PLV$L_EXEC_ROUTINE_COUNT
+	.LONG	EXEC_COUNTER
+.=PVECT+PLV$PS_EXEC_ROUTINE_LIST
+	.ADDRESS EXEC_ROUTINES
+.=PVECT+PLV$PS_EXEC_ROUTINE_FLAGS
+	.LONG	0
+
+.IFF
+	.LONG	PLV$C_TYP_CMOD		; Set type of vector to change mode dispatcher
+	.LONG	0			; Reserved
+	.LONG	0			; No kernel mode dispatcher
+	.LONG	EXEC_DISPATCH-.		; Offset to executive mode dispatcher
+	.LONG	0			; No user rundown service
+	.LONG	0			; Reserved.
+	.LONG	0			; No RMS dispatcher
+	.LONG	0			; Address check - PIC image
+ 
+	.PAGE
+	.SBTTL	Executive Mode Dispatcher
+;++
+; Input Parameters:
+;
+;	(SP) - Return address if bad change mode value
+;
+;	 R0  - Change mode argument value.
+;
+;	 AP  - Argument pointer existing when the change
+;	       mode instruction was executed.
+;
+;	 FP  - Address of minimal call frame to exit
+;	       the change mode dispatcher and return to
+;	       the original mode.
+;--
+	.PSECT	USER_EXEC_DISP0,BYTE,NOWRT,EXE,PIC
+EACCVIO:				; Exec access violation
+	MOVZWL	#SS$_ACCVIO,R0		; Set access violation status code
+	RET				;  and return
+EINSFARG:				; Exec insufficient arguments.
+	MOVZWL	#SS$_INSFARG,R0		; Set status code and
+	RET				;  return
+ENOTME:	RSB				; RSB to forward request
+
+EXEC_DISPATCH::				; Entry to dispatcher
+	MOVAB	W^-ECODE_BASE(R0),R1	; Normalize dispatch code value
+	BLSS	ENOTME			; Branch if code value too low
+	CMPW	R1,#EXEC_COUNTER	; Check high limit
+	BGEQU	ENOTME			; Branch if out of range
+;
+; The dispatch code has now been verified as being handled by this dispatcher,
+; now the argument list will be probed and the required number of arguments
+; verified.
+;
+	MOVZBL	W^EXEC_NARG[R1],R1	; Get required argument count
+	MOVAL	@#4[R1],R1		; Compute byte count including arg count
+	IFNORD	R1,(AP),EACCVIO		; Branch if arglist not readable
+	CMPB	(AP),W^<EXEC_NARG-ECODE_BASE>[R0] ; Check for required number
+	BLSSU	EINSFARG		;  of arguments
+	MOVL	FP,SP			; Reset stack for service routine
+	CASEW	R0,-			; Case on change mode
+		-			; argument value
+		#ECODE_BASE,-		; Base value
+		#<EXEC_COUNTER-1>	; Limit value (number of entries)
+ECASE_BASE:				; Case table base address for DEFINE_SERVICE
+;
+;	Case table entries are made in the PSECT USER_EXEC_DISP1 by
+;	invocations of the DEFINE_SERVICE macro.  The three PSECTS, 
+;	USER_EXEC_DISP0,1,2 will be abutted in lexical order at link-time.
+;
+	.PSECT	USER_EXEC_DISP2,BYTE,NOWRT,EXE,PIC
+    	BRW 	ENOTME
+.ENDC
+ 	.END
