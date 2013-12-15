@@ -1,0 +1,5180 @@
+%TITLE 'SMTP_SERVER'
+MODULE SMTP_SERVER (IDENT='V3.11', MAIN=SMTP_SERVER,
+	ADDRESSING_MODE (EXTERNAL=LONG_RELATIVE, NONEXTERNAL=LONG_RELATIVE)) =
+BEGIN
+!++
+! FACILITY:     MX SMTP agent
+!
+! ABSTRACT:     MX SMTP server.
+!
+! MODULE DESCRIPTION:
+!
+!   This module contains the SMTP server.  It will interface with
+!   either CMU-Tek TCP or VMS/ULTRIX Connection's TCP, when linked
+!   with the appropriate TCP interface module.
+!
+! AUTHOR:	    M. Madison
+!
+! Copyright (c) 2008, Matthew Madison.
+! Copyright (c) 2012, Endless Software Solutions.
+! 
+! All rights reserved.
+! 
+! Redistribution and use in source and binary forms, with or without
+! modification, are permitted provided that the following conditions
+! are met:
+! 
+!     * Redistributions of source code must retain the above
+!       copyright notice, this list of conditions and the following
+!       disclaimer.
+!     * Redistributions in binary form must reproduce the above
+!       copyright notice, this list of conditions and the following
+!       disclaimer in the documentation and/or other materials provided
+!       with the distribution.
+!     * Neither the name of the copyright owner nor the names of any
+!       other contributors may be used to endorse or promote products
+!       derived from this software without specific prior written
+!       permission.
+! 
+! THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
+! "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
+! LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
+! A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
+! OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
+! SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
+! LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
+! DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
+! THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
+! (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
+! OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+!
+! CREATION DATE:    29-MAR-1990
+!
+! MODIFICATION HISTORY:
+!
+!   29-MAR-1990	V1.0	Madison	    Initial coding (partly from CMU-based code).
+!   03-APR-1990	V1.0-1	Madison	    Clean up a bit.
+!   13-APR-1990	V1.0-2	Madison	    Had to throw in CMU-specific CTO check.
+!   14-MAY-1990 V1.0-3	Madison	    Additional syntax checking.
+!   15-MAY-1990	V1.0-4	Madison	    Handle accept errors a bit better.
+!   03-OCT-1990	V1.1	Madison	    Add "with SMTP" to received hdrs.
+!   03-DEC-1990	V1.1-1	Madison	    Fix idiotic "." bug.
+!   05-DEC-1990	V1.2	Madison	    Add Kanji support.!
+!   13-DEC-1990	V1.2-1	Madison	    Wasn't cleaning up on accept failure.
+!   30-JAN-1991	V1.3	Madison	    Use NETLIB routines.
+!   05-FEB-1991	V1.3-1	Madison	    Add version reference to Received: hdr.
+!   02-MAR-1991	V1.4	Madison	    Add shutdown support.
+!   19-MAR-1991	V1.4-1	Madison	    Add VM debugging code.
+!   25-MAR-1991	V1.4-2	Madison	    Check LSNCTX before accepting a connection.
+!   28-MAR-1991	V1.5	Madison	    Don't let pending accepts interfere w/shuts.
+!   22-OCT-1991	V1.6	Madison	    Use new RCPTDEF structure, identify fakers.
+!   15-NOV-1991	V1.6-1	Madison	    New MEM RCPT rtns.
+!   25-NOV-1991	V1.6-2	Madison	    Error msg had wrong status value.
+!   07-FEB-1992	V1.7	Madison	    Add Received: line count.
+!   18-FEB-1992	V1.8	Madison	    Log startup/shutdown.
+!   12-FEB-1993 V1.9	Goatley     Rename FLQ_ locks & logicals to MX_FLQ_.
+!   03-MAY-1993 V1.10	Miller	    Don't strip trailing whitespace in message.
+!   10-JAN-1994 V1.11	Goatley     Reset debug flag if error opening file.
+!   21-JAN-1994 V1.11-1	Goatley     Allow omission of "@node" on RCPT TO:.
+!   25-JAN-1994 V1.11-2	Goatley     Allow [xx.xx.xx.xx] on HELO command.
+!   29-MAR-1994 V1.11-3	Goatley     Allow omission of quotes in <xx::yy@node>.
+!   31-MAR-1994 V1.11-4	Goatley     Fix upcase check on 1.11-3.
+!   20-APR-1994 V1.12	Altmayer    Include agent status codes for MCP STATUS
+!    5-MAY-1994 V1.13	Altmayer    Re-structure lock value block
+!   16-MAY-1994	V1.14	Altmayer    Correct decrement of STATUS_PARAM
+!    1-JUN-1994 V1.14-1 Altmayer    Add final status in exit message
+!   10-JUN-1994 V1.14-2	Goatley     Allow omission of <> on MAIL & RCPT.
+!   13-APR-1995 V1.15   Altmayer    Add support for MX_SMTP_PORT logical
+!   10-MAR-1996 V1.16	Goatley     Add date/time to debug output.
+!   13-MAR-1996 V1.16-1	Goatley     If Date: is missing, add one.
+!   24-SEP-1996 V1.16-2	Goatley     Handle headers longer than 64K bytes.
+!   27-OCT-1996 V1.16-3 Goatley	    Merge in Kanji support from Mizoguchi.
+!   29-DEC-1996	V2.0	Madison	    Update to NETLIB V2, reduce use of dynamic strings.
+!   28-JAN-1997	V2.0-1	Madison	    Integrate Hunter's EHLO changes.
+!   02-FEB-1997	V2.1	Madison	    RFC1854 pipelining.
+!   02-APR-1997	V2.2	Madison	    Relay checks.
+!   05-APR-1997	V2.2-1	Madison	    Improve error on relay refusal.
+!   09-APR-1997	V2.2-2	Madison	    Report 503 error on out-of-order EHLO.
+!   08-MAY-1997	V2.3	Madison	    Log spam.
+!    8-MAY-1997 V2.3-1	Goatley     Add "X-Date-Warning:" header.
+!   31-MAY-1997	V2.3-2	Madison	    Attempt to fix server hangs:
+!   	    	    	    	    	don't access ACCEPT_PENDING at
+!                                       AST & non-AST level.  Define
+!   	    	    	    	    	MX_SITE_DOM_EXPANSION as NL:
+!   	    	    	    	    	so we don't do synchronous
+!   	    	    	    	    	DNS lookups here.
+!    3-JUN-1997 V2.3-3	Goatley     Plug a few memory leaks.
+!   04-JUN-1997	V2.3-4	Madison	    Make sure listen backlog is non-zero.
+!   22-JUN-1997	V2.4	Madison	    Separate log file per process/stream.
+!   27-AUG-1997	V2.5	Madison	    Add license check.
+!   29-AUG-1997	V2.6	Madison	    New RCPT structure.
+!   05-SEP-1997	V2.7	Madison	    Additional anti-spam measures.
+!   10-SEP-1997 V2.7-1	Goatley     In LOG_SPAM, allow for domp_a = 0.
+!   17-SEP-1997 V2.7-2	Goatley     Add debug log entry separator (=======).
+!   23-SEP-1997 V2.7-3	Goatley     Fix LOG_SPAM call arguments when by header.
+!   29-SEP-1997 V2.7-4	Goatley     Log "invalid domain" rejections too.
+!				    Also, added %ASCID BINDs.
+!   05-OCT-1997	V2.7-5	Madison	    Invalid-domain rejection logical name now
+!   	    	    	    	    an MCP setting; periodic check for RESET.
+!    7-OCT-1997 V2.7-6	Goatley	    Make PRCNAM and PID GLOBAL for VERIFY_INIT.
+!   16-OCT-1997	V2.7-7	Madison	    Check RESET in main loop; eliminate timed check.
+!   17-NOV-1997 V2.8	Madison     Add "blacklist" checks.
+!   20-NOV-1997 V2.8-1	Goatley     Change norelay 551 msg, add norelay alarm.
+!   13-DEC-1997	V2.8-2	Madison	    Allow non-DNS local domains with domain verifications.
+!   24-APR-1998	V2.9	Madison	    Add connecting system's IP address to DNS rejection log;
+!   	    	    	    	    RBL check settings are now in SMTP_INFO.
+!   17-MAY-1998	V2.10	Madison	    Integrate SPAMFILTER functionality.
+!   14-JUN-1998	V2.11	Madison	    Add local-address check.  Delay spam rejection until
+!   	    	    	    	    getting RCPT TOs.  Don't create queue entry when spam
+!   	    	    	    	    identified by headers.
+!   20-JUN-1998	V2.11-1	Madison	    Shorten ident string.
+!   26-JUN-1998	V2.11-2	Madison	    Add norelay bypass.
+!   27-JUN-1998	V3.0	Madison	    Add new ESMTP parameters.
+!   29-JUN-1998	V3.1	Madison	    Add enhanced status codes.
+!   16-JUL-1998	V3.1-1	Madison	    Log forwarded spam.
+!   21-JUL-1998	V3.1-2	Madison	    Add IP address to received-from-mta info; improved
+!                                   messages on syntax errors; reject null messages.
+!   28-JUL-1998	V3.1-3	Madison	    Remove duplicate IP address from Received header.
+!   03-AUG-1998	V3.2	Madison	    More thorough message size checks.
+!   05-AUG-1998	V3.2-1	Madison	    Fix logging of RBLed messages.
+!   29-AUG-1998	V3.3	Madison	    Add ETRN support.
+!   04-SEP-1998	V3.4	Madison	    Configuratble 220 banner.
+!   13-NOV-1999	V3.4-1	Madison	    Skip RBL check on inside addresses, put
+!   	    	    	    	    RBL domain into rejection reply.
+!   27-NOV-1999	V3.4-2	Madison	    Fix ACCVIOs by protecting main-line access
+!   	    	    	    	    to queues shared with ASTs.
+!   30-NOV-1999	V3.4-3	Madison	    Fix accept lockout.
+!   05-DEC-1999	V3.4-4	Madison	    Hold onto envelope until after message text
+!   	    	    	    	    is received, so rcpt count isn't zero when
+!   	    	    	    	    updating message size.
+!   26-NOV-2000	V3.5	Madison	    Multiple RBLs.
+!   17-DEC-2000	V3.6	Madison	    AUTH PLAIN and AUTH LOGIN support.
+!   28-JAN-2001 V3.6-1  Madison     Log RFC822 header rejection rule as reason.
+!   03-FEB-2001 V3.6-2  Madison     Log IP address of client in debug log.
+!   25-FEB-2001 V3.6-3  Madison     Differentiate between src and dest domains for IS_LOCAL_DOMAIN.
+!   24-OCT-2001 V3.6-4  Madison     Fix sender usage in header LOG_SPAM call.
+!   20-NOV-2001 V3.6-5  Madison     Fix handling of AUTH PLAIN with no initial-response.
+!   07-APR-2002 V3.6-6  Madison     Fix logging of header-combination rejections.
+!   20-APR-2003 V3.7    Madison     Add memory debugging, move queue entry into context.
+!   16-JUL-2003 V3.8    Madison     Add MX_SMTP_SERVER_ADDRESS logical name for address binding.
+!   20-SEP-2003 V3.9    Madison     Strengthen invalid-domain check to handle VeriSign's DNS redirection.
+!   10-NOV-2004 V3.10   Madison     IA64 support, HELO check callout, force authentication.
+!   06-MAY-2010 V3.10-1 Sneddon     Now dragging NETLIB from NETLIB_DIR.
+!   12-MAR-2012 V3.11   Sneddon	    Add STARTTLS (per RFC3207).
+!--
+    LIBRARY 'SYS$LIBRARY:STARLET';
+    LIBRARY 'NETLIB_DIR:NETLIBDEF';
+    LIBRARY 'MX_SRC_COMMON:MX';
+    LIBRARY 'MX_SRC_COMMON:MX_LCLDEFS';
+    LIBRARY 'MX_SRC_COMMON:FLQ';
+    LIBRARY 'SMTP_CMDS';
+    LIBRARY 'SMTP_CODES';
+    LIBRARY 'MX_SRC_COMMON:FIELDS';
+    LIBRARY 'MX_SRC_COMMON:AGENT';
+    LIBRARY 'MX_SRC_COMMON:IPC';
+    LIBRARY 'MX_SRC_COMMON:SSL';
+    LIBRARY 'MX_SRC_COMMON:STATUS';
+
+    FORWARD ROUTINE
+        dbgmem_init : NOVALUE,
+        dbgmem_check : NOVALUE,
+	SMTP_SERVER,
+	EXIT_HANDLER,
+	ACCEPT_CONNECTION,
+	ACCEPT_AST,
+    	QUEUE_ACCEPT_CONNECTION,
+        do_retry_accept,
+    	DO_ACCEPT_CHECK,
+    	ACCEPT1_AST,
+    	DO_RBL_CHECK,
+    	DO_NEXT_RBL_CHECK,
+    	DO_RBL_AST  	: NOVALUE,
+    	DO_RBL_COMPLETION,
+	SMTP_START,
+	START_AST,
+	READ_CMD,
+	READ_AST,
+	PROCESS_CMD,
+        hello_check_ast : NOVALUE,
+    	HELO_VERIFY_AST	: NOVALUE,
+    	MAIL_VERIFY_AST : NOVALUE,
+        hello_check,
+    	HELO_VERIFY,
+    	MAIL_VERIFY,
+    	auth_begin,
+    	auth_read,
+    	auth_authenticate,
+        auth_plain_finish,
+    	auth_plain,
+    	auth_login_username,
+    	auth_login_password,
+    	userauth_completion,
+%IF %VARIANT %THEN
+	PRINT_TO_LOG,
+%FI
+	tls_reset	: NOVALUE,
+	CLEANUP,
+	SND_AST,
+    	AUTH1_AST,
+    	AUTH2_AST,
+    	login_ast,
+    	userauth_ast,
+    	authfail_notify,
+    	authfail_tmo_ast,
+	BLKG_AST,
+	ENQ1_AST,
+	ENQ1A_AST,
+	ENQ2_AST,
+	CMD_AST,
+	CMD2_AST,
+	CMD3_AST,
+    	LOG_SPAM    	: NOVALUE,
+    	free_paraminfo	: NOVALUE,
+    	dump_server_info : NOVALUE;
+
+    EXTERNAL ROUTINE
+	IS_SPAM, IS_LOCAL_DOMAIN,
+	PARSE_SMTP_CMD, VERIFY_INIT, VERIFY_BEGIN, VERIFY_ADDRESS, VERIFY_END,
+    	IS_SPAM_TO, IS_SPAM_HEADER, VALIDATE_DOMAIN, VERIFY_RESET_CHECK,
+    	IS_SPAM_HEADER_COMBINATION, IS_LOCAL_ADDRESS, ETRN_CHECK,
+    	accept_check_init, accept_check, accept_check_hello, accept_check_cleanup,
+    	auth_cram_enabled, auth_plain_enabled,
+    	user_authenticate,
+    	user_auth_close	    : NOVALUE,
+    	do_accounting	    : NOVALUE,
+        has_valid_addresses,
+    	G_HAT (MX_FILE_OPEN, MX_FILE_READ, MX_FILE_WRITE, MX_FILE_CLOSE, MX_MKDATE, MEM_GETTXT),
+	G_HAT (NETLIB_SOCKET, NETLIB_BIND, NETLIB_ACCEPT, NETLIB_SHUTDOWN,
+	       NETLIB_WRITE, NETLIB_READLINE, NETLIB_CLOSE, NETLIB_GET_HOSTNAME,
+	       NETLIB_ADDRESS_TO_NAME, NETLIB_GETPEERNAME, NETLIB_NAME_TO_ADDRESS,
+    	       NETLIB_HTON_WORD, NETLIB_STRTOADDR, NETLIB_ADDRTOSTR, NETLIB_LISTEN,
+    	       NETLIB_DNS_QUERY, NETLIB_NTOH_WORD),
+	G_HAT (WRITE_ENVELOPE, DISPOSE_ENVELOPE, WRITE_HDRS, PARSE_HDRS,
+    	       FORMAT821, PARSE821, base64_encode_string, base64_decode_string, userauth_hmac_digest,
+	       MX_VERSION, MEM_GETRCPT, MEM_FREERCPT, RCVLINE_COUNT, LOG_EVENT),
+	G_HAT (LIB$GET_VM, LIB$FREE_VM, STR$APPEND, STR$COPY_R, STR$COPY_DX, STR$PREFIX,
+	       STR$FREE1_DX, LIB$SYS_FAO, STR$CONCAT, STR$TRIM, STR$RIGHT, LIB$EMUL,
+	       STR$CASE_BLIND_COMPARE, STR$FIND_FIRST_NOT_IN_SET, STR$MATCH_WILD,
+	       STR$COMPARE_EQL, STR$UPCASE, LIB$CVT_DTB, LIB$GETSYI, LIB$GETJPI,
+	       LIB$CREATE_VM_ZONE, LIB$SHOW_VM_ZONE, LIB$GET_EF, LIB$PUT_OUTPUT,
+               LIB$SHOW_VM, LIB$FIND_VM_ZONE, LIB$FREE_EF),
+	G_HAT (ERR_get_error, ERR_error_string, SSL_CTX_check_private_key, SSL_CTX_free,
+	       SSL_CTX_use_certificate_file, SSL_CTX_use_PrivateKey_file, SSL_CTX_new,
+	       SSL_library_init, SSL_load_error_strings, TLSv1_method);
+
+    EXTERNAL LITERAL
+    	MX__NOPATH, MX__TLSINIERR;
+
+    EXTERNAL
+	SMTP_INFO	: SMTPDEF;
+
+    _DEF (WRK)
+	WRK_L_FLINK = _LONG,
+	WRK_L_BLINK = _LONG,
+	WRK_L_ROUTINE	= _LONG,
+	WRK_L_CTX	= _LONG
+    _ENDDEF (WRK);
+
+    LITERAL
+    	AUTH_K_CRAM_MD5	    = 1,
+        AUTH_K_PLAIN        = 2,
+    	AUTH_K_LOGIN	    = 3;
+
+    LITERAL
+    	CTX_S_RCVBUF	= 4096,
+    	CTX_S_SNDBUF	= 1024,
+    	CTX_S_DBGBUF	= 1024,
+    	CTX_S_LASTRCPT	= 256,
+    	CTX_S_REJRSN	= 256,
+    	CTX_S_AUTHSALT	= 256,
+    	CTX_S_AUTHUSER	= 64,
+    	CTX_K_ADRLST_COUNT = 32,
+    	CTX_S_ADRLST	= CTX_K_ADRLST_COUNT * 4;
+
+    _DEF (CTX)
+	CTX_L_FLINK	= _LONG,
+	CTX_L_BLINK	= _LONG,
+	CTX_L_TCPCTX	= _LONG,
+	CTX_L_DUNIT	= _LONG,
+    	_ALIGN (QUAD)
+    	CTX_X_WRK   	= _BYTES (WRK_S_WRKDEF),
+    	_ALIGN (QUAD)
+	CTX_Q_HDRQ	= _QUAD,
+	CTX_Q_CURHDR	= _QUAD,
+	CTX_Q_IOSB	= _QUAD,
+	_OVERLAY (CTX_Q_IOSB)
+	    CTX_W_STAT	= _WORD,
+	    CTX_W_CNT	= _WORD,
+	    CTX_L_XSTAT	= _LONG,
+	_ENDOVERLAY
+    	CTX_Q_INDSC 	= _QUAD,
+    	CTX_Q_RBLQUE	= _QUAD,
+    	CTX_Q_AUTHRETRY	= _QUAD,
+	CTX_L_QCTX	= _LONG,
+    	CTX_L_ACCCHKCTX	= _LONG,
+    	CTX_L_ACCEPTED	= _LONG,
+	CTX_L_SESSFLAGS	= _LONG,
+	_OVERLAY (CTX_L_SESSFLAGS)
+	    CTX_V_DEBUG	    	= _BIT,
+	    CTX_V_FAKER     	= _BIT,
+	    CTX_V_ADD_DATE  	= _BIT,
+    	    CTX_V_ESMTP	    	= _BIT,
+    	    CTX_V_VINIT	    	= _BIT,
+    	    CTX_V_BLACKHOLE 	= _BIT,
+    	    CTX_V_RBL_CHECK 	= _BIT,
+    	    CTX_V_DEBUGTEXT 	= _BIT,
+    	    CTX_V_AUTHENTICATED = _BIT,
+    	    CTX_V_INSIDE    	= _BIT,
+    	    CTX_V_INSIDE_RELAY	= _BIT,
+    	    CTX_V_AUTHCRAM  	= _BIT,
+    	    CTX_V_AUTHPLAIN 	= _BIT,
+            CTX_V_REJECTALL     = _BIT,
+            CTX_V_OKIFAUTHEN    = _BIT,
+            CTX_V_REQAUTH       = _BIT,
+	_ENDOVERLAY
+    	CTX_L_MSGFLAGS	= _LONG,
+	_OVERLAY (CTX_L_MSGFLAGS)
+	    CTX_V_HDR_OVERFLOW	= _BIT,
+    	    CTX_V_SPAM	    	= _BIT,
+    	    CTX_V_VRFYMAIL  	= _BIT,
+    	    CTX_V_SNDRLCL   	= _BIT,
+    	    CTX_V_SNDRRELAY  	= _BIT,
+    	    CTX_V_NOSPAMCHK 	= _BIT,
+	_ENDOVERLAY
+    	CTX_L_AUTHTYPE	= _LONG,
+    	CTX_L_AAACTX	= _LONG,
+    	CTX_L_AAAID 	= _LONG,
+    	CTX_L_AAASTAT	= _LONG,
+    	CTX_L_AUTHFAILS	= _LONG,
+    	CTX_L_AUTHFAILLIM = _LONG,
+	CTX_L_UNIT	= _LONG,
+	CTX_L_STATE	= _LONG,
+	CTX_L_RCVBYME	= _LONG,
+	CTX_L_CXID	= _LONG,
+    	CTX_L_MSGLIM	= _LONG,
+    	CTX_L_RBLCUR	= _LONG,
+    	CTX_A_REMHOST	= _LONG,
+    	_ALIGN (QUAD)
+    	CTX_X_PEER  	= _BYTES (SIN_S_SINDEF),
+    	_ALIGN (QUAD)
+    	CTX_X_ENVELOPE	= _BYTES (ENVL_S_ENVLDEF),
+    	_ALIGN (LONG)
+    	CTX_L_ADRCNT	= _LONG,
+    	CTX_X_ADRLST	= _BYTES (CTX_S_ADRLST),
+    	_ALIGN (LONG)
+    	CTX_L_QMSGLIM	= _LONG,
+    	CTX_W_RCVLEN	= _WORD,
+    	_ALIGN (LONG)
+    	CTX_W_LASTRLEN	= _WORD,
+    	_ALIGN (LONG)
+    	CTX_W_REJRSN	= _WORD,
+    	_ALIGN (LONG)
+    	CTX_W_AUTHSALT	= _WORD,
+    	_ALIGN (LONG)
+    	CTX_W_AUTHUSER	= _WORD,
+    	_ALIGN (QUAD)
+        CTX_X_QENT      = _BYTES (QENT_S_QENTDEF),
+    	CTX_T_RCVBUF	= _BYTES (CTX_S_RCVBUF),
+    	CTX_T_SNDBUF	= _BYTES (CTX_S_SNDBUF),
+    	CTX_T_DBGBUF	= _BYTES (CTX_S_DBGBUF),
+    	CTX_T_LASTRCPT	= _BYTES (CTX_S_LASTRCPT),
+    	CTX_T_REJRSN	= _BYTES (CTX_S_REJRSN),
+    	CTX_T_AUTHSALT	= _BYTES (CTX_S_AUTHSALT),
+    	CTX_T_AUTHUSER	= _BYTES (CTX_S_AUTHUSER)
+    _ENDDEF (CTX);
+
+    MACRO
+    	crlf = %QUOTE %CHAR (13), %QUOTE %CHAR (10)%,
+	SEND (ASTRTN, CTRSTR) [] =
+	BEGIN
+	    LOCAL _STAT;
+	    %IF %NULL (%REMAINING) %THEN
+    	    	LOCAL _S : BLOCK [DSC$K_S_BLN,BYTE];
+    	    	INIT_SDESC (_S, %CHARCOUNT (CTRSTR) + 2, UPLIT (%STRING (CTRSTR, %CHAR(13), %CHAR(10))));
+		_STAT = NETLIB_WRITE (CTX [CTX_L_TCPCTX], _S, 0, 0, CTX [CTX_Q_IOSB], ASTRTN, .CTX);
+		DPRINT ('Send "!AD"', ._S [DSC$W_LENGTH]-2, ._S [DSC$A_POINTER]);
+	    %ELSE
+		LOCAL _S : BLOCK [DSC$K_S_BLN,BYTE];
+		INIT_SDESC (_S, CTX_S_SNDBUF, CTX [CTX_T_SNDBUF]);
+		$FAO (%ASCID %STRING (CTRSTR, %CHAR(13), %CHAR (10)), _S [DSC$W_LENGTH], _S, %REMAINING);
+		_STAT = NETLIB_WRITE (CTX [CTX_L_TCPCTX], _S, 0, 0, CTX [CTX_Q_IOSB], ASTRTN, .CTX);
+		DPRINT ('Send "!AD"', ._S [DSC$W_LENGTH]-2, ._S [DSC$A_POINTER]);
+	    %FI
+	    ._STAT
+	END%,
+	DPRINT (CTRSTR) [] =
+	BEGIN
+	    IF .CTX [CTX_V_DEBUG] THEN 
+	    BEGIN
+		LOCAL
+		    _DBGFAO    : BLOCK [DSC$K_S_BLN,BYTE];
+		INIT_SDESC (_DBGFAO, CTX_S_DBGBUF, CTX [CTX_T_DBGBUF]);
+		$FAO (%ASCID %STRING ('!%D STM[!UL]: ', CTRSTR),
+    	    	    	_DBGFAO [DSC$W_LENGTH], _DBGFAO,
+			0, .CTX [CTX_L_CXID]
+    	    	    	%IF NOT %NULL (%REMAINING) %THEN , %REMAINING %FI);
+		MX_FILE_WRITE (.DUNIT, _DBGFAO);
+	    END;
+	END%,
+	XPRINT (CTRSTR) [] =
+    	%IF (%VARIANT AND 2) EQL 2 %THEN
+	BEGIN
+    	    EXTERNAL ROUTINE G_HAT (LIB$PUT_OUTPUT);
+	    LOCAL
+	    	_DBGFAO    : BLOCK [DSC$K_S_BLN,BYTE];
+	    INIT_SDESC (_DBGFAO, CTX_S_DBGBUF, CTX [CTX_T_DBGBUF]);
+	    $FAO (%ASCID %STRING ('!%D: ', CTRSTR),
+    	    	  _DBGFAO [DSC$W_LENGTH], _DBGFAO, 0
+    	    	    %IF NOT %NULL (%REMAINING) %THEN , %REMAINING %FI);
+	    LIB$PUT_OUTPUT (_DBGFAO);
+	END
+    	%FI %;
+
+    MACRO add_hdr_to_queue (hdr, que) =
+	BEGIN
+	IF .hdr [DSC$W_LENGTH] GTR 0
+	THEN
+	    BEGIN
+	    IF (.ctx [CTX_V_HDR_OVERFLOW])
+	    THEN
+		BEGIN
+		!
+		!  Here the header overflowed, so add an MX
+		!  header to indicate that it was truncated.
+		!  This isn't supposed to happen, but can with
+		!  SPAMs from UNIX-based system.
+		!
+		LOCAL i;
+		i = CH$FIND_CH (.hdr [DSC$W_LENGTH],
+				.hdr [DSC$A_POINTER], %C':');
+		IF NOT(CH$FAIL(.i))
+		THEN
+		    BEGIN
+		    STR$COPY_R (str2, %REF(.i - .hdr [DSC$A_POINTER]),
+					.hdr [DSC$A_POINTER]);
+		    STR$CONCAT (str2, %ASCID'X-MX-Overflow: "', str2,
+					%ASCID %STRING('" header truncated---',
+					'total length exceeds 64K bytes'));
+		    INSTXT (str2, .que [QUE_L_TAIL]);
+		    END;
+		END;
+	    INSTXT (hdr, .que [QUE_L_TAIL]);
+	    ctx [CTX_V_HDR_OVERFLOW] = 0;
+	    END;
+	END%,
+    reset_envelope (_envl) =
+    	BEGIN
+    	    BIND __envl = _envl : ENVLDEF,
+    	    	 __remhst = ctx [CTX_A_REMHOST] : REF TXTDEF,
+    	    	 __remsin = ctx [CTX_X_PEER]  : SINDEF,
+    	    	 __remadr = __remsin [SIN_X_ADDR] : INADDRDEF;
+    	    LOCAL
+    	    	 abuf	: VECTOR [64,BYTE],
+    	    	 rfbuf	: VECTOR [256,BYTE],
+    	    	 adsc	: BLOCK [DSC$K_S_BLN,BYTE],
+    	    	 rfstr	: BLOCK [DSC$K_S_BLN,BYTE];
+    	    DISPOSE_ENVELOPE (__envl);
+    	    CH$FILL (%CHAR (0), ENVL_S_ENVLDEF, __envl);
+    	    __envl [ENVL_V_ORIGIN] = 1;
+    	    __envl [ENVL_L_ORIGIN] = MX_K_ORG_SMTP;
+    	    INIT_QUEUE (__envl [ENVL_Q_RCPTQUE]);
+    	    INIT_SDESC (adsc, %ALLOCATION (abuf), abuf);
+    	    NETLIB_ADDRTOSTR (__remadr [INADDR_L_ADDR], adsc, adsc [DSC$W_LENGTH]);
+    	    INIT_SDESC (rfstr, %ALLOCATION (rfbuf), rfbuf);
+    	    IF .ctx [CTX_A_REMHOST] EQLA 0 THEN
+    	    	$FAO (%ASCID'UnknownHost (!AS)', rfstr [DSC$W_LENGTH], rfstr, adsc)
+    	    ELSE
+    	    	$FAO (%ASCID'!AD (!AS)', rfstr [DSC$W_LENGTH], rfstr, .__remhst [TXT_W_LEN], __remhst [TXT_T_TEXT], adsc);
+    	    __envl [ENVL_V_RCVDFROM] = 1;
+    	    __envl [ENVL_A_RCVDFROM] = MEM_GETTXT (.rfstr [DSC$W_LENGTH], .rfstr [DSC$A_POINTER])
+    	END%;
+    LITERAL
+	LOW_STATE   = 1,
+	STATE_HELLO = 1,
+	STATE_MAIL  = 2,
+	STATE_RCPT  = 3,
+	STATE_HDRS  = 4,
+	STATE_MSG   = 5,
+	STATE_CLUP  = 6,
+	HIGH_STATE  = 6;
+
+    GLOBAL
+	MAILNAME	: BLOCK [DSC$K_S_BLN,BYTE],
+    	RESET_MASK,
+	SHUTDOWN_FLAG	: INITIAL (0),
+	STATUS_CODE	: INITIAL (MX_K_STATUS_RDCONFIG),
+	STATUS_PARAM	: INITIAL (0),
+	HOSTNAME	: BLOCK [DSC$K_S_BLN,BYTE],
+	PRCNAM		: BLOCK [DSC$K_S_BLN,BYTE],
+    	OUTSIDE_MAX,
+    	OUTSIDE_INUSE,
+	PID,
+    	rbl_check   	: INITIAL (0),
+    	rblque	    	: QUEDEF,
+	ssl_ctx		: INITIAL (0);
+
+    IDENT_DECLARATIONS (GLOBAL);
+    TRACE_DECLARATIONS (GLOBAL);  ! ** not actually used **
+
+    LITERAL
+        RQA_K_NONE      = 0,
+        RQA_K_OUTSIDE   = 1,
+        RQA_K_ALL       = 2;
+
+    OWN
+	WRKQUE		: QUEDEF,
+	CTXQUE		: QUEDEF,
+	PNDQUE		: QUEDEF,
+	LSNCTX		: INITIAL (0),
+	ACCEPT_PENDING	: INITIAL (0),
+	ACCEPT_FAILURES	: INITIAL (0),
+	RETRY_INTERVAL	: VECTOR [2,LONG],
+    	CHECK_INTERVAL	: VECTOR [2,LONG],
+    	CMDTMO	    	: VECTOR [2,LONG],
+	LOCKSB		: LSBDEF,
+	HDSKNAM		: BLOCK [DSC$K_S_BLN,BYTE],
+	CMDNAM		: BLOCK [DSC$K_S_BLN,BYTE],
+	HDSKLSB		: LSBDEF,
+	CMDSB		: LSBDEF,
+	EXHBLK		: EXHDEF,
+    	BANNER	    	: BLOCK [DSC$K_S_BLN,BYTE],
+	CMDEF,
+	EXIT_STATUS,
+	MYCSID,
+	MAXRCVBYME,
+        require_authentication,
+        dbgmem,
+        dbgmem_efn,
+        dbgmem_intvl    : VECTOR [2,LONG];
+
+    BIND
+	space_d		= %ASCID' ',
+	lparen_d	= %ASCID' (',
+	hnameverfail_d	= %ASCID' (host name verification failed)',
+	null_d		= %ASCID'',
+	dash_d		= %ASCID'-',
+	ehlo_d		= %ASCID'EHLO',
+	helo_d		= %ASCID'HELO',
+    	crlf_d	    	= %ASCID %STRING (crlf),
+	lnm$file_dev_d	= %ASCID'LNM$FILE_DEV',
+	by_space_d	= %ASCID'by ',
+	mx_smtp_rejection_event_class = %ASCID'MX_SMTP_REJECTION_EVENT_CLASS',
+    	mx_smtp_authfail_event_class  = %ASCID'MX_SMTP_AUTHFAIL_EVENT_CLASS';
+
+ROUTINE dbgmem_init : NOVALUE =
+BEGIN
+
+    IF $TRNLNM (TABNAM=lnm$file_dev_d, LOGNAM=%ASCID'MX_SMTP_SERVER_MEMDEBUG') THEN
+    BEGIN
+        IF NOT .dbgmem THEN
+        BEGIN
+            $BINTIM (TIMBUF=%ASCID'0 01:00:00.00', TIMADR=dbgmem_intvl);
+            LIB$GET_EF (dbgmem_efn);
+            $SETIMR (EFN=.dbgmem_efn, DAYTIM=dbgmem_intvl, REQIDT=dbgmem);
+            dbgmem = 1;
+        END;
+    END
+    ELSE
+    BEGIN
+        IF .dbgmem THEN
+        BEGIN
+            dbgmem_check (1); ! force one last dump
+            $CANTIM (REQIDT=dbgmem);
+            LIB$FREE_EF (dbgmem_efn);
+            dbgmem = 0;
+        END;
+    END;
+
+END; ! dbgmem_init
+
+
+ROUTINE dbgmem_check (force) : NOVALUE =
+BEGIN
+
+    LOCAL
+        ctx,
+        zid,
+        efstate,
+        aststat;
+
+    IF NOT .dbgmem THEN
+        RETURN;
+
+    IF .force OR ($READEF (EFN=.dbgmem_efn, STATE=efstate)
+                  EQL SS$_WASSET) THEN
+    BEGIN
+
+        $CANTIM (REQIDT=dbgmem);
+
+        LOG_EVENT (%ASCID'MX SMTP server dumping memory statistics');
+        aststat = $SETAST (ENBFLG=0);
+        LIB$SHOW_VM (%REF (0));
+        LIB$SHOW_VM (%REF (4));
+
+        ctx = 0;
+        WHILE LIB$FIND_VM_ZONE (ctx, zid) DO
+            LIB$SHOW_VM_ZONE (zid, %REF (2));
+
+        IF .aststat EQLU SS$_WASSET THEN
+            $SETAST (ENBFLG=1);
+
+        $SETIMR (EFN=.dbgmem_efn, DAYTIM=dbgmem_intvl, REQIDT=dbgmem);
+
+    END;
+
+END; ! dbgmem_check
+
+        
+
+%SBTTL 'SMTP_SERVER'
+GLOBAL ROUTINE SMTP_SERVER =
+BEGIN
+!++
+! FUNCTIONAL DESCRIPTION:
+!
+!   This is the main SMTP_SERVER routine.  It obtains global information,
+!   initializes the thread context blocks, sets up the listener on
+!   the SMTP port, and handles the first-come, first-served scheduling
+!   of threads.
+!
+!   The only I/O that blocks a thread is a network I/O.
+!
+! RETURNS:	cond_value, longword (unsigned), write only, by value
+!
+! PROTOTYPE:
+!
+!   SMTP_SERVER
+!
+! IMPLICIT INPUTS:  None.
+!
+! IMPLICIT OUTPUTS: None.
+!
+! COMPLETION CODES:
+!
+!   SS$_NORMAL:		normal successful completion.
+!
+! SIDE EFFECTS:
+!
+!   None.
+!--
+    LOCAL
+	CTX 	: REF CTXDEF,
+    	wrk 	: REF WRKDEF,
+	STR 	: BLOCK [DSC$K_S_BLN,BYTE],
+	FLQNODE	: BLOCK [DSC$K_S_BLN,BYTE],
+    	SIN 	: SINDEF,
+    	IOSB    : IOSBDEF,
+    	LNMLST	: $ITMLST_DECL (ITEMS=1),
+    	LNMBUF	: VECTOR [1024,BYTE],
+    	LNMLEN	: WORD,
+	MAXTHREADS,
+	SMTP_PORT,
+	STATUS;
+
+    SET_IDENT_STRING;
+
+    RESET_MASK = 0;
+    INIT_QUEUE (rblque);
+    INIT_DYNDESC (HOSTNAME, MAILNAME, STR, FLQNODE, HDSKNAM, PRCNAM, CMDNAM);
+
+    SSL_library_init ();
+    SSL_load_error_strings ();
+
+!+
+!   Set MX_SITE_DOM_EXPANSION to NL: so we don't invoke the name expander
+!   in this process.  We don't need it, and the I/O it causes will just
+!   tie us up unnecessarily (it's synchronous). 
+!
+!   The expander is called by the code in VERIFY.B32 (indirectly through
+!   REWRITE).
+!-
+    $ITMLST_INIT (ITMLST=LNMLST,
+    	(ITMCOD=LNM$_STRING, BUFSIZ=4, BUFADR=UPLIT ('_NL:')));
+    STATUS = $CRELNM (TABNAM=%ASCID'LNM$PROCESS', LOGNAM=%ASCID'MX_SITE_DOM_EXPANSION', ITMLST=LNMLST);
+    IF NOT .STATUS THEN SIGNAL_STOP (.STATUS);
+
+    MYCSID = 0;
+    LIB$GETSYI (%REF (SYI$_NODE_CSID), MYCSID);
+    $ITMLST_INIT (ITMLST=LNMLST,
+    	(ITMCOD=LNM$_STRING, BUFSIZ=%ALLOCATION (LNMBUF),
+    	    BUFADR=LNMBUF, RETLEN=LNMLEN));
+    STATUS = $TRNLNM (LOGNAM=%ASCID'MX_FLQ_NODE_NAME',
+    	    	      TABNAM=lnm$file_dev_d, ITMLST=LNMLST);
+    IF NOT .STATUS THEN SIGNAL_STOP (.STATUS);
+    STR$COPY_R (FLQNODE, LNMLEN, LNMBUF);
+
+    INIT_DYNDESC (banner);
+    status = $TRNLNM (LOGNAM=%ASCID'MX_SMTP_SERVER_BANNER',
+    	    	      TABNAM=lnm$file_dev_d, ITMLST=lnmlst);
+    IF .status THEN
+    BEGIN
+    	LOCAL
+    	    sdsc : BLOCK [DSC$K_S_BLN,BYTE],
+    	    unit;
+
+    	IF CH$RCHAR (lnmbuf) EQL %C'@' THEN
+    	BEGIN
+    	    INIT_SDESC (sdsc, .lnmlen-1, CH$PLUS (lnmbuf, 1));
+    	    status = MX_FILE_OPEN (MX__FILE_READ, sdsc, unit);
+    	    IF .status THEN
+    	    BEGIN
+    	    	LOCAL
+    	    	    str	    : BLOCK [DSC$K_S_BLN,BYTE],
+    	    	    str2    : BLOCK [DSC$K_S_BLN,BYTE];
+    	    	INIT_DYNDESC (str, str2);
+    	    	status = MX_FILE_READ (.unit, str);
+    	    	IF .status THEN
+    	    	BEGIN
+    	    	    WHILE MX_FILE_READ (.unit, str2) DO
+    	    	    BEGIN
+    	    	    	STR$APPEND (banner, %ASCID %STRING (%CHAR (13), %CHAR (10), '220-'));
+    	    	    	STR$APPEND (banner, str);
+    	    	    	STR$COPY_DX (str, str2);
+    	    	    END;
+    	    	    STR$APPEND (banner, %ASCID %STRING (%CHAR (13), %CHAR (10), '220 '));
+    	    	    STR$APPEND (banner, str);
+    	    	END;
+    	    	MX_FILE_CLOSE (.unit);
+    	    	FREE_STRINGS (str, str2);
+    	    END;
+    	END
+    	ELSE
+    	BEGIN
+    	    INIT_SDESC (sdsc, .lnmlen, lnmbuf);
+    	    STR$CONCAT (banner, %ASCID %STRING (%CHAR (13), %CHAR (10), '220 '), sdsc);
+    	END;
+    END;
+
+    STATUS = VERIFY_INIT (0);
+    IF NOT .STATUS THEN SIGNAL_STOP (.STATUS);
+
+    dbgmem_init (0);
+
+    LIB$GETJPI (%REF (JPI$_PRCNAM), 0, 0, 0, PRCNAM);
+    LIB$GETJPI (%REF (JPI$_PID), 0, 0, PID);
+    LIB$SYS_FAO (%ASCID'!AS (pid !XL) starting', 0, STR, PRCNAM, .PID);
+    LOG_EVENT (STR);
+
+    EXHBLK [EXH_L_HANDLER]  = EXIT_HANDLER;
+    EXHBLK [EXH_L_ARGCNT]   = 1;
+    EXHBLK [EXH_L_P1]	    = EXIT_STATUS;
+    $DCLEXH (DESBLK=EXHBLK);
+
+    !  Name for command lock
+    LIB$SYS_FAO (%ASCID'MX_CMD_!XL', 0, CMDNAM, .PID);
+
+    LIB$GET_EF (CMDEF);
+
+    !  Initialize command lock & AST
+    STATUS = $ENQW (EFN=.CMDEF, LKMODE=LCK$K_EXMODE, LKSB=CMDSB,
+    	    	FLAGS=LCK$M_NOQUEUE OR LCK$M_SYSTEM OR LCK$M_NODLCKBLK OR LCK$M_NODLCKWT,
+    	    	RESNAM=CMDNAM, BLKAST=CMD_AST);
+
+    STR$CONCAT (STR, %ASCID'FLQ_LOCK_', FLQNODE, %ASCID'_MX_SMTP_SERVER');
+    STR$CONCAT (HDSKNAM, %ASCID'FLQ_LCK2_', FLQNODE, %ASCID'_MX_SMTP_SERVER');
+    STATUS = $ENQW (LKMODE=LCK$K_PRMODE, LKSB=LOCKSB,
+		FLAGS=LCK$M_NOQUEUE OR LCK$M_SYSTEM OR LCK$M_NODLCKBLK OR LCK$M_NODLCKWT,
+		RESNAM=STR, BLKAST=BLKG_AST);
+    FREE_STRINGS (FLQNODE, STR);
+    STATUS = $ENQW (LKMODE=LCK$K_NLMODE, LKSB=HDSKLSB,
+    	    	    FLAGS=LCK$M_SYSTEM OR LCK$M_NODLCKWT, RESNAM=HDSKNAM);
+
+    INIT_QUEUE (WRKQUE, CTXQUE, PNDQUE);
+
+    IF $TRNLNM (LOGNAM=%ASCID'MX_INET_HOST', TABNAM=lnm$file_dev_d,
+    	    	ITMLST=LNMLST)
+    THEN STR$COPY_R (HOSTNAME, LNMLEN, LNMBUF)
+    ELSE NETLIB_GET_HOSTNAME (HOSTNAME);
+
+    IF NOT $TRNLNM (LOGNAM=%ASCID'MX_NODE_NAME', TABNAM=lnm$file_dev_d,
+    	    	ITMLST=LNMLST) THEN LNMLEN = 0;
+    STR$COPY_R (MAILNAME, LNMLEN, LNMBUF);
+
+    IF $TRNLNM(LOGNAM=%ASCID'MX_SMTP_SERVER_THREADS', TABNAM=lnm$file_dev_d,
+    	    	ITMLST=LNMLST) THEN
+    BEGIN
+    	IF NOT LIB$CVT_DTB (.LNMLEN, LNMBUF, MAXTHREADS) THEN MAXTHREADS = 4;
+    END
+    ELSE MAXTHREADS = 4;
+
+    IF .MAXTHREADS LEQ 0 THEN MAXTHREADS = 4;
+
+    IF $TRNLNM(LOGNAM=%ASCID'MX_SMTP_SERVER_MAX_OUTSIDE', TABNAM=lnm$file_dev_d,
+    	    	ITMLST=LNMLST) THEN
+    BEGIN
+    	IF NOT LIB$CVT_DTB (.LNMLEN, LNMBUF, OUTSIDE_MAX) THEN OUTSIDE_MAX = .MAXTHREADS * 3 / 4;
+    END
+    ELSE OUTSIDE_MAX = .MAXTHREADS * 3 / 4;
+
+    IF .OUTSIDE_MAX LEQ 0 THEN OUTSIDE_MAX = 1;
+
+    OUTSIDE_INUSE = 0;
+
+    IF $TRNLNM(LOGNAM=%ASCID'MX_MAX_SELF_RECEIVE_COUNT', TABNAM=lnm$file_dev_d,
+    	    	ITMLST=LNMLST) THEN
+    BEGIN
+    	IF NOT LIB$CVT_DTB (.LNMLEN, LNMBUF, MAXRCVBYME) THEN MAXRCVBYME = 8;
+    END
+    ELSE MAXRCVBYME = 8;
+
+    IF $TRNLNM(LOGNAM=%ASCID'MX_SMTP_SERVER_RETRY_INTERVAL', TABNAM=lnm$file_dev_d,
+    	    	ITMLST=LNMLST) THEN
+    BEGIN
+    	LOCAL SDSC : BLOCK [DSC$K_S_BLN,BYTE];
+    	INIT_SDESC (SDSC, .LNMLEN, LNMBUF);
+    	STATUS = $BINTIM (TIMBUF=SDSC, TIMADR=RETRY_INTERVAL);
+    END
+    ELSE STATUS = 0;
+    IF NOT .STATUS THEN
+	$BINTIM (TIMBUF=%ASCID'0 00:00:15.00', TIMADR=RETRY_INTERVAL);
+
+    $BINTIM (TIMBUF=%ASCID'0 00:05:00.00', TIMADR=CMDTMO);
+    $BINTIM (TIMBUF=%ASCID'0 00:01:00.00', TIMADR=CHECK_INTERVAL);
+
+    IF $TRNLNM(LOGNAM=%ASCID'MX_SMTP_PORT', TABNAM=lnm$file_dev_d,
+    	    	ITMLST=LNMLST) THEN
+    BEGIN
+    	IF NOT LIB$CVT_DTB (.LNMLEN, LNMBUF, SMTP_PORT) THEN SMTP_PORT = 25;
+    END
+    ELSE SMTP_PORT = 25;
+
+    require_authentication = RQA_K_NONE;
+    IF $TRNLNM (LOGNAM=%ASCID'MX_SMTP_SERVER_AUTHENTICATION_REQUIRED',
+                TABNAM=lnm$file_dev_d, ITMLST=lnmlst) THEN
+    BEGIN
+        LOCAL sdsc : BLOCK [DSC$K_S_BLN,BYTE];
+        INIT_SDESC (sdsc, .lnmlen, lnmbuf);
+        require_authentication = (IF STR$CASE_BLIND_COMPARE (sdsc, %ASCID'OUTSIDE') EQL 0
+                                  THEN RQA_K_OUTSIDE ELSE RQA_K_ALL);
+    END;
+
+    FREE_STRINGS (STR);
+
+    tls_reset ();
+
+    STATUS = NETLIB_SOCKET (LSNCTX);
+    IF NOT .STATUS THEN SIGNAL_STOP (.STATUS);
+    CH$FILL (%CHAR (0), SIN_S_SINDEF, SIN);
+    SIN [SIN_W_FAMILY] = NETLIB_K_AF_INET;
+    SIN [SIN_W_PORT] = NETLIB_HTON_WORD (%REF (.SMTP_PORT));
+    IF $TRNLNM (LOGNAM=%ASCID'MX_SMTP_SERVER_ADDRESS', TABNAM=lnm$file_dev_d,
+                ITMLST=lnmlst) THEN
+    BEGIN
+        LOCAL
+            sdsc : BLOCK [DSC$K_S_BLN,BYTE];
+            INIT_SDESC (sdsc, .lnmlen, lnmbuf);
+            status = NETLIB_STRTOADDR (sdsc, sin [SIN_X_ADDR]);
+            IF NOT .status THEN
+            BEGIN
+                LIB$SYS_FAO (%ASCID'Invalid MX_SMTP_SERVER_ADDRESS: !AS', 0, str, sdsc);
+                LOG_EVENT (str);
+                SIGNAL_STOP (.status);
+            END;
+    END;
+
+    STATUS = NETLIB_BIND (LSNCTX, SIN, %REF (SIN_S_SINDEF), IOSB);
+    IF .STATUS THEN STATUS = .IOSB [IOSB_W_STATUS];
+    IF NOT .STATUS THEN
+    BEGIN
+	NETLIB_CLOSE (LSNCTX);
+	SIGNAL_STOP (.STATUS);
+    END;
+
+    STATUS = NETLIB_LISTEN (LSNCTX, MAXTHREADS);
+    IF NOT .STATUS THEN
+    BEGIN
+    	NETLIB_CLOSE (LSNCTX);
+    	SIGNAL_STOP (.STATUS);
+    END;
+
+    INCR I FROM 1 TO .MAXTHREADS DO
+    BEGIN
+	STATUS = LIB$GET_VM (%REF (CTX_S_CTXDEF), CTX);
+	IF NOT .STATUS THEN SIGNAL_STOP (.STATUS);
+	CH$FILL (%CHAR (0), CTX_S_CTXDEF, .CTX);
+	CTX [CTX_L_CXID] = .I;
+    	INIT_QUEUE (ctx [CTX_Q_RBLQUE]);
+	INSQUE (.CTX, .CTXQUE [QUE_L_TAIL]);
+    END;
+%IF %VARIANT %THEN
+    $SETAST (ENBFLG=0);
+    LIB$SHOW_VM_ZONE (%REF (0), %REF (3));
+    $SETAST (ENBFLG=1);
+%FI
+
+    IF .SHUTDOWN_FLAG THEN
+    BEGIN
+    	VERIFY_RESET_CHECK (1);
+    	$EXIT ();
+    END;
+
+    STATUS_CODE = MX_K_STATUS_IDLE;
+
+    WHILE 1 DO
+    BEGIN
+%IF %VARIANT %THEN
+	$SETAST (ENBFLG=0);
+	LIB$SHOW_VM_ZONE (%REF (0), %REF (3));
+	$SETAST (ENBFLG=1);
+%FI
+
+	IF .SHUTDOWN_FLAG THEN
+	BEGIN
+	    IF .LSNCTX NEQ 0 THEN NETLIB_CLOSE (LSNCTX);
+	    LSNCTX = 0;
+    	    STATUS = $SETAST (ENBFLG=0);
+	    IF .PNDQUE [QUE_L_HEAD] EQLA PNDQUE THEN
+    	    BEGIN
+    	    	VERIFY_RESET_CHECK (1);
+                dbgmem_check (1);
+    	    	$EXIT ();
+    	    END;
+    	    IF .STATUS EQL SS$_WASSET THEN $SETAST (ENBFLG=1);
+	END;
+
+    	IF .RESET_MASK NEQ 0 THEN
+        BEGIN
+            VERIFY_RESET_CHECK (0);
+	    tls_reset ();
+            dbgmem_init ();
+        END;
+
+        dbgmem_check (0);
+
+	WHILE NOT PROTECTED_REMQUE (.WRKQUE [QUE_L_HEAD], WRK) DO
+	BEGIN
+    	    IF .wrk [WRK_L_ROUTINE] NEQA do_accept_check AND
+    	       .wrk [WRK_L_ROUTINE] NEQA do_rbl_check AND
+               .wrk [WRK_L_ROUTINE] NEQA do_retry_accept AND
+    	       .wrk [WRK_L_ROUTINE] NEQA smtp_start AND
+    	       .wrk [WRK_L_ROUTINE] NEQA do_rbl_completion AND
+    	       .wrk [WRK_L_ROUTINE] NEQA read_cmd AND
+    	       .wrk [WRK_L_ROUTINE] NEQA process_cmd AND
+    	       .wrk [WRK_L_ROUTINE] NEQA helo_verify AND
+    	       .wrk [WRK_L_ROUTINE] NEQA hello_check AND
+    	       .wrk [WRK_L_ROUTINE] NEQA auth_read AND
+    	       .wrk [WRK_L_ROUTINE] NEQA auth_authenticate AND
+               .wrk [WRK_L_ROUTINE] NEQA auth_plain_finish AND
+    	       .wrk [WRK_L_ROUTINE] NEQA auth_login_username AND
+    	       .wrk [WRK_L_ROUTINE] NEQA auth_login_password AND
+    	       .wrk [WRK_L_ROUTINE] NEQA userauth_completion AND
+    	       .wrk [WRK_L_ROUTINE] NEQA authfail_notify AND
+    	       .wrk [WRK_L_ROUTINE] NEQA mail_verify THEN
+    	    BEGIN
+    	    	dump_server_info (.wrk, .maxthreads);
+    	    	SIGNAL_STOP (SS$_ACCVIO, 0);
+    	    END;
+	    STATUS = (.WRK [WRK_L_ROUTINE]) (.WRK [WRK_L_CTX]);
+	    IF NOT .STATUS THEN
+	    BEGIN
+		CLEANUP (WRK [WRK_L_CTX]);
+		STATUS_PARAM = .STATUS_PARAM - 1;
+		IF .STATUS_PARAM LEQ 0 THEN
+		    STATUS_CODE = MX_K_STATUS_IDLE;
+	    END;
+	END;
+
+	IF .SHUTDOWN_FLAG THEN
+	BEGIN
+	    IF .LSNCTX NEQ 0 THEN NETLIB_CLOSE (LSNCTX);
+	    LSNCTX = 0;
+    	    STATUS = $SETAST (ENBFLG=0);
+	    IF .PNDQUE [QUE_L_HEAD] EQLA PNDQUE THEN
+    	    BEGIN
+    	    	VERIFY_RESET_CHECK (1);
+                dbgmem_check (1);
+    	    	$EXIT ();
+    	    END;
+    	    IF .STATUS EQL SS$_WASSET THEN $SETAST (ENBFLG=1);
+	END;
+
+    	IF .RESET_MASK NEQ 0 THEN
+	BEGIN
+	    VERIFY_RESET_CHECK (0);
+	    tls_reset ();
+	END;
+
+        IF NOT .accept_pending THEN
+    	    ACCEPT_CONNECTION ();
+
+	$HIBER;
+
+    END;
+
+    SS$_NORMAL
+
+END; ! SMTP_SERVER
+
+ROUTINE EXIT_HANDLER (STAT_A) =
+BEGIN
+    EXTERNAL ROUTINE
+	G_HAT (LIB$SYS_FAO, LIB$FREE_EF);
+
+    LOCAL
+	STR : BLOCK [DSC$K_S_BLN,BYTE],
+	FINAL_STATUS;
+
+    FINAL_STATUS = (IF (.STAT_A EQLA 0) THEN SS$_ACCVIO ELSE ..STAT_A);
+
+    $INIT_DYNDESC (STR);
+    LIB$FREE_EF (CMDEF);
+    LIB$SYS_FAO (%ASCID'!AS (pid !XL) exiting, status = !XL', 0,
+		    STR, PRCNAM, .PID, .FINAL_STATUS);
+    LOG_EVENT (STR);
+
+    SS$_NORMAL
+
+END; ! EXIT_HANDLER
+
+%SBTTL 'ACCEPT_CONNECTION'
+ROUTINE ACCEPT_CONNECTION =
+BEGIN
+!++
+! FUNCTIONAL DESCRIPTION:
+!
+!   Starts a connection acceptance.
+!
+! RETURNS:	cond_value, longword (unsigned), write only, by value
+!
+! PROTOTYPE:
+!
+!   ACCEPT_CONNECTION
+!
+! IMPLICIT INPUTS:  None.
+!
+! IMPLICIT OUTPUTS: None.
+!
+! COMPLETION CODES:
+!
+!   SS$_NORMAL:		normal successful completion.
+!
+! SIDE EFFECTS:
+!
+!   None.
+!--
+    LOCAL
+	CTX : REF CTXDEF,
+    	doit,
+	STATUS;
+
+
+    IF .LSNCTX EQL 0 THEN
+    BEGIN
+        XPRINT ('in ACCEPT_CONNECTION, listener context is NULL - returning');
+        RETURN SS$_NORMAL;
+    END;
+
+    IF NOT PROTECTED_REMQUE (.CTXQUE [QUE_L_HEAD], CTX) THEN
+    BEGIN
+    	XPRINT ('in ACCEPT_CONNECTION, starting accept on ctx=!UL, pending=!UL',
+    	    	    .ctx [CTX_L_CXID], .ACCEPT_PENDING);
+    	ctx [CTX_L_SESSFLAGS] = ctx [CTX_L_MSGFLAGS] = 0;
+	ACCEPT_PENDING = 1;
+    	STATUS = NETLIB_ACCEPT (LSNCTX, CTX [CTX_L_TCPCTX], 0, 0, 0,
+    	    	    CTX [CTX_Q_IOSB], ACCEPT_AST, .CTX);
+	IF NOT .STATUS THEN
+	BEGIN
+    	    PROTECTED_INSQUE (.CTX, .CTXQUE [QUE_L_TAIL]);
+	    NETLIB_CLOSE (LSNCTX);
+	    LSNCTX = 0;
+	    SIGNAL_STOP (.STATUS);  ! probably TCP shutdown
+	END;
+    END
+    ELSE ACCEPT_PENDING = 0;
+
+    SS$_NORMAL
+
+END; ! ACCEPT_CONNECTION
+
+%SBTTL 'ACCEPT_AST'
+ROUTINE ACCEPT_AST (CTX : REF CTXDEF) =
+BEGIN
+!++
+! FUNCTIONAL DESCRIPTION:
+!
+!   Fired when TCP connection comes in.
+!
+! RETURNS:	cond_value, longword (unsigned), write only, by value
+!
+! PROTOTYPE:
+!
+!   ACCEPT_AST	ctx   (AST level)
+!
+! IMPLICIT INPUTS:  None.
+!
+! IMPLICIT OUTPUTS: None.
+!
+! COMPLETION CODES:
+!
+!   SS$_NORMAL:		normal successful completion.
+!
+! SIDE EFFECTS:
+!
+!   None.
+!--
+    BIND
+    	IOSB	= CTX [CTX_Q_IOSB] : IOSBDEF,
+    	WRK 	= CTX [CTX_X_WRK]  : WRKDEF;
+
+    LOCAL
+	CTX2	: REF CTXDEF,
+	INTVL	: VECTOR [2,LONG],
+	STATUS;
+
+    XPRINT ('in ACCEPT_AST, ctx=!UL, status=!XL',
+    	    .CTX [CTX_L_CXID], .IOSB [IOSB_W_STATUS]);
+
+    IF NOT .IOSB [IOSB_W_STATUS] THEN
+    BEGIN
+	ACCEPT_FAILURES = .ACCEPT_FAILURES + 1;
+	STATUS = $SETIMR (DAYTIM=RETRY_INTERVAL, ASTADR=QUEUE_ACCEPT_CONNECTION,
+                            REQIDT=.ctx);
+	IF NOT .STATUS THEN SIGNAL_STOP (.STATUS);
+	RETURN .STATUS;
+    END;
+    ACCEPT_FAILURES = 0;
+
+    wrk [WRK_L_ROUTINE] = do_accept_check;
+    wrk [WRK_L_CTX] = .ctx;
+    INSQUE (WRK, .WRKQUE [QUE_L_TAIL]);
+
+    $WAKE ()
+
+END; ! ACCEPT_AST
+
+%SBTTL 'do_accept_check'
+ROUTINE do_accept_check (CTX : REF CTXDEF) =
+BEGIN
+!++
+! FUNCTIONAL DESCRIPTION:
+!
+!   After connection-acceptance check.
+!
+! RETURNS:	cond_value, longword (unsigned), write only, by value
+!
+! PROTOTYPE:
+!
+!   do_accept_check  ctx
+!
+! IMPLICIT INPUTS:  None.
+!
+! IMPLICIT OUTPUTS: None.
+!
+! COMPLETION CODES:
+!
+!   SS$_NORMAL:		normal successful completion.
+!
+! SIDE EFFECTS:
+!
+!   None.
+!--
+    BIND
+    	remsin	= CTX [CTX_X_PEER]  	: SINDEF;
+
+    LOCAL
+    	len,
+        status;
+
+    INSQUE (.CTX, .PNDQUE [QUE_L_TAIL]);
+    accept_pending = 0;
+
+    NETLIB_GETPEERNAME (ctx [CTX_L_TCPCTX], remsin, %REF (SIN_S_SINDEF), len);
+    IF NOT accept_check_init (ctx [CTX_L_ACCCHKCTX]) THEN
+    BEGIN
+    	ctx [CTX_L_ACCEPTED] = 1;
+        RETURN do_rbl_check (.ctx);
+    END;
+    status = accept_check (ctx [CTX_L_ACCCHKCTX], remsin, .len, ctx [CTX_L_ACCEPTED], accept1_ast, .ctx);
+    IF NOT .status OR .status EQL SS$_SYNCH THEN
+        RETURN do_rbl_check (.ctx);
+
+    SS$_NORMAL
+
+END; ! do_accept_check
+
+%SBTTL 'accept1_ast'
+ROUTINE accept1_AST (CTX : REF CTXDEF) =
+BEGIN
+!++
+! FUNCTIONAL DESCRIPTION:
+!
+!   After connection-acceptance check.
+!
+! RETURNS:	cond_value, longword (unsigned), write only, by value
+!
+! PROTOTYPE:
+!
+!   ACCEPT_AST	ctx   (AST level)
+!
+! IMPLICIT INPUTS:  None.
+!
+! IMPLICIT OUTPUTS: None.
+!
+! COMPLETION CODES:
+!
+!   SS$_NORMAL:		normal successful completion.
+!
+! SIDE EFFECTS:
+!
+!   None.
+!--
+    BIND
+    	IOSB	= CTX [CTX_Q_IOSB] : IOSBDEF,
+    	WRK 	= CTX [CTX_X_WRK]  : WRKDEF;
+
+    LOCAL
+	CTX2	: REF CTXDEF,
+	INTVL	: VECTOR [2,LONG],
+	STATUS;
+
+    XPRINT ('in ACCEPT1_AST, ctx=!UL, accept status=!XL',
+    	    .CTX [CTX_L_CXID], .ctx [CTX_L_ACCEPTED]);
+
+    WRK [WRK_L_ROUTINE] = DO_RBL_CHECK;
+    WRK [WRK_L_CTX] = .CTX;
+    INSQUE (WRK, .WRKQUE [QUE_L_TAIL]);
+
+    $WAKE ()
+
+END; ! accept1_ast
+
+%SBTTL 'QUEUE_ACCEPT_CONNECTION'
+GLOBAL ROUTINE QUEUE_ACCEPT_CONNECTION (ctx : REF CTXDEF) = 
+BEGIN
+!++
+! FUNCTIONAL DESCRIPTION:
+!
+!   description
+!
+! RETURNS:  	cond_value, longword (unsigned), write only, by value
+!
+! PROTOTYPE:
+!
+!   x
+!
+! IMPLICIT INPUTS:  None.
+!
+! IMPLICIT OUTPUTS: None.
+!
+! COMPLETION CODES:
+!
+!   SS$_NORMAL:	    	normal successful completion.
+!
+! SIDE EFFECTS:
+!
+!   None.
+!--
+    BIND
+    	WRK 	= CTX [CTX_X_WRK]  : WRKDEF;
+
+    XPRINT ('in queue_accept_connection, accept_pending=!UL', .accept_pending);
+    WRK [WRK_L_ROUTINE] = do_retry_accept;
+    WRK [WRK_L_CTX] = .CTX;
+    INSQUE (WRK, .WRKQUE [QUE_L_TAIL]);
+    $WAKE ()
+
+END; ! QUEUE_ACCEPT_CONNECTION
+
+%SBTTL 'DO_RETRY_ACCEPT'
+GLOBAL ROUTINE do_retry_accept (CTX : REF CTXDEF) = 
+BEGIN
+!++
+! FUNCTIONAL DESCRIPTION:
+!
+!   Puts context back in available pool and sets accept_pending
+!   to zero so another accept can be tried.
+!
+! RETURNS:  	cond_value, longword (unsigned), write only, by value
+!
+! PROTOTYPE:
+!
+!   do_retry_accept  ctx
+!
+! IMPLICIT INPUTS:  None.
+!
+! IMPLICIT OUTPUTS: None.
+!
+! COMPLETION CODES:
+!
+!   SS$_NORMAL:	    	normal successful completion.
+!
+! SIDE EFFECTS:
+!
+!   None.
+!--
+
+    XPRINT ('in do_retry_accept, accept_pending=!UL', .accept_pending);
+
+    PROTECTED_INSQUE (.ctx, .ctxque [QUE_L_TAIL]);
+    accept_pending = 0;
+    SS$_NORMAL
+
+END; ! do_retry_accept
+
+%SBTTL 'DO_RBL_CHECK'
+GLOBAL ROUTINE DO_RBL_CHECK (CTX : REF CTXDEF) = 
+BEGIN
+!++
+! FUNCTIONAL DESCRIPTION:
+!
+!   Performs a lookup of the connecting host's address under
+!   rbl.maps.vix.com, to see if it's on the "blacklist" of spam
+!   sites.
+!
+! RETURNS:  	cond_value, longword (unsigned), write only, by value
+!
+! PROTOTYPE:
+!
+!   DO_RBL_CHECK  ctx
+!
+! IMPLICIT INPUTS:  None.
+!
+! IMPLICIT OUTPUTS: None.
+!
+! COMPLETION CODES:
+!
+!   SS$_NORMAL:	    	normal successful completion.
+!
+! SIDE EFFECTS:
+!
+!   None.
+!--
+    BIND
+    	remsin	= CTX [CTX_X_PEER]  	: SINDEF;
+
+    LOCAL
+    	txt 	    : REF TXTDEF,
+    	buf 	    : VECTOR [128,BYTE],
+    	is_relay,
+    	junk;
+
+    IF NOT .ctx [CTX_L_ACCEPTED] THEN
+    	RETURN SMTP_START (.ctx);
+
+    ctx [CTX_V_INSIDE] = IS_LOCAL_ADDRESS (remsin [SIN_X_ADDR], is_relay);
+    ctx [CTX_V_INSIDE_RELAY] = .is_relay;
+    IF .ctx [CTX_V_INSIDE] THEN
+    	RETURN SMTP_START (.ctx);
+
+    ctx [CTX_V_RBL_CHECK] = .rbl_check;
+    IF NOT .ctx [CTX_V_RBL_CHECK] THEN
+    	RETURN SMTP_START (.ctx);
+
+    txt = .rblque [QUE_L_HEAD];
+    WHILE .txt NEQA rblque DO
+    BEGIN
+    	LOCAL t2 : REF TXTDEF;
+    	t2 =  mem_gettxt (.txt [TXT_W_LEN], txt [TXT_T_TEXT]);
+    	INSQUE_TAIL (.t2, ctx [CTX_Q_RBLQUE]);
+    	txt = .txt [TXT_L_FLINK];
+    END;
+    ctx [CTX_V_BLACKHOLE] = 0;
+    ctx [CTX_L_RBLCUR] = 0;
+
+    do_next_rbl_check (.ctx)
+
+END; ! do_rbl_check
+
+%SBTTL 'DO_NEXT_RBL_CHECK'
+GLOBAL ROUTINE DO_NEXT_RBL_CHECK (CTX : REF CTXDEF) = 
+BEGIN
+!++
+! FUNCTIONAL DESCRIPTION:
+!
+!   Performs a lookup of the connecting host's address under
+!   rbl.maps.vix.com, to see if it's on the "blacklist" of spam
+!   sites.
+!
+! RETURNS:  	cond_value, longword (unsigned), write only, by value
+!
+! PROTOTYPE:
+!
+!   DO_NEXT_RBL_CHECK  ctx
+!
+! IMPLICIT INPUTS:  None.
+!
+! IMPLICIT OUTPUTS: None.
+!
+! COMPLETION CODES:
+!
+!   SS$_NORMAL:	    	normal successful completion.
+!
+! SIDE EFFECTS:
+!
+!   None.
+!--
+    BIND
+    	remsin	= CTX [CTX_X_PEER]  	: SINDEF;
+
+    LOCAL
+    	txt 	    : REF TXTDEF,
+    	dsc 	    : BLOCK [DSC$K_S_BLN,BYTE],
+    	buf 	    : VECTOR [128,BYTE],
+    	status;
+
+    IF NOT REMQUE_HEAD (ctx [CTX_Q_RBLQUE], txt) THEN
+    BEGIN
+    	BIND addr = REMSIN [SIN_X_ADDR] : VECTOR [4,BYTE];
+    	INIT_SDESC (dsc, %ALLOCATION (buf), buf);
+    	status = $FAO (%ASCID'!UB.!UB.!UB.!UB.!AD', dsc [DSC$W_LENGTH], dsc,
+    	    	    .addr [3], .addr [2], .addr [1], .addr [0],
+    	    	    .txt [TXT_W_LEN], txt [TXT_T_TEXT]);
+    	ctx [CTX_L_RBLCUR] = .txt;
+    END
+    ELSE
+    	status = 0;
+
+    IF NOT .status THEN
+    	RETURN SMTP_START (.ctx);
+
+    XPRINT ('doing RBL check on !AS', dsc);
+
+    status = NETLIB_DNS_QUERY (ctx [CTX_L_TCPCTX], dsc, 0, %REF (NETLIB_K_DNS_TYPE_A),
+    	    	    	       ctx [CTX_T_SNDBUF], %REF (CTX_S_SNDBUF), %REF (0), ctx [CTX_Q_IOSB],
+    	    	    	       DO_RBL_AST, .ctx);
+    IF NOT .status THEN
+    	RETURN SMTP_START (.ctx);
+
+    SS$_NORMAL
+
+END; ! DO_NEXT_RBL_CHECK
+
+%SBTTL 'DO_RBL_AST'
+GLOBAL ROUTINE DO_RBL_AST (CTX : REF CTXDEF) : NOVALUE = 
+BEGIN
+!++
+! FUNCTIONAL DESCRIPTION:
+!
+!   description
+!
+! RETURNS:  	cond_value, longword (unsigned), write only, by value
+!
+! PROTOTYPE:
+!
+!   DO_RBL_AST  ctx
+!
+! IMPLICIT INPUTS:  None.
+!
+! IMPLICIT OUTPUTS: None.
+!
+! COMPLETION CODES:
+!
+!   SS$_NORMAL:	    	normal successful completion.
+!
+! SIDE EFFECTS:
+!
+!   None.
+!--
+    BIND
+	WRK 	= CTX [CTX_X_WRK]   : WRKDEF;
+
+    WRK [WRK_L_ROUTINE] = DO_RBL_COMPLETION;
+    WRK [WRK_L_CTX] = .CTX;
+    INSQUE (WRK, .WRKQUE [QUE_L_TAIL]);
+    $WAKE ()
+
+END; ! DO_RBL_AST
+
+%SBTTL 'DO_RBL_COMPLETION'
+GLOBAL ROUTINE DO_RBL_COMPLETION (CTX : REF CTXDEF) = 
+BEGIN
+!++
+! FUNCTIONAL DESCRIPTION:
+!
+!   Completions blacklist lookup
+!
+! RETURNS:  	cond_value, longword (unsigned), write only, by value
+!
+! PROTOTYPE:
+!
+!   DO_RBL_COMPLETION  ctx
+!
+! IMPLICIT INPUTS:  None.
+!
+! IMPLICIT OUTPUTS: None.
+!
+! COMPLETION CODES:
+!
+!   SS$_NORMAL:	    	normal successful completion.
+!
+! SIDE EFFECTS:
+!
+!   None.
+!--
+    BIND
+    	iosb	    = ctx [CTX_Q_IOSB]	    : IOSBDEF,
+    	hdr 	    = ctx [CTX_T_SNDBUF]    : NETLIB_DNS_HEADER;
+
+    LOCAL
+    	status;
+
+    ctx [CTX_V_BLACKHOLE] = .iosb [IOSB_W_STATUS] AND
+                            .iosb [IOSB_W_COUNT] GEQU DNS_S_HEADER AND
+    	    	    	    .hdr [DNS_V_REPLY_CODE] EQL NETLIB_K_DNS_RC_SUCCESS AND
+                            NETLIB_NTOH_WORD (hdr [DNS_W_ANCOUNT]) NEQU 0;
+    IF .ctx [CTX_V_BLACKHOLE] OR QUEUE_EMPTY (ctx [CTX_Q_RBLQUE]) THEN
+    	SMTP_START (.ctx)
+    ELSE
+    BEGIN
+    	FREETXT (ctx [CTX_L_RBLCUR]);
+    	ctx [CTX_L_RBLCUR] = 0;
+    	do_next_rbl_check (.ctx)
+    END
+
+END; ! do_rbl_completion
+
+%SBTTL 'SMTP_START'
+ROUTINE SMTP_START (CTX : REF CTXDEF) =
+BEGIN
+!++
+! FUNCTIONAL DESCRIPTION:
+!
+!   Starts an SMTP transaction.
+!
+! RETURNS:	cond_value, longword (unsigned), write only, by value
+!
+! PROTOTYPE:
+!
+!   SMTP_START	ctx
+!
+! IMPLICIT INPUTS:  None.
+!
+! IMPLICIT OUTPUTS: None.
+!
+! COMPLETION CODES:
+!
+!   SS$_NORMAL:		normal successful completion.
+!
+! SIDE EFFECTS:
+!
+!   None.
+!--
+
+    BIND
+	HDRQUE	= CTX [CTX_Q_HDRQ]  	: QUEDEF,
+    	envl	= ctx [CTX_X_ENVELOPE]	: ENVLDEF,
+	QENT	= CTX [CTX_X_QENT]  	: QENTDEF,
+    	remsin	= CTX [CTX_X_PEER]  	: SINDEF,
+	QCTX	= CTX [CTX_L_QCTX],
+	DUNIT	= CTX [CTX_L_DUNIT];
+
+    LOCAL
+	STR 	: BLOCK [DSC$K_S_BLN,BYTE],
+    	lnmlst	: $ITMLST_DECL (ITEMS=1),
+    	syilst	: $ITMLST_DECL (ITEMS=2),
+    	tmosecs,
+    	buf 	: VECTOR [64,BYTE],
+    	junk,
+    	buflen	: WORD,
+	STATUS;
+
+    XPRINT ('in SMTP_START, ctx=!UL', .ctx [CTX_L_CXID]);
+
+    INIT_DYNDESC (STR, CTX [CTX_Q_CURHDR]);
+    INIT_QUEUE (hdrque);
+    CH$FILL (%CHAR (0), ENVL_S_ENVLDEF, envl);
+    INIT_QUEUE (envl [ENVL_Q_RCPTQUE]);
+    envl [ENVL_V_ORIGIN] = 1;
+    envl [ENVL_L_ORIGIN] = MX_K_ORG_SMTP;
+
+    ctx [CTX_L_AAACTX] = ctx [CTX_L_AAAID] = 0;
+
+    $ITMLST_INIT (ITMLST=syilst,
+    	    	    (ITMCOD=SYI$_LGI_RETRY_LIM, BUFADR=ctx [CTX_L_AUTHFAILLIM], BUFSIZ=4),
+    	    	    (ITMCOD=SYI$_LGI_RETRY_TMO, BUFADR=tmosecs, BUFSIZ=4));
+    status = $GETSYIW (ITMLST=syilst);
+    IF NOT .status THEN
+    BEGIN
+    	ctx [CTX_L_AUTHFAILLIM] = 3;
+    	tmosecs = 20;
+    END;
+    LIB$EMUL (tmosecs, %REF (-10000000), %REF (0), ctx [CTX_Q_AUTHRETRY]);
+
+    CTX [CTX_V_DEBUG] = $TRNLNM (LOGNAM=%ASCID'MX_SMTP_SERVER_DEBUG', TABNAM=lnm$file_dev_d);
+    IF .CTX [CTX_V_DEBUG] THEN
+    BEGIN
+    	LOCAL
+    	    tmp	    : VECTOR [256,BYTE],
+    	    tmpdsc  : BLOCK [DSC$K_S_BLN,BYTE],
+    	    pid;
+    	INIT_SDESC (tmpdsc, %ALLOCATION (tmp), tmp);
+    	LIB$GETJPI (%REF (JPI$_PID), 0, 0, pid);
+    	$FAO (%ASCID'MX_SMTP_DIR:.LOG_!XL_!UL', tmpdsc [DSC$W_LENGTH], tmpdsc, .pid, .ctx [CTX_L_CXID]);
+	status = MX_FILE_OPEN (MX__FILE_APPEND OR MX_M_CIF OR MX_M_SHARE OR MX_M_FILE_ASY,
+    	    	    	    	%ASCID'SMTP_SERVER_LOG', DUNIT, tmpdsc);
+    	IF NOT .status THEN
+    	BEGIN
+    	    ctx [CTX_V_DEBUG] = 0;
+    	    dunit = 0;
+    	END
+    	ELSE
+    	    CTX [CTX_V_DEBUGTEXT] = $TRNLNM (LOGNAM=%ASCID'MX_SMTP_SERVER_DEBUG_MESSAGE_TEXT',
+    	    	    	    	    	     TABNAM=lnm$file_dev_d);
+    END
+    ELSE
+	DUNIT = 0;
+
+    DPRINT ('===================================================');
+
+    IF .ctx [CTX_V_DEBUG] THEN
+    BEGIN
+        BIND    remadr = remsin [SIN_X_ADDR] : INADDRDEF;
+        LOCAL
+            tmp : VECTOR [128,BYTE],
+            dsc : BLOCK [DSC$K_S_BLN,BYTE];
+        INIT_SDESC (dsc, %ALLOCATION (tmp), tmp);
+        status = NETLIB_ADDRTOSTR (remadr [INADDR_L_ADDR], dsc, dsc [DSC$W_LENGTH]);
+        IF .status THEN
+            DPRINT ('Client IP address: !AS', dsc)
+        ELSE
+            DPRINT ('Client IP address (0x!XL) could not be formatted', .remadr [INADDR_L_ADDR]);
+    END;
+
+    ctx [CTX_V_ADD_DATE] = $TRNLNM (LOGNAM=%ASCID'MX_SMTP_SERVER_ADD_DATE', TABNAM=lnm$file_dev_d);
+
+    CASE .require_authentication FROM RQA_K_NONE TO RQA_K_ALL OF
+    SET
+    [RQA_K_NONE] :
+        ctx [CTX_V_REQAUTH] = 0;
+    [RQA_K_OUTSIDE] :
+        ctx [CTX_V_REQAUTH] = NOT .ctx [CTX_V_INSIDE];
+    [RQA_K_ALL] :
+        ctx [CTX_V_REQAUTH] = 1;
+    TES;
+
+    ctx [CTX_V_AUTHCRAM] = ctx [CTX_V_AUTHPLAIN] = 0;
+
+    IF .ctx [CTX_V_REQAUTH] OR NOT .ctx [CTX_V_INSIDE] THEN
+    BEGIN
+    	ctx [CTX_V_AUTHCRAM] = auth_cram_enabled ();
+    	ctx [CTX_V_AUTHPLAIN] = auth_plain_enabled ();
+    END;
+
+    IF .ctx [CTX_V_AUTHCRAM] OR .ctx [CTX_V_AUTHPLAIN] THEN
+    	    DPRINT ('[client is on !AS network !AS- AUTH!AS!AS will be advertised]',
+                    (IF .ctx [CTX_V_INSIDE] THEN %ASCID'inside' ELSE %ASCID'outside'),
+                    (IF .ctx [CTX_V_REQAUTH] THEN %ASCID'(auth required) ' ELSE null_d),
+    	    	    (IF .ctx [CTX_V_AUTHCRAM] THEN %ASCID' CRAM-MD5' ELSE null_d),
+    	    	    (IF .ctx [CTX_V_AUTHPLAIN] THEN %ASCID' LOGIN PLAIN' ELSE null_d))
+    ELSE IF .ctx [CTX_V_REQAUTH] THEN
+    BEGIN
+        DPRINT ('[authentication required, but no types enabled -- do not accept]');
+        ctx [CTX_L_ACCEPTED] = 0;
+    END
+    ELSE
+        DPRINT ('[no authentication types enabled, none will be advertised]');
+
+    CTX [CTX_L_UNIT] = 0;
+    CTX [CTX_L_STATE] = STATE_HELLO;
+    qent [QENT_L_ENTNUM] = 0;
+
+    ctx [CTX_L_MSGLIM] = 0;
+
+    IF NOT .ctx [CTX_V_INSIDE] THEN
+    BEGIN
+        outside_inuse = .outside_inuse + 1;
+        DPRINT('[outside count now !UL, max !UL]', .outside_inuse, .outside_max);
+    END;
+
+    STATUS_CODE = MX_K_STATUS_SMTP_CONNECTED;
+    STATUS_PARAM = .STATUS_PARAM + 1;
+
+    IF NOT .ctx [CTX_L_ACCEPTED] THEN
+    BEGIN
+    	SEND (READ_AST, '521 4.3.2 SMTP service for this client address administratively refused');
+    	CTX [CTX_L_STATE] = STATE_CLUP;
+    	RETURN SS$_NORMAL;
+    END;
+
+    $ITMLST_INIT (ITMLST=lnmlst,
+    	    	    (ITMCOD=LNM$_STRING, BUFSIZ=%ALLOCATION (buf), BUFADR=buf, RETLEN=buflen));
+    status = $TRNLNM (LOGNAM=%ASCID'MX_FLQ_MAX_ENTRY_SIZE', TABNAM=lnm$file_dev_d,
+    	    	      ACMODE=%REF (PSL$C_EXEC), ITMLST=lnmlst);
+    IF .status THEN
+    	status = LIB$CVT_DTB (.buflen, buf, ctx [CTX_L_MSGLIM]);
+    IF .status AND .ctx [CTX_L_MSGLIM] NEQU 0 THEN
+    	ctx [CTX_L_MSGLIM] = 1024 * .ctx [CTX_L_MSGLIM]
+    ELSE
+    	ctx [CTX_L_MSGLIM] = %X'7FFFFFFF';  ! max positive 32-bit integer
+
+    IF NOT .CTX [CTX_V_INSIDE] AND .outside_inuse GTRU .outside_max THEN
+    BEGIN
+        SEND (READ_AST, '421 4.3.2 too many external connections; try again later');
+    	CTX [CTX_L_STATE] = STATE_CLUP;
+    	RETURN SS$_NORMAL;
+    END;
+
+    STATUS = FLQ_OPEN (FLQ__FULL, QCTX);
+    IF NOT .STATUS THEN
+    BEGIN
+	DPRINT ('Could not open system queue, status=!XL', .STATUS);
+	RETURN .STATUS;
+    END;
+
+    MX_MKDATE (0, STR, 0);
+    STATUS = SEND (START_AST,
+	'220!AS!AS (!AS) ESMTP server ready at !AS!AS',
+    	    (IF .banner [DSC$W_LENGTH] EQL 0 THEN %ASCID' ' ELSE %ASCID'-'),
+    	    HOSTNAME, MX_IDENT_STRING, STR,
+    	    (IF .banner [DSC$W_LENGTH] EQL 0 THEN %ASCID'' ELSE banner));
+    STR$FREE1_DX (STR);
+
+    .STATUS
+
+END; ! SMTP_START
+
+%SBTTL 'START_AST'
+ROUTINE START_AST (CTX : REF CTXDEF) =
+BEGIN
+!++
+! FUNCTIONAL DESCRIPTION:
+!
+!   AST routine executed when START completes.
+!
+! RETURNS:	cond_value, longword (unsigned), write only, by value
+!
+! PROTOTYPE:
+!
+!   START_AST ctx (AST level)
+!
+! IMPLICIT INPUTS:  None.
+!
+! IMPLICIT OUTPUTS: None.
+!
+! COMPLETION CODES:
+!
+!   SS$_NORMAL:		normal successful completion.
+!
+! SIDE EFFECTS:
+!
+!   None.
+!--
+    BIND
+    	WRK 	= CTX [CTX_X_WRK] : WRKDEF;
+
+    WRK [WRK_L_ROUTINE] = READ_CMD;
+    WRK [WRK_L_CTX] = .CTX;
+    INSQUE (WRK, .WRKQUE [QUE_L_TAIL]);
+    $WAKE ()
+
+END; ! START_AST
+
+%SBTTL 'READ_CMD'
+ROUTINE READ_CMD (CTX : REF CTXDEF) =
+BEGIN
+!++
+! FUNCTIONAL DESCRIPTION:
+!
+!   Reads a command.
+!
+! RETURNS:	cond_value, longword (unsigned), write only, by value
+!
+! PROTOTYPE:
+!
+!   READ_CMD  ctx
+!
+! IMPLICIT INPUTS:  None.
+!
+! IMPLICIT OUTPUTS: None.
+!
+! COMPLETION CODES:
+!
+!   SS$_NORMAL:		normal successful completion.
+!
+! SIDE EFFECTS:
+!
+!   None.
+!--
+    BIND
+    	SDSC	= CTX [CTX_Q_INDSC] : BLOCK [DSC$K_S_BLN,BYTE];
+
+    LOCAL
+	STATUS;
+
+    INIT_SDESC (SDSC, CTX_S_RCVBUF, CTX [CTX_T_RCVBUF]);
+    STATUS = NETLIB_READLINE (CTX [CTX_L_TCPCTX], SDSC, CTX [CTX_W_RCVLEN],
+    	    	    	    	  %REF (NETLIB_M_ALLOW_LF), CMDTMO, CTX [CTX_Q_IOSB], READ_AST,
+    	    	    	    	  .CTX);
+
+    IF NOT .STATUS THEN
+    BEGIN
+	CLEANUP (CTX);
+	STATUS_PARAM = .STATUS_PARAM - 1;
+	IF .STATUS_PARAM LEQ 0 THEN
+	    STATUS_CODE = MX_K_STATUS_IDLE;
+    END;
+
+
+    SS$_NORMAL
+
+END;  ! READ_CMD
+
+%SBTTL 'READ_AST'
+ROUTINE READ_AST (CTX : REF CTXDEF) =
+BEGIN
+!++
+! FUNCTIONAL DESCRIPTION:
+!
+!   AST routine executed when START completes.
+!
+! RETURNS:	cond_value, longword (unsigned), write only, by value
+!
+! PROTOTYPE:
+!
+!   READ_AST ctx (AST level)
+!
+! IMPLICIT INPUTS:  None.
+!
+! IMPLICIT OUTPUTS: None.
+!
+! COMPLETION CODES:
+!
+!   SS$_NORMAL:		normal successful completion.
+!
+! SIDE EFFECTS:
+!
+!   None.
+!--
+    BIND
+    	wrk 	= CTX [CTX_X_WRK] : WRKDEF;
+
+    WRK [WRK_L_ROUTINE] = PROCESS_CMD;
+    WRK [WRK_L_CTX] = .CTX;
+    INSQUE (WRK, .WRKQUE [QUE_L_TAIL]);
+    $WAKE ()
+
+END; ! READ_AST
+
+%SBTTL 'PROCESS_CMD'
+ROUTINE PROCESS_CMD (CTX : VOLATILE REF CTXDEF) =
+BEGIN
+!++
+! FUNCTIONAL DESCRIPTION:
+!
+!   Issues a command read.
+!
+! RETURNS:	cond_value, longword (unsigned), write only, by value
+!
+! PROTOTYPE:
+!
+!   PROCESS_CMD  ctx
+!
+! IMPLICIT INPUTS:  None.
+!
+! IMPLICIT OUTPUTS: None.
+!
+! COMPLETION CODES:
+!
+!   SS$_NORMAL:		normal successful completion.
+!
+! SIDE EFFECTS:
+!
+!   None.
+!--
+    BIND
+    	IOSB	= CTX [CTX_Q_IOSB]  	: IOSBDEF,
+	HDRQUE	= CTX [CTX_Q_HDRQ]	: QUEDEF,
+    	envl	= ctx [CTX_X_ENVELOPE]	: ENVLDEF,
+	QENT	= CTX [CTX_X_QENT]	: QENTDEF,
+	QCTX	= CTX [CTX_L_QCTX],
+	DUNIT	= CTX [CTX_L_DUNIT],
+	UNIT	= CTX [CTX_L_UNIT],
+	RCVBYME	= CTX [CTX_L_RCVBYME],
+	CURHDR	= CTX [CTX_Q_CURHDR]	: BLOCK [,BYTE],
+	STATE	= CTX [CTX_L_STATE];
+    BIND_ENVL_FIELDS (envl);
+
+    LOCAL
+    	INSTR       : BLOCK [DSC$K_S_BLN,BYTE],
+	STR         : BLOCK [DSC$K_S_BLN,BYTE],
+	STR2	    : BLOCK [DSC$K_S_BLN,BYTE],
+	LCLPART	    : BLOCK [DSC$K_S_BLN,BYTE],
+	DOMPART	    : BLOCK [DSC$K_S_BLN,BYTE],
+	RTEQ	    : QUEDEF,
+	TXT         : REF TXTDEF,
+    	ERRPOINT,
+	CMDCODE,
+    	RCPT_IS_LOCAL,
+	STATUS;
+
+
+    TXT = 0;
+    INIT_DYNDESC (STR, STR2, LCLPART, DOMPART);
+    INIT_SDESC (INSTR, .CTX [CTX_W_RCVLEN], CTX [CTX_T_RCVBUF]);
+    INIT_QUEUE (RTEQ);
+
+    IF NOT .IOSB [IOSB_W_STATUS] THEN
+    BEGIN
+    	XPRINT ('in PROCESS_CMD, ctx=!UL, status=!XW, state=!UL',
+    	    	    .ctx [CTX_L_CXID], .iosb [IOSB_W_STATUS], .ctx [CTX_L_STATE]);
+	DPRINT ('Error: status=!XW', .IOSB [IOSB_W_STATUS]);
+	CLEANUP (CTX);
+	STATUS_PARAM = .STATUS_PARAM - 1;
+	IF .STATUS_PARAM LEQ 0 THEN
+	    STATUS_CODE = MX_K_STATUS_IDLE;
+	RETURN SS$_NORMAL;
+    END;
+
+    IF .ctx [CTX_V_DEBUG] AND .STATE NEQ STATE_CLUP THEN
+    	IF .CTX [CTX_V_DEBUGTEXT] OR
+    	    	(.CTX [CTX_L_STATE] NEQ STATE_HDRS AND .CTX [CTX_L_STATE] NEQ STATE_MSG) THEN
+    	    DPRINT ('Receive "!AS"', INSTR);
+
+    CASE .STATE FROM LOW_STATE TO HIGH_STATE OF
+    SET
+
+    [STATE_HELLO] :
+	BEGIN
+	    PARSE_SMTP_CMD (INSTR, CMDCODE, TXT);
+	    CASE .CMDCODE FROM SMTP_CMD_LO TO SMTP_CMD_HI OF
+	    SET
+    	    [SMTP_CMD_VRFY] :
+    	    	IF .TXT EQLA 0 OR .TXT [TXT_W_LEN] EQL 0 THEN
+    	    	    SEND (SND_AST, '501 5.5.4 Format is: VRFY <address>')
+    	    	ELSE
+    	    	BEGIN
+    	    	    LOCAL S : BLOCK [DSC$K_S_BLN,BYTE],
+    	    	    	  VRFY_CODE;
+    	    	    $INIT_DYNDESC (S);
+    	    	    IF NOT .CTX [CTX_V_VINIT] THEN CTX [CTX_V_VINIT] = VERIFY_BEGIN (.CTX);
+    	    	    IF NOT .CTX [CTX_V_VINIT] THEN
+    	    	    	SEND (SND_AST, '252 2.1.0 Could not initialize address processing code')
+    	    	    ELSE
+    	    	    BEGIN
+    	    	    	VRFY_CODE = VERIFY_ADDRESS (.TXT [TXT_W_LEN], TXT [TXT_T_TEXT], S);
+    	    	    	SEND (SND_AST, '!UL !AS', .VRFY_CODE, S);
+    	    	    	FREE_STRINGS (S);
+    	    	    END;
+    	    	END;
+	    [SMTP_CMD_HELO,SMTP_CMD_EHLO] :
+    	    BEGIN
+    	    	CTX [CTX_V_ESMTP] = .CMDCODE EQL SMTP_CMD_EHLO;
+		IF .TXT NEQA 0 THEN
+		    IF .TXT [TXT_W_LEN] NEQ 0 THEN
+		    BEGIN
+    	    	    	BIND
+    	    	    	    ADRLST  = CTX [CTX_X_ADRLST]    : VECTOR [,LONG],
+    	    	    	    ADRCNT  = CTX [CTX_L_ADRCNT],
+    	    	    	    remsin  = CTX [CTX_X_PEER]    : SINDEF,
+    	    	    	    REMADR  = remsin [SIN_X_ADDR]   : INADDRDEF,
+    	    	    	    rcvdfrom = ctx [CTX_A_REMHOST] : REF TXTDEF;
+			LOCAL
+    	    	    	    REMHOST : BLOCK [DSC$K_S_BLN,BYTE],
+			    STATUS;
+    	    	    	ctx [CTX_L_MSGFLAGS] = 0;
+			STATE = STATE_MAIL;
+    	    	    	ctx [CTX_A_REMHOST] = .txt;
+    	    	    	txt = 0;
+                        INIT_SDESC (remhost, .rcvdfrom [TXT_W_LEN], rcvdfrom [TXT_T_TEXT]);
+
+                        ! If there's a HELO-check callout, use it.  Otherwise, do our usual
+                        ! checks.
+
+                        status = accept_check_hello (ctx [CTX_L_ACCCHKCTX], remhost,
+                                               .ctx [CTX_V_INSIDE], ctx [CTX_L_ACCEPTED],
+                                               hello_check_ast, .ctx);
+                        IF .status THEN
+                        BEGIN
+                            IF .status EQL SS$_SYNCH THEN
+                                hello_check (.ctx);
+                            RETURN SS$_NORMAL;
+                        END;
+                        accept_check_cleanup (ctx [CTX_L_ACCCHKCTX]);
+			!   
+			!  Some mailers may identify themselves using:
+			!
+			!	HELO [xxx.xxx.xxx.xxx]
+			!
+			!  If the hostname is surrounded by "[]", then take
+			!  them off before looking up the address.  Could
+			!  have been done in PARSE_SMTP_CMD, but it was
+			!  simpler to do it here.
+			!
+    	    	    	IF .rcvdfrom [TXT_W_LEN] GEQ 2 AND
+    	    	    	    CH$RCHAR (rcvdfrom [TXT_T_TEXT]) EQL %C'[' AND
+    	    	    	    CH$RCHAR (CH$PLUS (rcvdfrom [TXT_T_TEXT], .rcvdfrom [TXT_W_LEN]-1)) EQL %C']'
+    	    	    	THEN
+    	    	    	BEGIN
+    	    	    	    INIT_SDESC (REMHOST, .rcvdfrom [TXT_W_LEN]-2, CH$PLUS (rcvdfrom [TXT_T_TEXT], 1));
+    	    	    	    STATUS = NETLIB_STRTOADDR (REMHOST, ADRLST [0]);
+    	    	    	    IF .STATUS THEN
+    	    	    	    	CTX [CTX_V_FAKER] = (.ADRLST [0] NEQU .REMADR [INADDR_L_ADDR])
+    	    	    	    ELSE
+    	    	    	    	CTX [CTX_V_FAKER] = 1;
+    	    	    	END
+    	    	    	ELSE
+    	    	    	BEGIN
+    	    	    	    INIT_SDESC (REMHOST, .rcvdfrom [TXT_W_LEN], rcvdfrom [TXT_T_TEXT]);
+    	    	    	    STATUS = NETLIB_NAME_TO_ADDRESS (CTX [CTX_L_TCPCTX], 0, REMHOST,
+    	    	    	    	    	ADRLST, %REF (CTX_K_ADRLST_COUNT), ADRCNT,
+    	    	    	    	    	CTX [CTX_Q_IOSB], HELO_VERIFY_AST, .CTX);
+    	    	    	    IF NOT .STATUS THEN CTX [CTX_V_FAKER] = 1
+    	    	    	    ELSE RETURN SS$_NORMAL;
+    	    	    	END;
+    	    	    	IF .ctx [CTX_V_ESMTP] THEN
+    	    	    	BEGIN
+    	    	    	    LOCAL 
+    	    	    	    	do_auth,
+    	    	    	    	authstr  : BLOCK [DSC$K_S_BLN,BYTE];
+    	    	    	    INIT_DYNDESC (authstr);
+    	    	    	    do_auth = .ctx [CTX_V_AUTHCRAM] OR .ctx [CTX_V_AUTHPLAIN];
+    	    	    	    IF .do_auth THEN
+    	    	    	    BEGIN
+    	    	    	    	IF .ctx [CTX_V_AUTHCRAM] THEN
+    	    	    	    	BEGIN
+    	    	    	    	    STR$COPY_DX (authstr, %ASCID'CRAM-MD5');
+    	    	    	    	    IF .ctx [CTX_V_AUTHPLAIN] THEN
+    	    	    	    	    	STR$APPEND (authstr, %ASCID' ');
+    	    	    	    	END;
+    	    	    	    	IF .ctx [CTX_V_AUTHPLAIN] THEN
+    	    	    	    	    STR$APPEND (authstr, %ASCID'LOGIN PLAIN');
+    	    	    	    	STR$APPEND (authstr, crlf_d);
+    	    	    	    END;
+    	    	    	    
+    	    	    	    SEND (SND_AST, %STRING ('250-!AS!AS', crlf,
+    	    	    	    	    	    	    '250-PIPELINING', crlf,
+    	    	    	    	    	    	    '250-ENHANCEDSTATUSCODES', crlf,
+    	    	    	    	    	    	    '250-DSN', crlf,
+    	    	    	    	    	    	    '250-ETRN', crlf,
+    	    	    	    	    	    	    '!AS!AS!AS!AS!AS',
+    	    	    	    	    	    	    '250 SIZE !UL'), hostname,
+    	    	    	    	(IF .CTX [CTX_V_FAKER] THEN hnameverfail_d ELSE null_d),
+    	    	    	    	(IF .do_auth THEN %ASCID'250-AUTH=' ELSE null_d),
+    	    	    	    	(IF .do_auth THEN authstr ELSE null_d),
+    	    	    	    	(IF .do_auth THEN %ASCID'250-AUTH ' ELSE null_d),
+    	    	    	    	(IF .do_auth THEN authstr ELSE null_d),
+    	    	    	    	(IF .ssl_ctx NEQA 0 THEN
+				     %ASCID %STRING('250-STARTTLS', crlf)
+			         ELSE null_d),
+    	    	    	    	.ctx [CTX_L_MSGLIM]);
+    	    	    	    FREE_STRINGS (authstr);
+    	    	    	END
+    	    	    	ELSE
+    	    	    	    SEND (SND_AST, '250 !AS!AS', HOSTNAME,
+    	    	    	    	(IF .CTX [CTX_V_FAKER] THEN hnameverfail_d ELSE null_d));
+		    END
+		    ELSE SEND (SND_AST, '501 Syntax is !AS <domain>',
+    	    	    	    (IF .CTX [CTX_V_ESMTP] THEN ehlo_d ELSE helo_d))
+		ELSE SEND (SND_AST, '501 Syntax is !AS <domain>',
+    	    	    	    (IF .CTX [CTX_V_ESMTP] THEN ehlo_d ELSE helo_d));
+    	    END;
+
+	    [SMTP_CMD_NOOP] :
+		SEND (SND_AST, '250 2.0.0 Please stop wasting my time.');
+    	    [SMTP_CMD_RSET] :
+    	    	SEND (SND_AST, '250 2.5.0 Okay.');
+	    [SMTP_CMD_QUIT] :
+		BEGIN
+		    STATE = STATE_CLUP;
+		    SEND (READ_AST,
+			'221 2.3.0 !AS Service closing transmission channel.',
+			HOSTNAME);
+		END;
+    	    [SMTP_CMD_UNKNOWN] :
+    	    	SEND (SND_AST, '500 5.5.2 Please identify yourself with HELO or EHLO.');
+	    [INRANGE] :
+		SEND (SND_AST, '500 5.5.1 Please identify yourself with HELO or EHLO.');
+	    [OUTRANGE] :
+		SEND (SND_AST, '500 5.5.4 Please identify yourself with HELO or EHLO.')
+	    TES;
+	END;
+
+    [STATE_MAIL] :
+	BEGIN
+    	    LOCAL
+    	    	pi  : SMTPPRMDEF;
+    	    CH$FILL (%CHAR (0), SMTPPRM_S_SMTPPRMDEF, pi);
+	    PARSE_SMTP_CMD (INSTR, CMDCODE, TXT, pi, errpoint);
+	    CASE .CMDCODE FROM SMTP_CMD_LO TO SMTP_CMD_HI OF
+	    SET
+
+	    [SMTP_CMD_MAIL] :
+    	    BEGIN
+    	    	BIND qmsglim = ctx [CTX_L_QMSGLIM];
+
+    	    	status = SS$_NORMAL;
+                IF .ctx [CTX_V_REQAUTH] AND NOT .ctx [CTX_V_AUTHENTICATED] THEN
+                BEGIN
+                    SEND (SND_AST, '451 4.7.1 Authentication required for submitting messages.');
+                    status = 0;
+    	    	END
+                ELSE IF NOT FLQ_GET_MAXSIZE (qctx, qmsglim) THEN
+    	    	BEGIN
+    	    	    SEND (SND_AST, '452 4.3.4 Insufficient storage for any message right now.');
+    	    	    status = 0;
+    	    	END
+    	    	ELSE IF .pi [SMTPPRM_V_SIZE] THEN
+    	    	BEGIN
+    	    	    IF .ctx [CTX_L_MSGLIM] NEQ 0 AND .ctx [CTX_L_MSGLIM] LSSU .pi [SMTPPRM_L_SIZE] THEN
+    	    	    BEGIN
+    	    	    	SEND (SND_AST, '552 5.3.4 Message exceeds administrative size limit.');
+    	    	    	status = 0;
+    	    	    END
+    	    	    ELSE IF .qmsglim NEQ 0 AND .qmsglim LSSU .pi [SMTPPRM_L_SIZE] THEN
+    	    	    BEGIN
+    	    	    	SEND (SND_AST, '452 4.3.4 Insufficient storage for message of this size.');
+    	    	    	status = 0;
+    	    	    END;
+    	    	END;
+
+    	    	IF .status THEN
+    	    	BEGIN
+    	    	    BIND
+    	    	    	remhst = ctx [CTX_A_REMHOST] : REF TXTDEF,
+    	    	    	remsin = ctx [CTX_X_PEER]  : SINDEF,
+    	    	    	remadr = remsin [SIN_X_ADDR] : INADDRDEF;
+    	    	    LOCAL
+    	    	    	abuf	: VECTOR [64,BYTE],
+    	    	    	rfbuf	: VECTOR [256,BYTE],
+    	    	    	adsc	: BLOCK [DSC$K_S_BLN,BYTE],
+    	    	    	rfstr	: BLOCK [DSC$K_S_BLN,BYTE];
+    	    	    INIT_SDESC (adsc, %ALLOCATION (abuf), abuf);
+    	    	    NETLIB_ADDRTOSTR (remadr [INADDR_L_ADDR], adsc, adsc [DSC$W_LENGTH]);
+    	    	    INIT_SDESC (rfstr, %ALLOCATION (rfbuf), rfbuf);
+    	    	    IF .ctx [CTX_A_REMHOST] EQLA 0 THEN
+    	    	    	$FAO (%ASCID'UnknownHost (!AS)', rfstr [DSC$W_LENGTH], rfstr, adsc)
+    	    	    ELSE
+    	    	    	$FAO (%ASCID'!AD (!AS)', rfstr [DSC$W_LENGTH], rfstr, .remhst [TXT_W_LEN], remhst [TXT_T_TEXT], adsc);
+    	    	    envl [ENVL_V_RCVDFROM] = 1;
+    	    	    envl [ENVL_A_RCVDFROM] = MEM_GETTXT (.rfstr [DSC$W_LENGTH], .rfstr [DSC$A_POINTER]);
+
+    	    	    IF .pi [SMTPPRM_V_RET] THEN
+    	    	    BEGIN
+    	    	    	envl [ENVL_V_DSN_FULL] = .pi [SMTPPRM_L_RETURNTYPE] EQL SMTPPRM_K_RET_FULL;
+    	    	    	envl [ENVL_V_DSN_HDRSONLY] = .pi [SMTPPRM_L_RETURNTYPE] EQL SMTPPRM_K_RET_HDRS;
+    	    	    END;
+    	    	    IF .pi [SMTPPRM_V_ENVID] THEN
+    	    	    BEGIN
+    	    	    	envl [ENVL_V_DSN_ENVID] = 1;
+    	    	    	envl [ENVL_A_DSN_ENVID] = .pi [SMTPPRM_A_ENVID];
+    	    	    	pi [SMTPPRM_A_ENVID] = 0;
+    	    	    END;
+    	    	END;
+
+		IF .status THEN IF .TXT NEQA 0 THEN IF .TXT [TXT_W_LEN] NEQ 0 THEN
+		BEGIN
+    	    	    LOCAL
+    	    	    	TXTDSC : BLOCK [DSC$K_S_BLN,BYTE],
+    	    	    	ISNULL;
+    	    	    INIT_SDESC (TXTDSC, .TXT [TXT_W_LEN], TXT [TXT_T_TEXT]);
+		    IF .TXT [TXT_W_LEN] LSSU 2 OR (CH$RCHAR (TXT [TXT_T_TEXT]) NEQU %C'<' AND
+			 CH$RCHAR (CH$PLUS (TXT [TXT_T_TEXT], .TXT [TXT_W_LEN]-1)) NEQU %C'>')
+    	    	    THEN
+    	    	    	STR$CONCAT (STR, %ASCID'<', TXTDSC, %ASCID'>')
+    	    	    ELSE
+    	    	    	CH$MOVE (DSC$K_S_BLN, TXTDSC, STR);
+    	    	    ISNULL = .TXT [TXT_W_LEN] EQL 2 AND
+    	    	    	    CH$RCHAR (TXT [TXT_T_TEXT]) EQL %C'<' AND
+    	    	    	    CH$RCHAR (CH$PLUS (TXT [TXT_T_TEXT], 1)) EQL %C'>';
+		    IF NOT .ISNULL AND NOT PARSE821 (STR, RTEQ, LCLPART, DOMPART)
+    	    	    THEN
+			SEND (SND_AST, '501 5.1.7 Invalid address: !AD',
+			    .TXT [TXT_W_LEN], TXT [TXT_T_TEXT])
+    	    	    ELSE
+    	    	    BEGIN
+    	    	    	LOCAL T : REF TXTDEF;
+    	    	    	WHILE NOT REMQUE (.RTEQ [QUE_L_HEAD], T) DO FREETXT (T);
+    	    	    	envl [ENVL_V_FROMADR] = 1;
+    	    	    	IF .ISNULL THEN
+    	    	    	    fromadr = MEM_GETTXT (2, UPLIT ('<>'))
+    	    	    	ELSE
+    	    	    	BEGIN
+    	    	    	    LOCAL s : BLOCK [DSC$K_S_BLN,BYTE];
+    	    	    	    INIT_DYNDESC (s);
+    	    	    	    FORMAT821 (RTEQ, LCLPART, DOMPART, s);
+    	    	    	    fromadr = MEM_GETTXT (.s [DSC$W_LENGTH], .s [DSC$A_POINTER]);
+    	    	    	    FREE_STRINGS (s);
+    	    	    	end;
+    	    	    	ctx [CTX_V_VRFYMAIL] = NOT .ctx [CTX_V_AUTHENTICATED] AND
+                                               NOT .ctx [CTX_V_REJECTALL] AND
+    	    	    	    	    	       NOT .ctx [CTX_V_BLACKHOLE] AND
+    	    	    	    	    	       VALIDATE_DOMAIN () AND
+    	    	    	    	    	       NOT .ISNULL AND
+    	    	    	    	    	      .DOMPART [DSC$W_LENGTH] NEQ 0;
+    	    	    	IF .ctx [CTX_V_VRFYMAIL] THEN
+    	    	    	    ctx [CTX_V_VRFYMAIL] = CH$RCHAR (.DOMPART [DSC$A_POINTER]) NEQ %C'[';  ! numeric literal
+    	    	    	IF .ctx [CTX_V_VRFYMAIL] THEN
+    	    	    	BEGIN
+    	    	    	    status = is_local_domain (dompart, 1, 1);
+    	    	    	    IF NOT .status THEN
+    	    	    	    	status = NETLIB_DNS_QUERY (ctx [CTX_L_TCPCTX], dompart, 0,
+    	    	    	    	    	    	    	   %REF (NETLIB_K_DNS_TYPE_A), CTX [CTX_T_SNDBUF],
+    	    	    	    	       	    	    	   %REF (CTX_S_SNDBUF), %REF (0), iosb, MAIL_VERIFY_AST, .ctx)
+    	    	    	    ELSE
+    	    	    	    BEGIN
+    	    	    	    	ctx [CTX_V_VRFYMAIL] = 0;
+    	    	    	    	MAIL_VERIFY (.ctx);
+    	    	    	    END;
+
+    	    	    	    IF NOT .STATUS THEN
+    	    	    	    BEGIN
+    	    	    	    	ctx [CTX_V_VRFYMAIL] = 0;
+    	    	    	    	MAIL_VERIFY (.ctx);
+    	    	    	    END;
+    	    	    	END
+    	    	    	ELSE MAIL_VERIFY (.ctx);  ! to complete processing
+    	    	    END;
+    	    	END
+		ELSE SEND (SND_AST, '501 5.5.4 Syntax error.')
+		ELSE SEND (SND_AST, '501 5.5.4 Syntax error.');
+    	    END;
+
+	    [SMTP_CMD_RSET] :
+		SEND (SND_AST, '250 2.5.0 Okay.');
+
+	    [SMTP_CMD_NOOP] :
+		SEND (SND_AST, '250 2.0.0 Okay.');
+
+	    [SMTP_CMD_QUIT] :
+		BEGIN
+		    STATE = STATE_CLUP;
+		    SEND (READ_AST,
+			'221 2.3.0 !AS Service closing transmission channel', HOSTNAME);
+		END;
+
+    	    [SMTP_CMD_ETRN] :
+    	    	BEGIN
+    	    	    IF .TXT EQLA 0 OR .TXT [TXT_W_LEN] EQL 0 THEN
+    	    	    	SEND (SND_AST, '501 5.5.4 Syntax error in parameters.')
+    	    	    ELSE IF .ctx [CTX_V_REQAUTH] AND NOT .ctx [CTX_V_AUTHENTICATED] THEN
+                        SEND (SND_AST, '452 4.7.1 Please authenticate first.')
+                    ELSE
+    	    	    BEGIN
+    	    	    	status = ETRN_CHECK (.txt [TXT_W_LEN], txt [TXT_T_TEXT]);
+    	    	    	IF .status THEN
+    	    	    	    SEND (SND_AST, '250 2.0.0 Okay, queuing for !AD started', .txt [TXT_W_LEN], txt [TXT_T_TEXT])
+    	    	    	ELSE IF .status EQL MX__NOPATH THEN
+    	    	    	    SEND (SND_AST, '459 4.0.0 No queue found for !AD', .txt [TXT_W_LEN], txt [TXT_T_TEXT])
+    	    	    	ELSE
+    	    	    	    SEND (SND_AST, '459 4.0.0 Error starting queue for !AD, status=%X!XL',
+    	    	    	    	    	    .txt [TXT_W_LEN], txt [TXT_T_TEXT], .status);
+    	    	    END;
+    	    	END;
+
+    	    [SMTP_CMD_AUTH] :
+    	    	BEGIN
+    	    	    IF .txt EQLA 0 OR .txt [TXT_W_LEN] EQL 0 THEN
+    	    	    	SEND (SND_AST, '501 5.5.4 Syntax error in parameters.')
+    	    	    ELSE IF .ctx [CTX_V_AUTHENTICATED] THEN
+    	    	    	SEND (SND_AST, '503 5.5.1 Already authenticated.')
+    	    	    ELSE IF NOT (.ctx [CTX_V_AUTHCRAM] OR .ctx [CTX_V_AUTHPLAIN]) THEN
+    	    	    	SEND (snd_ast, '500 5.5.1 Command unrecognized: "AUTH"')
+    	    	    ELSE
+    	    	    BEGIN
+    	    	    	status = auth_begin (.ctx, txt);
+    	    	    	IF .txt NEQA 0 THEN
+    	    	    	BEGIN
+    	    	    	    IF .status THEN
+    	    	    	    	SEND (auth1_ast, '!AD', .txt [TXT_W_LEN], txt [TXT_T_TEXT])
+    	    	    	    ELSE
+    	    	    	    	SEND (snd_ast, '!AD', .txt [TXT_W_LEN], txt [TXT_T_TEXT]);
+    	    	    	    FREETXT (txt);
+    	    	    	END;
+    	    	    END;
+    	    	END;
+
+	    [SMTP_CMD_VRFY] :
+    	    	IF .TXT EQLA 0 OR .TXT [TXT_W_LEN] EQL 0 THEN
+    	    	    SEND (SND_AST, '501 5.5.4 Format is: VRFY <address>')
+    	    	ELSE
+    	    	BEGIN
+    	    	    LOCAL S : BLOCK [DSC$K_S_BLN,BYTE],
+    	    	    	  VRFY_CODE;
+    	    	    $INIT_DYNDESC (S);
+    	    	    IF NOT .CTX [CTX_V_VINIT] THEN CTX [CTX_V_VINIT] = VERIFY_BEGIN (.CTX);
+    	    	    IF NOT .CTX [CTX_V_VINIT] THEN
+    	    	    	SEND (SND_AST, '252 2.1.0 Could not initialize address processing code')
+    	    	    ELSE
+    	    	    BEGIN
+    	    	    	VRFY_CODE = VERIFY_ADDRESS (.TXT [TXT_W_LEN], TXT [TXT_T_TEXT], S);
+    	    	    	SEND (SND_AST, '!UL !AS', .VRFY_CODE, S);
+    	    	    	FREE_STRINGS (S);
+    	    	    END;
+    	    	END;
+
+	    [SMTP_CMD_STARTTLS] :
+    	    	IF .TXT EQLA 0 OR .TXT [TXT_W_LEN] EQL 0 THEN
+		BEGIN
+		    SEND (SND_AST, '454 4.3.0 TLS not available due to temporary reason');
+		END
+    	    	ELSE SEND (SND_AST, '501 5.5.2 Syntax error');
+
+	    [SMTP_CMD_UNKNOWN] :
+		SEND (SND_AST, '500 5.5.1 Command unrecognized: "!AD"',
+    	    	    	    .instr [DSC$W_LENGTH]-.errpoint, CH$PLUS (.instr [DSC$A_POINTER], .errpoint));
+
+	    [INRANGE] :
+		SEND (SND_AST, '503 5.5.1 Bad sequence of commands.');
+
+	    [OUTRANGE] :
+		SEND (SND_AST, '501 5.5.4 Syntax error in command arguments: "!AD"',
+    	    	    	    .instr [DSC$W_LENGTH]-.errpoint, CH$PLUS (.instr [DSC$A_POINTER], .errpoint));
+
+	    TES;
+
+    	    free_paraminfo (pi);
+
+	END;
+
+    [STATE_RCPT] :
+	BEGIN
+    	    LOCAL pi : SMTPPRMDEF;
+
+    	    CH$FILL (%CHAR (0), SMTPPRM_S_SMTPPRMDEF, pi);
+
+	    PARSE_SMTP_CMD (INSTR, CMDCODE, TXT, pi, errpoint);
+
+	    CASE .CMDCODE FROM SMTP_CMD_LO TO SMTP_CMD_HI OF
+	    SET
+	    [SMTP_CMD_VRFY] :
+    	    	IF .TXT EQLA 0 OR .TXT [TXT_W_LEN] EQL 0 THEN
+    	    	    SEND (SND_AST, '501 5.5.4 Format is: VRFY <address>')
+    	    	ELSE
+    	    	BEGIN
+    	    	    LOCAL S : BLOCK [DSC$K_S_BLN,BYTE],
+    	    	    	  VRFY_CODE;
+    	    	    $INIT_DYNDESC (S);
+    	    	    IF NOT .CTX [CTX_V_VINIT] THEN CTX [CTX_V_VINIT] = VERIFY_BEGIN (.CTX);
+    	    	    IF NOT .CTX [CTX_V_VINIT] THEN
+    	    	    	SEND (SND_AST, '252 2.1.0 Could not initialize address processing code')
+    	    	    ELSE
+    	    	    BEGIN
+    	    	    	VRFY_CODE = VERIFY_ADDRESS (.TXT [TXT_W_LEN], TXT [TXT_T_TEXT], S);
+    	    	    	SEND (SND_AST, '!UL !AS', .VRFY_CODE, S);
+    	    	    	FREE_STRINGS (S);
+    	    	    END;
+    	    	END;
+	    [SMTP_CMD_RCPT] :
+		IF .TXT NEQA 0 THEN IF .TXT [TXT_W_LEN] NEQ 0 THEN IF NOT .ctx [CTX_V_SPAM] THEN
+		BEGIN
+		    LOCAL
+    	    	    	R   	: REF TXTDEF,
+    	    	    	RCPT	: REF RCPTDEF,
+    	    	    	TP,
+    	    	    	TLEN	: WORD,
+    	    	    	TMPBUF	: VECTOR [1024,BYTE];
+
+    	    	    IF .TXT [TXT_W_LEN] GEQ 2 AND CH$RCHAR (TXT [TXT_T_TEXT]) EQL %C'<'
+    	    	    	AND CH$RCHAR (CH$PLUS (TXT [TXT_T_TEXT], .TXT [TXT_W_LEN]-1)) EQL %C'>'
+    	    	    THEN
+    	    	    BEGIN
+    	    	    	TP = CH$PLUS (TXT [TXT_T_TEXT], 1);
+    	    	    	TLEN = .TXT [TXT_W_LEN] - 2;
+    	    	    END
+    	    	    ELSE
+    	    	    BEGIN
+    	    	    	TP = TXT [TXT_T_TEXT];
+    	    	    	TLEN = .TXT [TXT_W_LEN];
+    	    	    END;
+		    !
+    	    	    !  Copy recipient address to local buffer.
+		    !  Special case:  If "@host" is omitted, supply the
+		    !  local node.  Needed for some POP clients.
+		    !
+    	    	    TMPBUF [0] = '<';
+		    IF .TLEN NEQ 0 AND CH$FAIL(CH$FIND_CH (.TLEN, .TP, %C'@')) THEN
+    	    	    BEGIN
+    	    	    	IF NOT CH$FAIL (CH$FIND_CH (.TLEN, .TP, %C':')) THEN
+    	    	    	BEGIN
+    	    	    	    TMPBUF [1] = %C'"';
+    	    	    	    IF .TLEN GTRU %ALLOCATION (TMPBUF) - (.MAILNAME [DSC$W_LENGTH] + 5) THEN ! < " " @ >
+    	    	    	    	TLEN = %ALLOCATION (TMPBUF) - (.MAILNAME [DSC$W_LENGTH] + 5);
+    	    	    	    CH$MOVE (.TLEN, .TP, TMPBUF [2]);
+    	    	    	    TMPBUF [.TLEN+2] = %C'"';
+    	    	    	    TLEN = .TLEN + 2;
+    	    	    	END
+    	    	    	ELSE
+    	    	    	BEGIN
+    	    	    	    IF .TLEN GTRU %ALLOCATION (TMPBUF) - (.MAILNAME [DSC$W_LENGTH] + 3) THEN ! < @ >
+    	    	    	    	TLEN = %ALLOCATION (TMPBUF) - (.MAILNAME [DSC$W_LENGTH] + 3);
+    	    	    	    CH$MOVE (.TLEN, .TP, TMPBUF [1]);
+    	    	    	END;
+    	    	    	TMPBUF [.TLEN+1] = %C'@';
+    	    	    	CH$MOVE (.MAILNAME [DSC$W_LENGTH], .MAILNAME [DSC$A_POINTER],
+    	    	    	    	    TMPBUF [.TLEN+2]);
+    	    	    	TLEN = .TLEN + .MAILNAME [DSC$W_LENGTH] + 1;
+    	    	    END
+    	    	    ELSE
+    	    	    BEGIN
+    	    	    	IF .TLEN GTRU %ALLOCATION (TMPBUF) - 2 THEN ! < >
+    	    	    	    TLEN = %ALLOCATION (TMPBUF) - 2;
+    	    	    	IF .TLEN NEQ 0 THEN CH$MOVE (.TLEN, .TP, TMPBUF [1]);
+    	    	    END;
+    	    	    TP = TMPBUF;
+    	    	    TMPBUF [.TLEN+1] = %C'>';
+    	    	    TLEN = .TLEN + 2;
+    	    	    IF .TLEN GTRU 2  THEN ! i.e., not just <>
+    	    	    BEGIN
+    	    	    	INIT_SDESC (STR, .TLEN, TMPBUF);
+    	    	    	STATUS = PARSE821 (STR, RTEQ, LCLPART, DOMPART);
+    	    	    	IF NOT .STATUS THEN
+    	    	    	BEGIN
+    	    	    	    IF NOT CH$FAIL (CH$FIND_CH (.TLEN, TMPBUF, %C':')) AND
+    	    	    	    	(CH$RCHAR (TMPBUF [1]) NEQ %C'"') AND
+    	    	    	    	.TLEN LSSU %ALLOCATION (TMPBUF) - 2 THEN  ! must have room for quotation marks
+    	    	    	    BEGIN
+    	    	    	    	LOCAL
+    	    	    	    	    TMP2 : VECTOR [1024,BYTE],
+    	    	    	    	    ATP;
+		    	    !
+		    	    !  Another special case for stupid, mis-configured
+		    	    !  UNIX mailers that don't adhere to the RFC but
+		    	    !  act like they do.
+		    	    !
+		    	    !  Some UNIX mailers will happily send out
+		    	    !  <node::user@localnode> as a valid string (it's
+		    	    !  missing the required quotes).  See if the
+		    	    !  quotes are present---if not, add them.)
+		    	    !
+    	    	    	    	ATP = (DECR CP FROM CH$PLUS (TMPBUF, .TLEN-1) TO TMPBUF DO
+    	    	    	    	    	IF CH$RCHAR (.CP) EQL %C'@' THEN EXITLOOP .CP);
+    	    	    	    	IF .ATP NEQA -1 THEN
+    	    	    	    	BEGIN
+    	    	    	    	    LOCAL LLEN;
+    	    	    	    	    LLEN = CH$DIFF (.ATP, TMPBUF) - 1; ! remove '<'
+    	    	    	    	    TMP2 [0] = %C'<';
+    	    	    	    	    TMP2 [1] = %C'"';
+    	    	    	    	    CH$MOVE (.LLEN, TMPBUF [1], TMP2 [2]);
+    	    	    	    	    TMP2 [.LLEN + 2] = %C'"';
+    	    	    	    	    CH$MOVE (.TLEN-(.LLEN+1), .ATP, TMP2 [.LLEN+3]);
+    	    	    	    	    TLEN = .TLEN + 2;
+    	    	    	    	    INIT_SDESC (STR, .TLEN, TMP2);
+    	    	    	    	    STATUS = PARSE821 (STR, RTEQ, LCLPART, DOMPART);
+    	    	    	    	END;
+    	    	    	    END;
+    	    	    	END;
+    	    	    END
+    	    	    ELSE STATUS = 0;  ! just <> not permitted as recipient
+
+		    IF NOT .STATUS THEN
+			SEND (SND_AST, '501 5.1.3 Syntax error in address')
+		    ELSE
+		    BEGIN
+    	    	    	LOCAL VRFY_CODE;
+    	    	    	WHILE NOT REMQUE (.RTEQ [QUE_L_HEAD], R) DO FREETXT (R);  ! always strip route
+    	    	    	IF .STR [DSC$B_CLASS] EQL DSC$K_CLASS_S THEN $INIT_DYNDESC (STR);
+			FORMAT821 (RTEQ, LCLPART, DOMPART, STR);
+    	    	    	IF NOT .CTX [CTX_V_VINIT] THEN CTX [CTX_V_VINIT] = VERIFY_BEGIN (.CTX);
+    	    	    	IF .CTX [CTX_V_VINIT] THEN
+    	    	    	BEGIN
+    	    	    	    $INIT_DYNDESC (STR2);
+    	    	    	    VRFY_CODE = VERIFY_ADDRESS (.STR [DSC$W_LENGTH], .STR [DSC$A_POINTER], STR2, RCPT_IS_LOCAL);
+    	    	    	    IF .VRFY_CODE EQL 252 THEN VRFY_CODE = SMTP__ACTION_OKAY;
+    	    	    	    IF .VRFY_CODE EQL SMTP__WILL_FORWARD THEN
+    	    	    	    BEGIN 
+    	    	    	    	! Note: when the NORELAY bit is clear (i.e., relaying is OK), then
+    	    	    	    	!       the xxx_IS_LOCAL flags will always be set by the routines in VERIFY.B32.
+    	    	    	    	IF NOT .ctx [CTX_V_SNDRRELAY] AND NOT .ctx [CTX_V_SNDRLCL] AND NOT .RCPT_IS_LOCAL THEN
+    	    	    	    	BEGIN
+    	    	    	    	    BIND remsin = ctx [CTX_X_PEER] : SINDEF;
+				    LOCAL sender    : BLOCK [DSC$K_S_BLN,BYTE];
+				    INIT_SDESC (sender, .fromadr [TXT_W_LEN], fromadr [TXT_T_TEXT]);
+    	    	    	    	    VRFY_CODE = SMTP__USER_NOT_LOCAL;
+    	    	    	    	    STR$COPY_DX (STR2, %ASCID'Relay disabled, recipient refused: ');
+    	    	    	    	    STR$APPEND (STR2, STR);
+    	    	    	    	    LOG_SPAM (0, remsin [SIN_X_ADDR], sender, 0, str, 3);
+    	    	    	    	END
+    	    	    	    	ELSE
+    	    	    	    	    VRFY_CODE = SMTP__ACTION_OKAY;
+    	    	    	    END;
+    	    	    	    IF .VRFY_CODE NEQ SMTP__ACTION_OKAY THEN STR$COPY_DX (STR, STR2);
+    	    	    	END
+    	    	    	ELSE VRFY_CODE = SMTP__ACTION_OKAY;   ! if we can't verify on RCPT, accept it anyway
+
+    	    	    	IF NOT .ctx [CTX_V_NOSPAMCHK] AND .VRFY_CODE EQL SMTP__ACTION_OKAY THEN
+    	    	    	BEGIN
+    	    	    	    BIND    remsin = ctx [CTX_X_PEER] : SINDEF;
+    	    	    	    LOCAL
+    	    	    	    	sender    : BLOCK [DSC$K_S_BLN,BYTE],
+    	    	    	    	accept,
+                                ruleid;
+    	    	    	    INIT_SDESC (sender, .fromadr [TXT_W_LEN], fromadr [TXT_T_TEXT]);
+    	    	    	    VRFY_CODE = IS_SPAM_TO (remsin [SIN_X_ADDR], sender, str, str2, accept, ruleid);
+    	    	    	    IF .VRFY_CODE NEQ SMTP__ACTION_OKAY THEN
+    	    	    	    BEGIN
+    	    	    	    	IF .VRFY_CODE EQL SMTP__WILL_FORWARD THEN
+    	    	    	    	BEGIN
+    	    	    	    	    VRFY_CODE = SMTP__ACTION_OKAY;
+    	    	    	    	    IF .accept THEN 
+    	    	    	    	    	ctx [CTX_V_NOSPAMCHK] = 1;
+    	    	    	    	END
+    	    	    	    	ELSE
+    	    	    	    	BEGIN
+    	    	    	    	    DPRINT ('Identified spammer based on address/from/to combination');
+    	    	    	    	    LOG_SPAM (.ruleid, remsin [SIN_X_ADDR], sender, 0, str);
+    	    	    	    	END;
+    	    	    	    	STR$COPY_DX (str, str2);
+    	    	    	    END
+    	    	    	    ELSE IF .accept THEN
+    	    	    	    	ctx [CTX_V_NOSPAMCHK] = 1;
+    	    	    	END;
+
+    	    	    	IF .VRFY_CODE EQL SMTP__ACTION_OKAY THEN
+    	    	    	BEGIN
+			    MEM_GETRCPT (RCPT);
+    	    	    	    rcpt [RCPT_A_ADDR] = MEM_GETTXT (.str [DSC$W_LENGTH], .str [DSC$A_POINTER]);
+    	    	    	    IF .pi [SMTPPRM_V_NOTIFY] THEN
+    	    	    	    BEGIN
+    	    	    	    	IF .pi [SMTPPRM_L_NTFYMSK] EQL 0 THEN
+    	    	    	    	    rcpt [RCPT_V_DSN_NEVER] = 1
+    	    	    	    	ELSE
+    	    	    	    	BEGIN
+    	    	    	    	    rcpt [RCPT_V_DSN_SUCCESS] = .pi [SMTPPRM_V_NOTIFY_SUCCESS];
+    	    	    	    	    rcpt [RCPT_V_DSN_FAILURE] = .pi [SMTPPRM_V_NOTIFY_FAILURE];
+    	    	    	    	    rcpt [RCPT_V_DSN_DELAY]   = .pi [SMTPPRM_V_NOTIFY_DELAY];
+    	    	    	    	END;
+    	    	    	    END;
+    	    	    	    IF .pi [SMTPPRM_V_ORCPT] THEN
+    	    	    	    BEGIN
+    	    	    	    	rcpt [RCPT_A_ORTYPE] = .pi [SMTPPRM_A_ORTYPE];
+    	    	    	    	rcpt [RCPT_A_ORADDR] = .pi [SMTPPRM_A_ORADDR];
+    	    	    	    	pi [SMTPPRM_A_ORTYPE] = pi [SMTPPRM_A_ORADDR] = 0;
+    	    	    	    END;
+			    INSQUE (.RCPT, .RCPTQUE [QUE_L_TAIL]);
+			    envl [ENVL_L_RCPTCOUNT] = .envl [ENVL_L_RCPTCOUNT] + 1;
+    	    	    	    ctx [CTX_W_LASTRLEN] = MIN (CTX_S_LASTRCPT, .str [DSC$W_LENGTH]);
+    	    	    	    CH$MOVE (.ctx [CTX_W_LASTRLEN], .str [DSC$A_POINTER], ctx [CTX_T_LASTRCPT]);
+			    SEND (SND_AST, '250 2.1.5 OK !AS', str);
+    	    	    	END
+    	    	    	ELSE SEND (SND_AST, '!UL !AS', .VRFY_CODE, STR);
+		    END;
+		END
+    	    	ELSE SEND (SND_AST, '550 !AD', .ctx [CTX_W_REJRSN], ctx [CTX_T_REJRSN])  ! SPAM bit set
+		ELSE SEND (SND_AST, '501 5.5.4 Syntax error.')  ! zero-length recipient
+		ELSE SEND (SND_AST, '501 5.5.4 Syntax error.'); ! null recipient text pointer
+
+	    [SMTP_CMD_DATA] :
+                IF .ctx [CTX_V_REJECTALL] AND NOT .ctx [CTX_V_AUTHENTICATED] THEN
+                    SEND (SND_AST, '554 5.7.0 Message rejected for administrative reasons')
+                ELSE IF .envl [ENVL_L_RCPTCOUNT] EQL 0 THEN
+    	    	    SEND (SND_AST, '554 5.5.0 No valid recipients for this message.')
+    	    	ELSE
+		BEGIN
+    	    	    IF .CTX [CTX_V_VINIT] THEN
+    	    	    BEGIN
+    	    	    	VERIFY_END (.CTX);
+    	    	    	CTX [CTX_V_VINIT] = 0;
+    	    	    END;
+		    STR$FREE1_DX (CURHDR);
+		    STATE = STATE_HDRS;
+		    SEND (SND_AST,
+			'354 Start mail input; end with <crlf>.<crlf>');
+		END;
+
+	    [SMTP_CMD_QUIT] :
+		BEGIN
+		    STATE = STATE_CLUP;
+		    SEND (READ_AST,
+			'221 2.3.0 !AS Service closing transmission channel', HOSTNAME);
+		END;
+
+
+	    [SMTP_CMD_RSET] :
+		BEGIN
+    	    	    reset_envelope (envl);
+    	    	    ctx [CTX_L_MSGFLAGS] = 0;
+		    STATE = STATE_MAIL;
+    	    	    IF .QENT [QENT_L_ENTNUM] NEQU 0 THEN
+    	    	    BEGIN
+		    	IF NOT FLQ_PURGE (QCTX, QENT) THEN
+                        BEGIN
+                            DPRINT ('Could not delete queue entry !UL, cancelling', .qent [QENT_L_ENTNUM]);
+                            qent [QENT_L_STATUS] = FLQ_K_STCAN;
+                            FLQ_UPDATE (qctx, qent);
+                        END;
+		    	QENT [QENT_L_ENTNUM] = 0;
+    	    	    END;
+    	    	    IF .CTX [CTX_V_VINIT] THEN
+    	    	    BEGIN
+    	    	    	VERIFY_END (.CTX);
+    	    	    	CTX [CTX_V_VINIT] = 0;
+    	    	    END;
+		    SEND (SND_AST, '250 2.5.0 Server has reset to initial state.');
+		END;
+
+	    [SMTP_CMD_NOOP] :
+		SEND (SND_AST, '250 2.0.0 Stop wasting my time.');
+
+    	    [SMTP_CMD_UNKNOWN] :
+    	    	SEND (SND_AST, '500 5.5.2 Command unrecognized: "!AD"',
+    	    	    	    .instr [DSC$W_LENGTH]-.errpoint, CH$PLUS (.instr [DSC$A_POINTER], .errpoint));
+
+	    [INRANGE] :
+		SEND (SND_AST, '503 5.5.1 Bad sequence of commands.');
+
+    	    [OUTRANGE] :
+		SEND (SND_AST, '501 5.5.4 Syntax error in command arguments: "!AD"',
+    	    	    	    .instr [DSC$W_LENGTH]-.errpoint, CH$PLUS (.instr [DSC$A_POINTER], .errpoint));
+
+	    TES;
+
+    	    free_paraminfo (pi);
+
+	END;
+
+    [STATE_HDRS] :
+	BEGIN
+    	    WHILE .INSTR [DSC$W_LENGTH] GTR 0 AND
+    	    	  (CH$RCHAR (CH$PLUS (.INSTR [DSC$A_POINTER], .INSTR [DSC$W_LENGTH]-1)) EQL %C' ' OR
+    	    	   CH$RCHAR (CH$PLUS (.INSTR [DSC$A_POINTER], .INSTR [DSC$W_LENGTH]-1)) EQL %CHAR (9))
+    	    DO INSTR [DSC$W_LENGTH] = .INSTR [DSC$W_LENGTH] - 1;
+
+	    STATUS = SS$_NORMAL;
+	    IF .INSTR [DSC$W_LENGTH] EQL 1 AND
+    	    	    CH$RCHAR (.INSTR [DSC$A_POINTER]) EQL %C'.' THEN
+    	    	STATUS = RMS$_EOF
+	    ELSE IF .INSTR [DSC$W_LENGTH] GTR 1 AND
+		    CH$RCHAR (.INSTR [DSC$A_POINTER]) EQL %C'.' THEN
+    	    BEGIN
+    	    	INSTR [DSC$A_POINTER] = CH$PLUS (.INSTR [DSC$A_POINTER], 1);
+    	    	INSTR [DSC$W_LENGTH] = .INSTR [DSC$W_LENGTH] - 1;
+    	    END;
+
+	    IF .STATUS EQL RMS$_EOF OR .INSTR [DSC$W_LENGTH] EQL 0 THEN
+	    BEGIN
+		LOCAL
+		    H 	    	: REF TXTDEF,
+		    HDRQ2   	: QUEDEF,
+    	    	    REMHOST	: BLOCK [DSC$K_S_BLN,BYTE],
+    	    	    sender  	: BLOCK [DSC$K_S_BLN,BYTE],
+    	    	    envid   	: BLOCK [DSC$K_S_BLN,BYTE],
+    	    	    spamreason	: REF BLOCK [,BYTE],
+    	    	    r	    	: REF RCPTDEF,
+		    have_date;
+
+    	    	IF (.ctx [CTX_V_DEBUG] AND NOT .ctx [CTX_V_DEBUGTEXT]) AND .status EQL RMS$_EOF THEN
+    	    	    DPRINT('[Message contained only headers]');
+
+    	    	spamreason = 0;
+		add_hdr_to_queue (curhdr, hdrque);	!Add last hdr to queue
+    	    	IF .STATUS EQL RMS$_EOF AND QUEUE_EMPTY (hdrque) THEN
+    	    	BEGIN
+    	    	    reset_envelope (envl);
+    	    	    IF NOT FLQ_PURGE (QCTX, QENT) THEN
+                    BEGIN
+                        DPRINT ('Could not delete queue entry !UL, cancelling', .qent [QENT_L_ENTNUM]);
+                        qent [QENT_L_STATUS] = FLQ_K_STCAN;
+                        FLQ_UPDATE (qctx, qent);
+                    END;
+    	    	    QENT [QENT_L_ENTNUM] = 0;
+    	    	    ctx [CTX_L_MSGFLAGS] = 0;
+    	    	    STATE = STATE_MAIL;
+    	    	    SEND (SND_AST, '554 5.6.0 No message contents.');
+    	    	    RETURN SS$_NORMAL;
+    	    	END;
+		MX_MKDATE (0, STR, 0);
+    	    	IF .rcvdfrom EQLA 0 THEN
+    	    	    INIT_SDESC (remhost, 12, UPLIT ('Unknown-host'))
+    	    	ELSE
+    	    	    INIT_SDESC (REMHOST, .rcvdfrom [TXT_W_LEN], rcvdfrom [TXT_T_TEXT]);
+		BEGIN
+    	    	    BIND    remsin = ctx [CTX_X_PEER] : SINDEF;
+    	    	    LOCAL
+    	    	    	aaabuf	: VECTOR [32,BYTE],
+    	    	    	aaadsc	: BLOCK [DSC$K_S_BLN,BYTE],
+                        acc;
+    	    	    IF NOT .ctx [CTX_V_AUTHENTICATED] OR .ctx [CTX_L_AAAID] EQLU 0 THEN
+    	    	    	INIT_SDESC (aaadsc, 0, aaabuf)
+    	    	    ELSE
+    	    	    BEGIN
+    	    	    	INIT_SDESC (aaadsc, %ALLOCATION (aaabuf), aaabuf);
+    	    	    	$FAO (%ASCID'auth id !XL', aaadsc [DSC$W_LENGTH], aaadsc, .ctx [CTX_L_AAAID]);
+    	    	    END;
+                    acc = .ctx [CTX_L_ACCEPTED];
+                    IF NOT .ctx [CTX_V_AUTHENTICATED] AND (.acc<0,16,0> EQL 5) THEN
+                    BEGIN
+                        INIT_SDESC (aaadsc, %ALLOCATION (aaabuf), aaabuf);
+                        $FAO (%ASCID'warning type !XW', aaadsc [DSC$W_LENGTH], aaadsc, .acc<16,16,0>);
+                    END;
+    	    	    LIB$SYS_FAO (%ASCID'Received: from !AS by !AS (!AS) with !ASSMTP!AS!AS!AS', 0, curhdr,
+    	    	    	         remhost, HOSTNAME, MX_IDENT_STRING,
+    	    	    	    	 (IF .CTX [CTX_V_ESMTP] THEN %ASCID'E' ELSE null_d),
+                                 (IF .aaadsc [DSC$W_LENGTH] NEQU 0 THEN lparen_d ELSE null_d), aaadsc,
+                                 (IF .aaadsc [DSC$W_LENGTH] NEQU 0 THEN %ASCID')' ELSE null_d));
+    	    	    IF .envl [ENVL_L_RCPTCOUNT] EQL 1 THEN
+    	    	    BEGIN
+    	    	    	LOCAL
+    	    	    	    s : BLOCK [DSC$K_S_BLN,BYTE];
+    	    	    	INIT_SDESC (s, .ctx [CTX_W_LASTRLEN], ctx [CTX_T_LASTRCPT]);
+    	    	    	STR$APPEND (curhdr, %ASCID' for ');
+    	    	    	STR$APPEND (curhdr, s);
+    	    	    END;
+    	    	    STR$APPEND (curhdr, %ASCID'; ');
+    	    	    STR$APPEND (CURHDR, STR);
+		END;
+		INSTXT (CURHDR, HDRQUE);
+    	    	INIT_QUEUE (HDRQ2);
+		PARSE_HDRS (HDRQUE, HDRQ2);
+		WHILE NOT REMQUE (.HDRQUE [QUE_L_HEAD], H) DO FREETXT (H);
+    	    	IF NOT .ctx [CTX_V_SPAM] AND NOT .ctx [CTX_V_NOSPAMCHK] THEN
+    	    	BEGIN
+    	    	    LOCAL
+    	    	       	tmp : BLOCK [DSC$K_S_BLN,BYTE],
+                        rsn : BLOCK [DSC$K_S_BLN,BYTE],
+                        ruleid;
+    	    	    INIT_DYNDESC (tmp, rsn);
+                    ctx [CTX_V_SPAM] = IS_SPAM_HEADER (hdrq2, tmp, rsn, ruleid);
+    	    	    IF .ctx [CTX_V_SPAM] THEN
+    	    	    BEGIN
+    	    	        BIND
+                            remsin = ctx [CTX_X_PEER] : SINDEF;
+
+    	    	    	BIND_ENVL_FIELDS (envl);
+                        INIT_SDESC (sender, .fromadr [TXT_W_LEN], fromadr [TXT_T_TEXT]);
+    	    	    	DPRINT ('Identified spammer based on !AS', rsn);
+    	    	        LOG_SPAM (.ruleid, remsin [SIN_X_ADDR], sender, 0, 0, 
+                            (IF .tmp [DSC$W_LENGTH] EQLU 0 THEN 1 ELSE 0), rsn);
+    	    	    	IF .tmp [DSC$W_LENGTH] NEQU 0 THEN
+    	    	    	BEGIN
+    	    	    	    LOCAL
+    	    	    	    	hdsc : BLOCK [DSC$K_S_BLN,BYTE],
+    	    	    	    	rcpt : REF RCPTDEF,
+    	    	    	    	hbuf : VECTOR [512,BYTE];
+
+    	    	    	    DPRINT ('...diverting to !AS', tmp);
+    	    	    	    WHILE NOT REMQUE_HEAD (rcptque, rcpt) DO
+    	    	    	    BEGIN
+    	    	    	    	BIND rtxt = rcpt [RCPT_A_ADDR] : REF TXTDEF;
+                                local h : REF TXTDEF;
+    	    	    	    	INIT_SDESC (hdsc, %ALLOCATION (hbuf), hbuf);
+    	    	    	    	$FAO (%ASCID'X-Original-Recipient: !AD', hdsc [DSC$W_LENGTH], hdsc,
+    	    	    	    	    	 .rtxt [TXT_W_LEN], rtxt [TXT_T_TEXT]);
+                                h = .hdrq2 [QUE_L_TAIL];
+    	    	    	    	INSTXT (hdsc, .h, MX_K_HDR_OTHER);
+                                h = .h [TXT_L_FLINK];
+    	    	    	    	INIT_SDESC (hdsc, %ALLOCATION (hbuf), hbuf);
+                                $FAO (%ASCID'X-Junk-Mail-Rule-ID: !UL', hdsc [DSC$W_LENGTH], hdsc, .ruleid);
+                                INSTXT (hdsc, .h, MX_K_HDR_OTHER);
+    	    	    	    	MEM_FREERCPT (rcpt);
+    	    	    	    END;
+    	    	    	    INIT_SDESC (hdsc, %ALLOCATION (hbuf), hbuf);
+    	    	    	    $FAO (%ASCID'<!AS>', hdsc [DSC$W_LENGTH], hdsc, tmp);
+    	    	    	    MEM_GETRCPT (rcpt);
+    	    	    	    rcpt [RCPT_A_ADDR] = MEM_GETTXT (.hdsc [DSC$W_LENGTH], .hdsc [DSC$A_POINTER]);
+    	    	    	    rcpt [RCPT_V_DSN_NEVER] = 1;
+    	    	    	    INSQUE_TAIL (.rcpt, rcptque);
+    	    	    	    envl [ENVL_L_RCPTCOUNT] = 1;
+    	    	    	    ctx [CTX_V_SPAM] = 0;
+    	    	    	    ctx [CTX_V_NOSPAMCHK] = 1; ! no further spam checks on this
+    	    	    	END;
+    	    	    END;
+    	    	    FREE_STRINGS (tmp, rsn);
+    	    	END;
+    	    	    	    
+    	    	IF NOT .ctx [CTX_V_SPAM] AND NOT .ctx [CTX_V_NOSPAMCHK] THEN
+    	    	BEGIN
+    	    	    LOCAL
+    	    	    	status;
+    	    	    status = IS_SPAM_HEADER_COMBINATION (envl, hdrq2, spamreason,
+                                                         .ctx [CTX_V_SNDRLCL], .hdrq2 [QUE_L_TAIL]);
+    	    	    ctx [CTX_V_SPAM] = .status<0,1,0>;
+    	    	    IF .status NEQ 0 THEN
+                    BEGIN
+    	    	        BIND
+                            remsin = ctx [CTX_X_PEER] : SINDEF;
+                        BIND_ENVL_FIELDS (envl);
+                        LOCAL
+    	    	    	    sender	: BLOCK [DSC$K_S_BLN,BYTE];
+                        DPRINT ('Identified spammer based on header-combination rules.');
+                        INIT_SDESC (sender, .fromadr [TXT_W_LEN], fromadr [TXT_T_TEXT]);
+    	    	    	LOG_SPAM (0, remsin [SIN_X_ADDR], sender, 0, 0, .status<0,1,0>, .spamreason);
+                    END;
+    	    	END;
+    	    	IF .ctx [CTX_V_SPAM] THEN
+    	    	BEGIN
+		    WHILE NOT REMQUE (.HDRQ2 [QUE_L_HEAD], H) DO FREETXT (H);
+    	    	    reset_envelope (envl);
+    	    	    IF NOT FLQ_PURGE (QCTX, QENT) THEN
+                    BEGIN
+                        DPRINT ('Could not delete queue entry !UL, cancelling', .qent [QENT_L_ENTNUM]);
+                        qent [QENT_L_STATUS] = FLQ_K_STCAN;
+                        FLQ_UPDATE (qctx, QENT);
+                    END;
+    	    	    QENT [QENT_L_ENTNUM] = 0;
+    	    	    IF .status EQLU RMS$_EOF THEN
+    	    	    BEGIN
+    	    	    	ctx [CTX_L_MSGFLAGS] = 0;
+    	    	    	STATE = STATE_MAIL;
+    	    	    	SEND (SND_AST, '554 5.7.1 Message rejected due to header contents.');
+    	    	    END
+    	    	    ELSE
+    	    	    BEGIN
+    	    	    	STATE = STATE_MSG;
+    	    	    	READ_CMD (.CTX);
+    	    	    END;
+    	    	END
+    	    	ELSE
+    	    	BEGIN
+		    STR$CONCAT (STR, by_space_d, HOSTNAME, lparen_d, MX_IDENT_STRING, %ASCID') with SMTP');
+		    RCVBYME = RCVLINE_COUNT (HDRQ2, STR);
+		    STR$CONCAT (STR, by_space_d, HOSTNAME, lparen_d, MX_IDENT_STRING, %ASCID') with ESMTP');
+    	    	    RCVBYME = .RCVBYME + RCVLINE_COUNT (HDRQ2, STR);
+
+		    IF .ctx [CTX_V_ADD_DATE] THEN
+		    BEGIN
+		    	have_date = 0;
+		    	h = .hdrq2 [QUE_L_HEAD];
+		    	WHILE (.h NEQA hdrq2) DO
+			BEGIN
+			    IF .h [TXT_W_CODE] EQLU MX_K_HDR_DATE THEN
+    	    	    	    BEGIN
+    	    	    	    	have_date = 1;
+    	    	    	    	EXITLOOP;
+    	    	    	    END;
+			    h = .h [TXT_L_FLINK];
+			END;
+		    	IF NOT .have_date THEN
+			BEGIN
+			    MX_MKDATE (0, str, 0);		!Make a Date: line
+			    INSTXT (str, .hdrq2 [QUE_L_TAIL], MX_K_HDR_DATE);
+			    LIB$SYS_FAO (%ASCID'X-Date-Warning: Date header inserted by !AS', 0, str, hostname);
+			    INSTXT (str, .hdrq2 [QUE_L_TAIL], MX_K_HDR_OTHER);
+			END;
+		    END;
+    	    	    WRITE_ENVELOPE (.qctx, qent, %ASCID'SRC_INFO', envl);
+		    WRITE_HDRS (.QCTX, QENT, %ASCID'HDR_INFO', HDRQ2);
+		    WHILE NOT REMQUE (.HDRQ2 [QUE_L_HEAD], H) DO FREETXT (H);
+		    FLQ_MAKE_FSPEC (.QENT [QENT_L_ENTNUM], %ASCID'MSG_TEXT', STR);
+		    IF NOT MX_FILE_OPEN (MX__FILE_WRITE OR MX_M_FILE_ASY, STR, UNIT) THEN UNIT = 0;
+		    IF .STATUS EQL RMS$_EOF THEN
+		    BEGIN
+    	    	    	LOCAL MSGP;
+		    	IF .UNIT NEQU 0 THEN MX_FILE_CLOSE (.UNIT);
+		    	UNIT = 0;
+    	    	    	ctx [CTX_L_MSGFLAGS] = 0;
+		    	STATE = STATE_MAIL;
+		    	IF .RCVBYME GTR .MAXRCVBYME THEN
+		    	BEGIN
+			    QENT [QENT_L_STATUS] = FLQ_K_STCAN;
+    	    	    	    MSGP = %ASCID'554 5.4.6 Received too many times by this host.';
+		    	END
+    	    	    	ELSE
+		    	BEGIN
+			    QENT [QENT_L_STATUS] = FLQ_K_STRDY;
+			    MSGP =  %ASCID'250 2.5.0 Message received and queued.';
+		    	END;
+    	    	    	reset_envelope (envl);
+                        IF .qent [QENT_L_STATUS] EQLU FLQ_K_STCAN THEN
+                        BEGIN
+                            IF NOT FLQ_PURGE (QCTX, QENT) THEN
+                            BEGIN
+                                DPRINT ('Could not delete queue entry !UL, cancelling', .QENT [QENT_L_STATUS]);
+                                qent [QENT_L_STATUS] = FLQ_K_STCAN;
+                                FLQ_UPDATE (qctx, QENT);
+                            END;
+                        END
+                        ELSE
+		    	    FLQ_UPDATE (QCTX, QENT);
+		    	QENT [QENT_L_ENTNUM] = 0;
+		    	SEND (SND_AST, '!AS', .MSGP);
+		    END
+		    ELSE
+		    BEGIN
+		    	STATE = STATE_MSG;
+		    	READ_CMD (.CTX);
+		    END;
+    	    	END;
+	    END
+	    ELSE
+	    BEGIN
+		IF CH$RCHAR (.INSTR [DSC$A_POINTER]) EQL %C' ' OR
+			CH$RCHAR (.INSTR [DSC$A_POINTER]) EQL %CHAR (9) THEN
+		BEGIN
+    	    	    LOCAL I;
+    	    	    I = (INCR J FROM 1 TO .INSTR [DSC$W_LENGTH]-1 DO
+    	    	    	    IF CH$RCHAR (CH$PLUS (.INSTR [DSC$A_POINTER], .J)) NEQ %C' ' AND
+    	    	    	    	    CH$RCHAR (CH$PLUS (.INSTR [DSC$A_POINTER], .J)) NEQ %CHAR (9) THEN
+    	    	    	    	EXITLOOP .J-1);
+    	    	    IF .I LSS 0 THEN
+    	    	    	INSTR [DSC$W_LENGTH] = 0  ! should never happen
+    	    	    ELSE
+    	    	    BEGIN
+    	    	    	INSTR [DSC$W_LENGTH] = .INSTR [DSC$W_LENGTH] - .I;
+    	    	    	INSTR [DSC$A_POINTER] = CH$PLUS (.INSTR [DSC$A_POINTER], .I);
+    	    	    	CH$WCHAR (%C' ', .INSTR [DSC$A_POINTER]); ! make sure it's a space
+    	    	    END;
+		    !
+		    !  Quick fix: if CURHDR string will be too big, don't add
+		    !  STR2 to it.  Happens when some systems send huge
+		    !  To: or CC: lines.
+		    !
+		    IF NOT(.ctx [CTX_V_HDR_OVERFLOW]) AND
+		       (.curhdr [DSC$W_LENGTH] + .INSTR [DSC$W_LENGTH]) LEQU
+			32000
+		    THEN
+		    	STR$APPEND (CURHDR, INSTR)
+		    ELSE
+			ctx [CTX_V_HDR_OVERFLOW] = 1;
+		END
+		ELSE
+		BEGIN
+		    add_hdr_to_queue (curhdr, hdrque);
+		    STR$COPY_DX (CURHDR, INSTR);
+		END;
+		READ_CMD (.CTX);
+	    END;
+	END;
+
+    [STATE_MSG] :
+    BEGIN
+	STATUS = SS$_NORMAL;
+	IF .INSTR [DSC$W_LENGTH] EQL 1 AND CH$RCHAR (.INSTR [DSC$A_POINTER]) EQL %C'.' THEN
+    	    STATUS = RMS$_EOF
+	ELSE IF .INSTR [DSC$W_LENGTH] GTR 1 AND CH$RCHAR (.INSTR [DSC$A_POINTER]) EQL %C'.' THEN
+    	BEGIN
+    	    INSTR [DSC$A_POINTER] = CH$PLUS (.INSTR [DSC$A_POINTER], 1);
+    	    INSTR [DSC$W_LENGTH] = .INSTR [DSC$W_LENGTH] - 1;
+    	END;
+
+    	IF .ctx [CTX_V_SPAM] THEN
+    	BEGIN
+    	    IF .status EQLU RMS$_EOF THEN
+    	    BEGIN
+    	    	ctx [CTX_L_MSGFLAGS] = 0;
+    	    	STATE = STATE_MAIL;
+    	    	SEND (SND_AST, '554 5.7.1 Message rejected due to header contents.');
+    	    END
+    	    ELSE
+    	    	READ_CMD (.CTX);
+    	END
+    	ELSE
+	BEGIN
+	    IF .STATUS EQL RMS$_EOF THEN
+	    BEGIN
+    	    	LOCAL MSGP;
+
+    	    	ctx [CTX_L_MSGFLAGS] = 0;
+		STATE = STATE_MAIL;
+    	    	IF .UNIT EQLU 0 THEN
+    	    	BEGIN
+    	    	    QENT [QENT_L_STATUS] = FLQ_K_STCAN;
+    	    	    IF .ctx [CTX_L_QMSGLIM] NEQ 0 AND .qent [QENT_L_SIZE] GTRU .ctx [CTX_L_QMSGLIM] THEN
+    	    	    	MSGP = %ASCID'452 4.3.4 Insufficient storage for message.'
+    	    	    ELSE
+    	    	    	MSGP = %ASCID'451 4.3.0 Could not open or write to message text file.';
+    	    	END
+    	    	ELSE
+    	    	BEGIN
+		    IF .RCVBYME GTR .MAXRCVBYME THEN
+		    BEGIN
+		    	QENT [QENT_L_STATUS] = FLQ_K_STCAN;
+		    	MSGP =  %ASCID'554 5.4.6 Received too many times by this host.';
+		    END
+		    ELSE
+		    BEGIN
+    	    	    	BIND qmsglim = ctx [CTX_L_QMSGLIM];
+    	    	    	IF .ctx [CTX_L_MSGLIM] NEQ 0 AND .ctx [CTX_L_MSGLIM] LSSU .qent [QENT_L_SIZE] THEN
+    	    	    	BEGIN
+    	    	    	    MSGP = %ASCID'552 5.3.4 Message exceeds administrative size limit.';
+    	    	    	    qent [QENT_L_STATUS] = FLQ_K_STCAN;
+    	    	    	END
+    	    	    	ELSE IF .qmsglim NEQ 0 AND .qmsglim LSSU .qent [QENT_L_SIZE] THEN
+    	    	    	BEGIN
+    	    	    	    MSGP = %ASCID'452 4.3.4 Insufficient storage for message.';
+    	    	    	    QENT [QENT_L_STATUS] = FLQ_K_STCAN;
+    	    	    	END
+    	    	    	ELSE
+    	    	    	BEGIN
+		    	    QENT [QENT_L_STATUS] = FLQ_K_STRDY;
+		    	    MSGP =  %ASCID'250 2.5.0 Message received and queued.';
+    	    	    	    IF .ctx [CTX_V_AUTHENTICATED] AND .ctx [CTX_L_AAACTX] NEQU 0 THEN
+    	    	    	    	do_accounting (ctx [CTX_L_AAACTX], ctx [CTX_L_AAAID], .qent [QENT_L_SIZE], envl);
+    	    	    	END;
+		    END;
+    	    	    MX_FILE_CLOSE (.unit, (.qent [QENT_L_STATUS] EQL FLQ_K_STCAN));
+		    UNIT = 0;
+    	    	END;
+
+    	    	IF (.ctx [CTX_V_DEBUG] AND NOT .ctx [CTX_V_DEBUGTEXT]) THEN
+    	    	    DPRINT('[Received !UL bytes of message text]', .qent [QENT_L_SIZE]);
+
+    	    	qent [QENT_L_SIZE] = .qent [QENT_L_SIZE] * .envl [ENVL_L_RCPTCOUNT];
+
+    	    	reset_envelope (envl);
+                IF .qent [QENT_L_STATUS] EQLU FLQ_K_STCAN THEN
+                BEGIN
+                    status = FLQ_PURGE (QCTX, QENT);
+                    IF NOT .status THEN
+                    BEGIN
+                        DPRINT ('Could not delete queue entry !UL (status=!XL), cancelling',
+                                .qent [QENT_L_ENTNUM], .status);
+                        FLQ_UPDATE (qctx, qent);
+                    END;
+                END
+                ELSE
+		    FLQ_UPDATE (QCTX, QENT);
+		QENT [QENT_L_ENTNUM] = 0;
+		SEND (SND_AST, '!AS', .MSGP);
+	    END
+	    ELSE
+	    BEGIN
+    	    	IF .UNIT NEQU 0 THEN
+    	    	BEGIN
+		    QENT [QENT_L_SIZE] = .QENT [QENT_L_SIZE] + .INSTR [DSC$W_LENGTH];
+    	    	    IF .ctx [CTX_L_QMSGLIM] EQL 0 OR .qent [QENT_L_SIZE] LSSU .ctx [CTX_L_QMSGLIM] THEN
+		    	status = MX_FILE_WRITE (.UNIT, INSTR)
+    	    	    ELSE status = 0;
+
+    	    	    IF NOT .status THEN
+    	    	    BEGIN
+    	    	        DPRINT ('Message write failure: status=!XL, msgsize=!UL, limit=!UL; closing msg_text file',
+    	    	    	    	.status, .qent [QENT_L_SIZE], .ctx [CTX_L_QMSGLIM]);
+    	    	    	MX_FILE_CLOSE (.UNIT, 1);
+    	    	    	UNIT = 0;
+    	    	    END;
+    	    	END;
+		READ_CMD (.CTX);
+	    END;
+	END;
+    END;
+
+    [STATE_CLUP] :
+	BEGIN
+	    CLEANUP (CTX);
+	    STATUS_PARAM = .STATUS_PARAM - 1;
+	    IF .STATUS_PARAM LEQ 0 THEN
+		STATUS_CODE = MX_K_STATUS_IDLE;
+	END;
+    TES;
+
+    IF .TXT NEQA 0 THEN FREETXT (TXT);
+    !
+    !In case RTEQ was filled in, be sure we free up that memory here
+    !
+    WHILE NOT REMQUE (.RTEQ [QUE_L_HEAD], TXT) DO FREETXT (TXT);
+
+    IF .STR [DSC$B_CLASS] EQL DSC$K_CLASS_D THEN FREE_STRINGS (STR);
+    FREE_STRINGS (LCLPART, DOMPART, STR2);
+
+    SS$_NORMAL
+
+END; ! PROCESS_CMD
+
+%SBTTL 'HELO_VERIFY_AST'
+ROUTINE HELO_VERIFY_AST (CTX : REF CTXDEF) : NOVALUE =
+BEGIN
+!++
+! FUNCTIONAL DESCRIPTION:
+!
+!   AST routine executed when START completes.
+!
+! RETURNS:	cond_value, longword (unsigned), write only, by value
+!
+! PROTOTYPE:
+!
+!   HELO_VERIFY_AST ctx (AST level)
+!
+! IMPLICIT INPUTS:  None.
+!
+! IMPLICIT OUTPUTS: None.
+!
+! COMPLETION CODES:
+!
+!   SS$_NORMAL:		normal successful completion.
+!
+! SIDE EFFECTS:
+!
+!   None.
+!--
+    BIND
+	WRK 	= ctx [CTX_X_WRK] : WRKDEF;
+
+    WRK [WRK_L_ROUTINE] = HELO_VERIFY;
+    WRK [WRK_L_CTX] = .CTX;
+    INSQUE (WRK, .WRKQUE [QUE_L_TAIL]);
+    $WAKE ()
+
+END; ! HELO_VERIFY_AST
+
+%SBTTL 'hello_check_ast'
+ROUTINE hello_check_ast (CTX : REF CTXDEF) : NOVALUE =
+BEGIN
+!++
+! FUNCTIONAL DESCRIPTION:
+!
+!   AST routine executed when START completes.
+!
+! RETURNS:	cond_value, longword (unsigned), write only, by value
+!
+! PROTOTYPE:
+!
+!   hello_check_ast ctx (AST level)
+!
+! IMPLICIT INPUTS:  None.
+!
+! IMPLICIT OUTPUTS: None.
+!
+! COMPLETION CODES:
+!
+!   SS$_NORMAL:		normal successful completion.
+!
+! SIDE EFFECTS:
+!
+!   None.
+!--
+    BIND
+	WRK 	= ctx [CTX_X_WRK] : WRKDEF;
+
+    WRK [WRK_L_ROUTINE] = hello_check;
+    WRK [WRK_L_CTX] = .CTX;
+    INSQUE (WRK, .WRKQUE [QUE_L_TAIL]);
+    $WAKE ()
+
+END; ! hello_check_ast
+
+%SBTTL 'MAIL_VERIFY_AST'
+ROUTINE MAIL_VERIFY_AST (CTX : REF CTXDEF) : NOVALUE =
+BEGIN
+!++
+! FUNCTIONAL DESCRIPTION:
+!
+!   AST routine executed when START completes.
+!
+! RETURNS:	cond_value, longword (unsigned), write only, by value
+!
+! PROTOTYPE:
+!
+!   HELO_VERIFY_AST ctx (AST level)
+!
+! IMPLICIT INPUTS:  None.
+!
+! IMPLICIT OUTPUTS: None.
+!
+! COMPLETION CODES:
+!
+!   SS$_NORMAL:		normal successful completion.
+!
+! SIDE EFFECTS:
+!
+!   None.
+!--
+    BIND
+	WRK 	= ctx [CTX_X_WRK] : WRKDEF;
+
+    WRK [WRK_L_ROUTINE] = MAIL_VERIFY;
+    WRK [WRK_L_CTX] = .CTX;
+    INSQUE (WRK, .WRKQUE [QUE_L_TAIL]);
+    $WAKE ()
+
+END; ! MAIL_VERIFY_AST
+
+%SBTTL 'HELO_VERIFY'
+ROUTINE HELO_VERIFY (CTX : REF CTXDEF) = 
+BEGIN
+!++
+! FUNCTIONAL DESCRIPTION:
+!
+!   Completion routine for name-to-address lookup on
+!   host name presented in HELO command.
+!
+! RETURNS:  	cond_value, longword (unsigned), write only, by value
+!
+! PROTOTYPE:
+!
+!   	HELO_VERIFY	ctx   ! AST level
+!
+! IMPLICIT INPUTS:  None.
+!
+! IMPLICIT OUTPUTS: None.
+!
+! COMPLETION CODES:
+!
+!   SS$_NORMAL:	    	normal successful completion.
+!
+! SIDE EFFECTS:
+!
+!   None.
+!--
+    BIND
+    	DUNIT	= CTX [CTX_L_DUNIT],
+    	IOSB	= CTX [CTX_Q_IOSB]  : IOSBDEF;
+
+    LOCAL
+    	STATUS;
+
+    IF NOT .IOSB [IOSB_W_STATUS] THEN
+    	CTX [CTX_V_FAKER] = 1
+    ELSE IF .ctx [CTX_L_ADRCNT] GTRU 0 THEN
+    BEGIN
+    	BIND
+    	    ADRLST = CTX [CTX_X_ADRLST] : VECTOR [,LONG],
+    	    REMSIN = CTX [CTX_X_PEER] : SINDEF,
+    	    RA     = REMSIN [SIN_X_ADDR] : INADDRDEF;
+    	STATUS = (INCR I FROM 0 TO .CTX [CTX_L_ADRCNT]-1 DO
+    	    	    IF .ADRLST [.I] EQLU .RA [INADDR_L_ADDR] THEN EXITLOOP .I);
+    	CTX [CTX_V_FAKER] = .STATUS LSS 0;
+    END;
+
+    IF .ctx [CTX_V_ESMTP] THEN
+    BEGIN
+    	LOCAL 
+    	    do_auth,
+    	    authstr  : BLOCK [DSC$K_S_BLN,BYTE];
+    	INIT_DYNDESC (authstr);
+    	do_auth = .ctx [CTX_V_AUTHCRAM] OR .ctx [CTX_V_AUTHPLAIN];
+    	IF .do_auth THEN
+    	BEGIN
+    	    IF .ctx [CTX_V_AUTHCRAM] THEN
+    	    BEGIN
+    	    	STR$COPY_DX (authstr, %ASCID'CRAM-MD5');
+    	    	IF .ctx [CTX_V_AUTHPLAIN] THEN
+    	    	    STR$APPEND (authstr, %ASCID' ');
+    	    END;
+    	    IF .ctx [CTX_V_AUTHPLAIN] THEN
+    	    	    STR$APPEND (authstr, %ASCID'LOGIN PLAIN');
+    	    STR$APPEND (authstr, crlf_d);
+    	END;
+     	SEND (SND_AST, %STRING ('250-!AS!AS', crlf,
+    	    	    	    	'250-PIPELINING', crlf,
+    	    	    	    	'250-ENHANCEDSTATUSCODES', crlf,
+    	    	    	    	'250-DSN', crlf,
+    	    	    	    	'250-ETRN', crlf,
+    	    	    	    	'!AS!AS!AS!AS!AS',
+    	    	    	    	'250 SIZE !UL'), hostname,
+    	    	    	(IF .CTX [CTX_V_FAKER] THEN hnameverfail_d ELSE null_d),
+    	    	    	(IF .do_auth THEN %ASCID'250-AUTH=' ELSE null_d),
+    	    	    	(IF .do_auth THEN authstr ELSE null_d),
+    	    	    	(IF .do_auth THEN %ASCID'250-AUTH ' ELSE null_d),
+    	    	    	(IF .do_auth THEN authstr ELSE null_d),
+    	    	    	(IF .ssl_ctx NEQA 0 THEN
+			     %ASCID %STRING('250-STARTTLS', crlf)
+			 ELSE null_d),
+    	    	    	.ctx [CTX_L_MSGLIM]);
+    	FREE_STRINGS (authstr);
+    END
+    ELSE
+    	SEND (SND_AST, '250 !AS!AS', HOSTNAME,
+    	    	       (IF .CTX [CTX_V_FAKER] THEN hnameverfail_d ELSE null_d));
+
+    SS$_NORMAL
+
+END; ! HELO_VERIFY
+
+%SBTTL 'hello_check'
+ROUTINE hello_check (CTX : REF CTXDEF) = 
+BEGIN
+!++
+! FUNCTIONAL DESCRIPTION:
+!
+!   Post-accept_check_hello processing.
+!
+! RETURNS:  	cond_value, longword (unsigned), write only, by value
+!
+! PROTOTYPE:
+!
+!   	HELLO_CHECK	ctx  
+!
+! IMPLICIT INPUTS:  None.
+!
+! IMPLICIT OUTPUTS: None.
+!
+! COMPLETION CODES:
+!
+!   SS$_NORMAL:	    	normal successful completion.
+!
+! SIDE EFFECTS:
+!
+!   None.
+!--
+    BIND
+    	DUNIT	= CTX [CTX_L_DUNIT],
+    	IOSB	= CTX [CTX_Q_IOSB]  : IOSBDEF;
+
+    LOCAL
+    	STATUS,
+        accepted;
+
+    accept_check_cleanup (ctx [CTX_L_ACCCHKCTX]);
+
+    ! ACCEPTED<0,16,0> ==
+    !             0: reject
+    !             1: accept
+    !             2: accept helo, but reject messages
+    !             3: fake helo, but accept messages
+    !             4: accept helo, but reject messages unless authentication succeeds
+    !             5: accept, but insert ACCEPTED<16,16,0> in Received header for spam indication
+    !             anything else: accept
+    DPRINT ('accept_check_hello return status was: !XL', .ctx [CTX_L_ACCEPTED]);
+    accepted = .ctx [CTX_L_ACCEPTED];
+    SELECTONE .accepted<0,16,0> OF
+    SET
+    [0] :
+        BEGIN
+            SEND (SND_AST, '550 5.7.0 session rejected due to administrative policy');
+            RETURN SS$_NORMAL;
+        END;
+    [2] :
+        BEGIN
+            iosb [IOSB_W_STATUS] = SS$_NORMAL;
+            ctx [CTX_L_ADRCNT] = 0;
+            ctx [CTX_V_REJECTALL] = 1;
+        END;
+    [3] :
+            iosb [IOSB_W_STATUS] = SS$_ABORT; ! to trigger "faker"
+    [4] :
+        BEGIN
+            iosb [IOSB_W_STATUS] = SS$_NORMAL;
+            ctx [CTX_L_ADRCNT] = 0;
+            ctx [CTX_V_REJECTALL] = 1;
+            ctx [CTX_V_OKIFAUTHEN] = 1;
+        END;
+    [OTHERWISE] :
+        BEGIN
+            iosb [IOSB_W_STATUS] = SS$_NORMAL;
+            ctx [CTX_L_ADRCNT] = 0;
+        END;
+    TES;
+
+    HELO_VERIFY (.ctx)
+
+END; ! hello_check
+
+%SBTTL 'MAIL_VERIFY'
+GLOBAL ROUTINE MAIL_VERIFY (CTX : REF CTXDEF) = 
+BEGIN
+!++
+! FUNCTIONAL DESCRIPTION:
+!
+!   Post-DNS-lookup processing of MAIL command.
+!
+! RETURNS:  	cond_value, longword (unsigned), write only, by value
+!
+! PROTOTYPE:
+!
+!   x
+!
+! IMPLICIT INPUTS:  None.
+!
+! IMPLICIT OUTPUTS: None.
+!
+! COMPLETION CODES:
+!
+!   SS$_NORMAL:	    	normal successful completion.
+!
+! SIDE EFFECTS:
+!
+!   None.
+!--
+    BIND
+    	envl	    = ctx [CTX_X_ENVELOPE]  : ENVLDEF,
+    	dunit	    = ctx [CTX_L_DUNIT],
+    	qent	    = ctx [CTX_X_QENT]	    : QENTDEF,
+    	remsin	    = ctx [CTX_X_PEER]      : SINDEF,
+    	iosb	    = ctx [CTX_Q_IOSB]	    : IOSBDEF;
+    BIND_ENVL_FIELDS (envl);
+
+    LOCAL
+    	lclpart	    : BLOCK [DSC$K_S_BLN,BYTE],
+    	dompart	    : BLOCK [DSC$K_S_BLN,BYTE],
+    	str 	    : BLOCK [DSC$K_S_BLN,BYTE],
+    	sdsc	    : BLOCK [DSC$K_S_BLN,BYTE],
+    	isnull,
+    	vrfyfailed,
+    	status;
+
+! If VRFYMAIL flag is set, then we were called after completion of the DNS lookup.
+
+    IF .ctx [CTX_V_VRFYMAIL] THEN
+    BEGIN
+    	IF .iosb [IOSB_W_STATUS] THEN
+    	BEGIN
+    	    BIND invdom = %ASCID'5.1.8 Sender rejected due to invalid domain name.' : BLOCK [,BYTE];
+    	    BIND hdr = ctx [CTX_T_SNDBUF] : NETLIB_DNS_HEADER;
+    	    SELECTONE .hdr [DNS_V_REPLY_CODE] OF
+    	    SET
+    	    [NETLIB_K_DNS_RC_SUCCESS] :
+            BEGIN
+                status = has_valid_addresses (ctx [CTX_T_SNDBUF], .iosb [IOSB_W_COUNT]);
+                IF .status THEN
+    	    	    DPRINT ('MAIL FROM domain name verification successful.')
+                ELSE IF .status EQL 2 THEN
+                BEGIN
+    	    	    DPRINT ('Soft error: error parsing DNS reply for !AD',
+    	    	    	    .fromadr [TXT_W_LEN], fromadr [TXT_T_TEXT]);
+    	    	    SEND (SND_AST, '451 4.1.8 Transient internal error prevented domain name lookup.');
+    	    	    RETURN SS$_NORMAL;
+                END
+                ELSE
+                BEGIN
+    	    	    DPRINT ('Rejecting: domain name translates to invalid address for !AD',
+    	    	    	    .fromadr [TXT_W_LEN], fromadr [TXT_T_TEXT]);
+    	    	    ctx [CTX_V_SPAM] = 1;
+    	    	    ctx [CTX_W_REJRSN] = .invdom [DSC$W_LENGTH];
+    	    	    CH$MOVE (.invdom [DSC$W_LENGTH], .invdom [DSC$A_POINTER], ctx [CTX_T_REJRSN]);
+    	    	    INIT_SDESC (sdsc, .fromadr [TXT_W_LEN], fromadr [TXT_T_TEXT]);
+    	    	    LOG_SPAM (0, remsin [SIN_X_ADDR], sdsc, 0, 0, 4);
+    	    	END;
+            END;
+    	    [NETLIB_K_DNS_RC_NAMERR] :
+    	    	BEGIN
+    	    	    DPRINT ('Rejecting: DNS reported no such domain for !AD',
+    	    	    	    .fromadr [TXT_W_LEN], fromadr [TXT_T_TEXT]);
+    	    	    ctx [CTX_V_SPAM] = 1;
+    	    	    ctx [CTX_W_REJRSN] = .invdom [DSC$W_LENGTH];
+    	    	    CH$MOVE (.invdom [DSC$W_LENGTH], .invdom [DSC$A_POINTER], ctx [CTX_T_REJRSN]);
+    	    	    INIT_SDESC (sdsc, .fromadr [TXT_W_LEN], fromadr [TXT_T_TEXT]);
+    	    	    LOG_SPAM (0, remsin [SIN_X_ADDR], sdsc, 0, 0, 4);
+    	    	END;
+    	    [OTHERWISE] :
+    	    	BEGIN
+    	    	    DPRINT ('Soft error: transient DNS error (code !UL) on !AD',
+    	    	    	    .hdr [DNS_V_REPLY_CODE], .fromadr [TXT_W_LEN], fromadr [TXT_T_TEXT]);
+    	    	    SEND (SND_AST, '451 4.1.8 Transient DNS error prevented domain name lookup.');
+    	    	    RETURN SS$_NORMAL;
+    	    	END;
+    	    TES;
+    	END
+    	ELSE
+    	BEGIN
+    	    DPRINT ('I/O error (status=!XL) doing DNS lookup on !AD',
+    	    	    .iosb [IOSB_W_STATUS], .fromadr [TXT_W_LEN], fromadr [TXT_T_TEXT]);
+    	    SEND (SND_AST, '451 4.1.8 Transient DNS error prevented domain name lookup.');
+    	    RETURN SS$_NORMAL;
+    	END;
+    END;
+
+    IF NOT .ctx [CTX_V_AUTHENTICATED] THEN
+    BEGIN
+
+    	! Check to see if sending system is on the black-hole list
+
+    	INIT_SDESC (sdsc, .fromadr [TXT_W_LEN], fromadr [TXT_T_TEXT]);
+    	INIT_DYNDESC (lclpart, dompart, str);
+
+    	isnull = .fromadr [TXT_W_LEN] EQL 2;
+    	IF .isnull THEN isnull = CH$EQL (2, UPLIT ('<>'), 2, fromadr [TXT_T_TEXT]);
+    	IF NOT .isnull THEN PARSE821 (sdsc, 0, lclpart, dompart);
+
+    	IF NOT .ctx [CTX_V_SPAM] AND .ctx [CTX_V_BLACKHOLE] THEN
+    	BEGIN
+    	    BIND
+    	    	rblmsg = %ASCID'5.7.1 Mail refused; black-holed by ' : BLOCK [,BYTE],
+    	    	rbldom = ctx [CTX_L_RBLCUR] : REF TXTDEF;
+    	    LOCAL
+    	    	rbldsc	: BLOCK [DSC$K_S_BLN,BYTE];
+
+    	    DPRINT ('Connecting system on !AD black-hole list',
+    	    	    (IF .rbldom EQLA 0 THEN 0 ELSE .rbldom [TXT_W_LEN]),
+    	    	    (IF .rbldom EQLA 0 THEN UPLIT ('') ELSE rbldom [TXT_T_TEXT]));
+    	    ctx [CTX_V_SPAM] = 1;
+    	    ctx [CTX_W_REJRSN] = .rblmsg [DSC$W_LENGTH] + (IF .rbldom EQLA 0 THEN 0 ELSE .rbldom [TXT_W_LEN]);
+    	    CH$MOVE (.rblmsg [DSC$W_LENGTH], .rblmsg [DSC$A_POINTER], ctx [CTX_T_REJRSN]);
+    	    IF .rbldom NEQA 0 THEN
+    	    	CH$MOVE (.rbldom [TXT_W_LEN], rbldom [TXT_T_TEXT], CH$PLUS (ctx [CTX_T_REJRSN], .rblmsg [DSC$W_LENGTH]));
+    	    IF .rbldom NEQA 0 THEN
+    	    	INIT_SDESC (rbldsc, .rbldom [TXT_W_LEN], rbldom [TXT_T_TEXT]);
+    	    LOG_SPAM (0, remsin [SIN_X_ADDR], lclpart, dompart, 0, 2, (IF .rbldom EQLA 0 THEN 0 ELSE rbldsc));
+    	END;
+    END; ! not authenticated
+
+! Sender passed verification, continue
+
+    IF NOT .ctx [CTX_V_SPAM] THEN
+    BEGIN
+    	IF .ctx [CTX_V_AUTHENTICATED] THEN
+    	    ctx [CTX_V_SNDRLCL] = ctx [CTX_V_NOSPAMCHK] = 1
+    	ELSE IF .ctx [CTX_V_REJECTALL] THEN
+            ctx [CTX_V_NOSPAMCHK] = 1
+        ELSE
+    	BEGIN
+            LOCAL ruleid : LONG;
+    	    IF IS_SPAM (remsin [SIN_X_ADDR], LCLPART, DOMPART, ruleid) THEN
+    	    BEGIN
+    	    	BIND pgmmsg = %ASCID'Programmed rejection for source host/address.' : BLOCK [,BYTE];
+    	    	DPRINT ('Identified spammer: !AS@!AS', lclpart, dompart);
+    	    	ctx [CTX_V_SPAM] = 1;
+    	    	ctx [CTX_W_REJRSN] = .pgmmsg [DSC$W_LENGTH];
+    	    	CH$MOVE (.pgmmsg [DSC$W_LENGTH], .pgmmsg [DSC$A_POINTER], ctx [CTX_T_REJRSN]);
+    	    	LOG_SPAM (.ruleid, remsin [SIN_X_ADDR], lclpart, dompart);
+    	    END
+    	    ELSE
+    	    BEGIN
+    	    	ctx [CTX_V_SNDRLCL] = .ctx [CTX_V_INSIDE] AND (.ISNULL OR IS_LOCAL_DOMAIN (DOMPART, 0, 1));
+    	    	ctx [CTX_V_SNDRRELAY] = .ctx [CTX_V_INSIDE_RELAY];  ! Sending system is allowed to relay
+    	    END;
+    	END;
+    END;
+
+    IF NOT .ctx [CTX_V_SPAM] THEN
+    BEGIN
+	FLQ_INIT_QENT (QENT);
+	QENT [QENT_L_STATUS] = FLQ_K_STINP;
+       	QENT [QENT_V_LOCK] = 1;
+	qent [QENT_L_DSTPRC] = FLQ_K_MX_ROUTER;
+	qent [QENT_L_ORIGIN] = MX_K_ORG_SMTP;
+	QENT [QENT_W_ORGADR] = MIN (QENT_S_ORGADR, .fromadr [TXT_W_LEN]);
+	CH$MOVE (.QENT [QENT_W_ORGADR], fromadr [TXT_T_TEXT], QENT [QENT_T_ORGADR]);
+    	STATUS = FLQ_ADD (ctx [CTX_L_QCTX], QENT);
+	IF NOT .STATUS THEN
+	BEGIN
+    	    QENT [QENT_L_ENTNUM] = 0;
+    	    SEND (SND_AST, '451 4.3.0 Unable to receive right now due to message queue problem.');
+    	    FREE_STRINGS (str, lclpart, dompart);
+    	    RETURN SS$_NORMAL;
+    	END;
+    END;
+
+    envl [ENVL_L_RCPTCOUNT] = 0;
+    ctx [CTX_L_STATE] = STATE_RCPT;
+    SEND (SND_AST, '250 2.1.0 MAIL command accepted!AS.',
+    	    (IF .ctx [CTX_V_SPAM] THEN %ASCID' (but recipients will be rejected)' ELSE %ASCID''));
+
+    FREE_STRINGS (str, lclpart, dompart);
+
+    SS$_NORMAL
+
+END; ! MAIL_VERIFY
+
+%SBTTL 'auth_begin'
+ROUTINE auth_begin (ctx : REF CTXDEF, txt_a_a) = 
+BEGIN
+!++
+! FUNCTIONAL DESCRIPTION:
+!
+!   Begins an authentication sequence.
+!
+! RETURNS:  	cond_value, longword (unsigned), write only, by value
+!
+! PROTOTYPE:
+!
+!   AUTH_BEGIN  ctx, txt
+!
+! IMPLICIT INPUTS:  None.
+!
+! IMPLICIT OUTPUTS: None.
+!
+! COMPLETION CODES:
+!
+!   SS$_NORMAL:	    	normal successful completion.
+!
+! SIDE EFFECTS:
+!
+!   None.
+!--
+    BIND
+    	txt 	= .txt_a_a  : REF TXTDEF,
+    	invtype = %ASCID'504 5.0.0 Unrecognized authentication type.' : BLOCK [,BYTE],
+    	inprog	= %ASCID'334 VXNlcm5hbWU6' : BLOCK [,BYTE];  ! "Username" base64 encoded
+
+    LOCAL
+    	dsc 	: BLOCK [DSC$K_S_BLN,BYTE],
+    	reply	: BLOCK [DSC$K_S_BLN,BYTE],
+    	now 	: VECTOR [2,LONG],
+    	ptr,
+    	len;
+
+    ptr = CH$FIND_CH (.txt [TXT_W_LEN], txt [TXT_T_TEXT], %C' ');
+    IF CH$FAIL (.ptr) THEN
+    	len = .txt [TXT_W_LEN]
+    ELSE
+    	len = CH$DIFF (.ptr, txt [TXT_T_TEXT]);
+    INIT_SDESC (dsc, .len, txt [TXT_T_TEXT]);
+
+    ctx [CTX_W_AUTHSALT] = 0;
+
+    IF .ctx [CTX_V_AUTHPLAIN] AND STR$CASE_BLIND_COMPARE (dsc, %ASCID'LOGIN') EQL 0 THEN
+    BEGIN
+    	ctx [CTX_L_AUTHTYPE] = AUTH_K_LOGIN;
+    	FREETXT (txt);
+    	txt = MEM_GETTXT (.inprog [DSC$W_LENGTH], .inprog [DSC$A_POINTER]);
+    	RETURN SS$_NORMAL;
+    END;
+
+    IF .ctx [CTX_V_AUTHPLAIN] AND STR$CASE_BLIND_COMPARE (dsc, %ASCID'PLAIN') EQL 0 THEN
+    BEGIN
+    	LOCAL
+    	    asdsc   : BLOCK [DSC$K_S_BLN,BYTE],
+    	    remain,
+    	    status;
+
+    	remain = .txt [TXT_W_LEN] - .len;
+    	WHILE .remain GTRU 0 DO
+    	BEGIN
+    	    IF CH$RCHAR (.ptr) NEQU %C' ' THEN
+    	    	EXITLOOP;
+    	    ptr = CH$PLUS (.ptr, 1);
+    	    remain = .remain - 1;
+    	END;
+
+        !  username/password are optional on the command
+
+        IF .remain EQLU 0 THEN
+        BEGIN
+            ctx [CTX_L_AUTHTYPE] = AUTH_K_PLAIN;
+            FREETXT (txt);
+            txt = MEM_GETTXT (.inprog [DSC$W_LENGTH], .inprog [DSC$A_POINTER]);
+            RETURN SS$_NORMAL;
+        END;
+
+    	INIT_SDESC (dsc, .remain, .ptr);
+    	INIT_SDESC (asdsc, CTX_S_AUTHSALT, ctx [CTX_T_AUTHSALT]);
+    	status = base64_decode_string (dsc, ctx [CTX_W_AUTHSALT], asdsc);
+    	IF .status THEN
+    	    status = auth_plain (.ctx, .ctx [CTX_W_AUTHSALT], ctx [CTX_T_AUTHSALT]);
+    	FREETXT (txt);
+    	txt = 0;
+    	IF NOT .status THEN
+    	    txt = MEM_GETTXT (.invtype [DSC$W_LENGTH], .invtype [DSC$A_POINTER]);
+    	CH$FILL (%CHAR (0), .ctx [CTX_W_AUTHSALT], ctx [CTX_T_AUTHSALT]);
+    	ctx [CTX_W_AUTHSALT] = 0;
+
+    	RETURN 0;   ! always returns this because it's a one-shot deal
+
+    END;
+
+    IF NOT .ctx [CTX_V_AUTHCRAM] OR STR$CASE_BLIND_COMPARE (dsc, %ASCID'CRAM-MD5') NEQ 0 THEN
+    BEGIN
+    	FREETXT (txt);
+    	txt = MEM_GETTXT (.invtype [DSC$W_LENGTH], .invtype [DSC$A_POINTER]);
+    	RETURN 0;
+    END;
+
+    $GETTIM (TIMADR=now);
+
+    BEGIN
+    	BUILTIN CVTLF, CVTFL, MULF;
+    	EXTERNAL ROUTINE G_HAT (MTH$RANDOM);
+    	LOCAL
+    	    seed,
+    	    n,
+    	    max_f,
+    	    rand_f,
+    	    prod_f;
+
+     	CVTLF (%REF (65536), max_f);
+    	seed = .now [0];
+%IF %BLISS (BLISS32V) %THEN
+    	rand_f = MTH$RANDOM (seed);
+%ELSE
+    	MTH$RANDOM (seed; %FFLOAT (rand_f));
+%FI
+    	MULF (max_f, rand_f, prod_f);
+    	CVTFL (prod_f, ctx [CTX_L_AAAID]);
+
+    	INIT_SDESC (dsc, CTX_S_AUTHSALT, ctx [CTX_T_AUTHSALT]);
+    	$FAO (%ASCID'<!UL.!XL.!XL@!AS>', ctx [CTX_W_AUTHSALT], dsc,
+                    .ctx [CTX_L_AAAID], .now [1], .now[0], hostname);
+    END;
+
+    FREETXT (txt);
+    dsc [DSC$W_LENGTH] = .ctx [CTX_W_AUTHSALT];
+    INIT_DYNDESC (reply);
+    base64_encode_string (dsc, 0, reply);
+    STR$PREFIX (reply, %ASCID'334 ');
+    txt = MEM_GETTXT (.reply [DSC$W_LENGTH], .reply [DSC$A_POINTER]);
+    ctx [CTX_L_AUTHTYPE] = AUTH_K_CRAM_MD5;
+    FREE_STRINGS (reply);
+
+    SS$_NORMAL
+
+END; ! auth_begin    
+
+%SBTTL 'auth_read'
+ROUTINE auth_read (CTX : REF CTXDEF) =
+BEGIN
+!++
+! FUNCTIONAL DESCRIPTION:
+!
+!   Reads a command.
+!
+! RETURNS:	cond_value, longword (unsigned), write only, by value
+!
+! PROTOTYPE:
+!
+!   auth_read  ctx
+!
+! IMPLICIT INPUTS:  None.
+!
+! IMPLICIT OUTPUTS: None.
+!
+! COMPLETION CODES:
+!
+!   SS$_NORMAL:		normal successful completion.
+!
+! SIDE EFFECTS:
+!
+!   None.
+!--
+    BIND
+    	SDSC	= CTX [CTX_Q_INDSC] : BLOCK [DSC$K_S_BLN,BYTE];
+
+    LOCAL
+	STATUS;
+
+    INIT_SDESC (SDSC, CTX_S_RCVBUF, CTX [CTX_T_RCVBUF]);
+    STATUS = NETLIB_READLINE (CTX [CTX_L_TCPCTX], SDSC, CTX [CTX_W_RCVLEN],
+    	    	%REF (NETLIB_M_ALLOW_LF), CMDTMO, CTX [CTX_Q_IOSB],
+    	    	(IF .ctx [CTX_L_AUTHTYPE] EQL AUTH_K_LOGIN AND .ctx [CTX_W_AUTHSALT] NEQU 0 THEN
+    	    	    login_ast ELSE auth2_ast),
+    	    	.CTX);
+    IF NOT .STATUS THEN
+    BEGIN
+	CLEANUP (CTX);
+	STATUS_PARAM = .STATUS_PARAM - 1;
+	IF .STATUS_PARAM LEQ 0 THEN
+	    STATUS_CODE = MX_K_STATUS_IDLE;
+    END;
+
+    SS$_NORMAL
+
+END;  ! auth_read
+
+%SBTTL 'auth_authenticate'
+ROUTINE auth_authenticate (ctx : REF CTXDEF) = 
+BEGIN
+!++
+! FUNCTIONAL DESCRIPTION:
+!
+!   Completes an authentication sequence.
+!
+! RETURNS:  	cond_value, longword (unsigned), write only, by value
+!
+! PROTOTYPE:
+!
+!   AUTH_AUTHENTICATE  ctx
+!
+! IMPLICIT INPUTS:  None.
+!
+! IMPLICIT OUTPUTS: None.
+!
+! COMPLETION CODES:
+!
+!   SS$_NORMAL:	    	normal successful completion.
+!
+! SIDE EFFECTS:
+!
+!   None.
+!--
+    BIND
+	DUNIT	= CTX [CTX_L_DUNIT],
+    	iosb	= ctx [CTX_Q_IOSB]  	: IOSBDEF,
+    	peer	= ctx [CTX_X_PEER]  	: SINDEF;
+
+    LOCAL
+    	sdsc	    : BLOCK [DSC$K_S_BLN,BYTE],
+    	username    : BLOCK [DSC$K_S_BLN,BYTE],
+    	digest	    : BLOCK [DSC$K_S_BLN,BYTE],
+    	authtext    : BLOCK [DSC$K_S_BLN,BYTE],
+    	ptr,
+        alen        : WORD,
+    	abuf        : VECTOR [32,BYTE],
+        adsc        : BLOCK [DSC$K_S_BLN,BYTE],
+    	status;
+
+    IF NOT .iosb [IOSB_W_STATUS] THEN
+    BEGIN
+    	CLEANUP (ctx);
+	STATUS_PARAM = .STATUS_PARAM - 1;
+	IF .STATUS_PARAM LEQ 0 THEN
+	    STATUS_CODE = MX_K_STATUS_IDLE;
+	RETURN SS$_NORMAL;
+    END;
+
+    INIT_SDESC (sdsc, .ctx [CTX_W_RCVLEN], ctx [CTX_T_RCVBUF]);
+    INIT_DYNDESC (authtext);
+
+    IF .ctx [CTX_W_RCVLEN] EQL 1 AND CH$RCHAR (ctx [CTX_T_RCVBUF]) EQL %C'*' THEN
+    BEGIN
+    	SEND (snd_ast, '501 5.5.2 Authentication sequence canceled.');
+    	RETURN SS$_NORMAL;
+    END;
+
+    status = base64_decode_string (sdsc, 0, authtext);
+    IF NOT .status THEN
+    BEGIN
+    	SEND (snd_ast, '501 5.5.2 Invalid base64 encoding for authentication request.');
+    	RETURN SS$_NORMAL;
+    END;
+
+    ptr = CH$FIND_CH (.authtext [DSC$W_LENGTH], .authtext [DSC$A_POINTER], %C' ');
+    IF CH$FAIL (.ptr) THEN
+    BEGIN
+    	SEND (snd_ast, '501 5.5.2 Invalid syntax for authentication request.');
+    	FREE_STRINGS (authtext);
+    	RETURN SS$_NORMAL;
+    END;
+    INIT_SDESC (username, CH$DIFF (.ptr, .authtext [DSC$A_POINTER]), .authtext [DSC$A_POINTER]);
+    WHILE CH$RCHAR (.ptr) EQL %C' ' DO
+    BEGIN
+    	IF CH$DIFF (.ptr, .authtext [DSC$A_POINTER]) GEQU .authtext [DSC$W_LENGTH]-1 THEN
+    	BEGIN
+    	    SEND (snd_ast, '501 5.5.2 Invalid syntax for authentication request.');
+    	    FREE_STRINGS (authtext);
+    	    RETURN SS$_NORMAL;
+    	END;
+    	ptr = CH$PLUS (.ptr, 1);
+    END;
+    INIT_SDESC (digest, .authtext [DSC$W_LENGTH]-CH$DIFF (.ptr, .authtext [DSC$A_POINTER]), .ptr);
+
+    INIT_SDESC (adsc, %ALLOCATION (abuf), abuf);
+    NETLIB_ADDRTOSTR (peer [SIN_X_ADDR], adsc, alen);
+
+    INIT_SDESC (sdsc, .ctx [CTX_W_AUTHSALT], ctx [CTX_T_AUTHSALT]);
+    status = userauth_hmac_digest (username, sdsc, digest);
+    IF .status THEN
+    BEGIN
+    	ctx [CTX_V_AUTHENTICATED] = 1;
+        IF .ctx [CTX_V_OKIFAUTHEN] THEN
+            ctx [CTX_V_REJECTALL] = 0;
+    	ctx [CTX_W_AUTHUSER] = MINU (.username [DSC$W_LENGTH], CTX_S_AUTHUSER);
+    	CH$MOVE (.ctx [CTX_W_AUTHUSER], .username [DSC$A_POINTER], ctx [CTX_T_AUTHUSER]);
+    	DPRINT ('Authentication (CRAM-MD5) successful for username !AS, source address !AD',
+                username, .alen, abuf);
+    	SEND (snd_ast, '235 2.7.0 Authentication successful');
+    	LIB$SYS_FAO (%ASCID'SMTP authentication (CRAM-MD5) successful for username !AS, source address !AD, id !XL',
+                     0, authtext, username, .alen, abuf, .ctx [CTX_L_AAAID]);
+        LIB$PUT_OUTPUT (authtext); ! XXX - where to log
+    END
+    ELSE
+    BEGIN
+    	ctx [CTX_L_AUTHFAILS] = .ctx [CTX_L_AUTHFAILS] + 1;
+    	DPRINT ('Authentication (CRAM-MD5) failed for username !AS, source address !AD',
+                username, .alen, abuf);
+    	LIB$SYS_FAO (%ASCID'SMTP (CRAM-MD5) authentication failed for user !AD, source address !AD', 0, authtext,
+    	    	    	    .ctx [CTX_W_AUTHUSER], ctx [CTX_T_AUTHUSER], .alen, abuf);
+    	LOG_EVENT (authtext, mx_smtp_authfail_event_class);
+    	$SETIMR (DAYTIM=ctx [CTX_Q_AUTHRETRY], REQIDT=.ctx, ASTADR=authfail_tmo_ast);
+    END;
+
+    FREE_STRINGS (authtext);
+
+    SS$_NORMAL
+
+END; ! auth_authenticate
+
+%SBTTL 'auth_plain_finish'
+ROUTINE auth_plain_finish (ctx : REF CTXDEF) = 
+BEGIN
+!++
+! FUNCTIONAL DESCRIPTION:
+!
+!   Completes an authentication sequence for PLAIN when
+!   username/password had to be obtained from a separate
+!   line.
+!
+! RETURNS:  	cond_value, longword (unsigned), write only, by value
+!
+! PROTOTYPE:
+!
+!   AUTH_AUTHENTICATE  ctx
+!
+! IMPLICIT INPUTS:  None.
+!
+! IMPLICIT OUTPUTS: None.
+!
+! COMPLETION CODES:
+!
+!   SS$_NORMAL:	    	normal successful completion.
+!
+! SIDE EFFECTS:
+!
+!   None.
+!--
+    BIND
+	DUNIT	= CTX [CTX_L_DUNIT],
+    	iosb	= ctx [CTX_Q_IOSB]  	: IOSBDEF,
+    	peer	= ctx [CTX_X_PEER]  	: SINDEF;
+
+    LOCAL
+    	sdsc	    : BLOCK [DSC$K_S_BLN,BYTE],
+    	username    : BLOCK [DSC$K_S_BLN,BYTE],
+    	digest	    : BLOCK [DSC$K_S_BLN,BYTE],
+    	authtext    : BLOCK [DSC$K_S_BLN,BYTE],
+    	ptr,
+    	status;
+
+    IF NOT .iosb [IOSB_W_STATUS] THEN
+    BEGIN
+    	CLEANUP (ctx);
+	STATUS_PARAM = .STATUS_PARAM - 1;
+	IF .STATUS_PARAM LEQ 0 THEN
+	    STATUS_CODE = MX_K_STATUS_IDLE;
+	RETURN SS$_NORMAL;
+    END;
+
+    IF .ctx [CTX_W_RCVLEN] EQL 1 AND CH$RCHAR (ctx [CTX_T_RCVBUF]) EQL %C'*' THEN
+    BEGIN
+    	SEND (snd_ast, '501 5.5.2 Authentication sequence canceled.');
+    	RETURN SS$_NORMAL;
+    END;
+
+    INIT_SDESC (sdsc, .ctx [CTX_W_RCVLEN], ctx [CTX_T_RCVBUF]);
+    INIT_SDESC (authtext, CTX_S_AUTHSALT, ctx [CTX_T_AUTHSALT]);
+    status = base64_decode_string (sdsc, ctx [CTX_W_AUTHSALT], authtext);
+    IF NOT .status THEN
+    BEGIN
+    	SEND (snd_ast, '501 5.5.2 Invalid base64 encoding for authentication request.');
+    	RETURN SS$_NORMAL;
+    END;
+    status = auth_plain (.ctx, .ctx [CTX_W_AUTHSALT], ctx [CTX_T_AUTHSALT]);
+    IF NOT .status THEN
+    	SEND (snd_ast, '501 5.5.2 Invalid base64 encoding for authentication request.');
+    CH$FILL (%CHAR (0), .ctx [CTX_W_AUTHSALT], ctx [CTX_T_AUTHSALT]);
+    ctx [CTX_W_AUTHSALT] = 0;
+
+    SS$_NORMAL
+
+END; ! auth_plain_finish
+
+%SBTTL 'auth_plain'
+ROUTINE auth_plain (ctx : REF CTXDEF, len : WORD, bufptr) = 
+BEGIN
+!++
+! FUNCTIONAL DESCRIPTION:
+!
+!   Completes an authentication sequence using PLAIN.
+!
+! RETURNS:  	cond_value, longword (unsigned), write only, by value
+!
+! PROTOTYPE:
+!
+!   AUTH_PLAIN  ctx
+!
+! IMPLICIT INPUTS:  None.
+!
+! IMPLICIT OUTPUTS: None.
+!
+! COMPLETION CODES:
+!
+!   SS$_NORMAL:	    	normal successful completion.
+!
+! SIDE EFFECTS:
+!
+!   None.
+!--
+
+    LOCAL
+    	authorization_user,
+    	authentication_user,
+    	password,
+    	cp,
+    	remain	    	    	: WORD,
+    	authorization_user_len	: WORD,
+    	authentication_user_len	: WORD,
+    	password_len	    	: WORD,
+    	udsc	    : BLOCK [DSC$K_S_BLN,BYTE],
+    	pdsc        : BLOCK [DSC$K_S_BLN,BYTE],
+    	sdsc	    : BLOCK [DSC$K_S_BLN,BYTE],
+    	ubuf	    : VECTOR [64,BYTE],
+    	pbuf	    : VECTOR [64,BYTE],
+    	status;
+
+    remain = .len;
+    authorization_user = .bufptr;
+    cp = CH$FIND_CH (.remain, .bufptr, %CHAR (0));
+    IF CH$FAIL (.cp) THEN
+    	RETURN 0;
+    authorization_user_len = CH$DIFF (.cp, .authorization_user);
+
+    remain = .remain - .authorization_user_len - 1;
+    authentication_user = CH$PLUS (.cp, 1);
+    IF .remain LEQ 0 THEN
+    	RETURN 0;
+
+    cp = CH$FIND_CH (.remain, .authentication_user, %CHAR (0));
+    IF CH$FAIL (.cp) THEN
+    	RETURN 0;
+    authentication_user_len = CH$DIFF (.cp, .authentication_user);
+
+    remain = .remain - .authentication_user_len - 1;
+    IF .remain LEQ 0 THEN
+    	RETURN 0;
+    password = CH$PLUS (.cp, 1);
+    password_len = .remain;
+
+    IF .authorization_user_len NEQ 0 THEN
+    	IF CH$NEQ (.authorization_user_len, .authorization_user,
+    	    	   .authentication_user_len, .authentication_user, %C' ') THEN
+    	    RETURN 0;
+
+    ctx [CTX_W_AUTHUSER] = MINU (.authentication_user_len, CTX_S_AUTHUSER);
+    CH$MOVE (.ctx [CTX_W_AUTHUSER], .authentication_user, ctx [CTX_T_AUTHUSER]);
+    INIT_SDESC (udsc, .ctx [CTX_W_AUTHUSER], ctx [CTX_T_AUTHUSER]);
+    INIT_SDESC (pdsc, .password_len, .password);
+
+    ctx [CTX_L_AAASTAT] = 0;
+    ctx [CTX_L_AAAID] = 0;
+    status = user_authenticate (ctx [CTX_L_AAACTX], udsc, pdsc, 
+    	    	    	    	ctx [CTX_X_PEER], SIN_S_SINDEF, ctx [CTX_L_AAAID],
+    	    	       	    	ctx [CTX_L_AAASTAT], userauth_ast, .ctx);
+    IF NOT .status THEN
+    	userauth_completion (.ctx);
+
+    SS$_NORMAL
+
+END; ! auth_plain
+
+%SBTTL 'auth_login_username'
+ROUTINE auth_login_username (ctx : REF CTXDEF) = 
+BEGIN
+!++
+! FUNCTIONAL DESCRIPTION:
+!
+!   Received username in LOGIN authentication sequence.  Get password.
+!
+! RETURNS:  	cond_value, longword (unsigned), write only, by value
+!
+! PROTOTYPE:
+!
+!   AUTH_LOGIN_USERNAME  ctx
+!
+! IMPLICIT INPUTS:  None.
+!
+! IMPLICIT OUTPUTS: None.
+!
+! COMPLETION CODES:
+!
+!   SS$_NORMAL:	    	normal successful completion.
+!
+! SIDE EFFECTS:
+!
+!   None.
+!--
+    BIND
+	DUNIT	= CTX [CTX_L_DUNIT],
+    	inprog2 = %ASCID'334 UGFzc3dvcmQ6',  ! "Password" base64 encoded
+    	iosb	= ctx [CTX_Q_IOSB]  	: IOSBDEF;
+
+    IF NOT .iosb [IOSB_W_STATUS] THEN
+    BEGIN
+    	CLEANUP (ctx);
+	STATUS_PARAM = .STATUS_PARAM - 1;
+	IF .STATUS_PARAM LEQ 0 THEN
+	    STATUS_CODE = MX_K_STATUS_IDLE;
+	RETURN SS$_NORMAL;
+    END;
+
+    IF .ctx [CTX_W_RCVLEN] EQL 1 AND CH$RCHAR (ctx [CTX_T_RCVBUF]) EQL %C'*' THEN
+    BEGIN
+    	SEND (snd_ast, '501 5.5.2 Authentication sequence canceled.');
+    	RETURN SS$_NORMAL;
+    END;
+
+    ctx [CTX_W_AUTHSALT] = MINU (.ctx [CTX_W_RCVLEN], CTX_S_AUTHSALT);
+    CH$MOVE (.ctx [CTX_W_AUTHSALT], ctx [CTX_T_RCVBUF], ctx [CTX_T_AUTHSALT]);
+    SEND (auth1_ast, '!AS', inprog2);
+
+    SS$_NORMAL
+
+END; ! auth_login_username
+
+%SBTTL 'auth_login_password'
+ROUTINE auth_login_password (ctx : REF CTXDEF) = 
+BEGIN
+!++
+! FUNCTIONAL DESCRIPTION:
+!
+!   Completes an authentication sequence using LOGIN.
+!
+! RETURNS:  	cond_value, longword (unsigned), write only, by value
+!
+! PROTOTYPE:
+!
+!   AUTH_LOGIN_PASSWORD  ctx
+!
+! IMPLICIT INPUTS:  None.
+!
+! IMPLICIT OUTPUTS: None.
+!
+! COMPLETION CODES:
+!
+!   SS$_NORMAL:	    	normal successful completion.
+!
+! SIDE EFFECTS:
+!
+!   None.
+!--
+    BIND
+	DUNIT	= CTX [CTX_L_DUNIT],
+    	iosb	= ctx [CTX_Q_IOSB]  	: IOSBDEF;
+
+    LOCAL
+    	sdsc	: BLOCK [DSC$K_S_BLN,BYTE],
+    	udsc	: BLOCK [DSC$K_S_BLN,BYTE],
+    	pdsc	: BLOCK [DSC$K_S_BLN,BYTE],
+    	pbuf	: BLOCK [64,BYTE],
+    	status;
+
+    IF NOT .iosb [IOSB_W_STATUS] THEN
+    BEGIN
+    	CLEANUP (ctx);
+	STATUS_PARAM = .STATUS_PARAM - 1;
+	IF .STATUS_PARAM LEQ 0 THEN
+	    STATUS_CODE = MX_K_STATUS_IDLE;
+	RETURN SS$_NORMAL;
+    END;
+
+    IF .ctx [CTX_W_RCVLEN] EQL 1 AND CH$RCHAR (ctx [CTX_T_RCVBUF]) EQL %C'*' THEN
+    BEGIN
+    	SEND (snd_ast, '501 5.5.2 Authentication sequence canceled.');
+    	RETURN SS$_NORMAL;
+    END;
+
+
+    INIT_SDESC (sdsc, .ctx [CTX_W_AUTHSALT], ctx [CTX_T_AUTHSALT]);
+    INIT_SDESC (udsc, CTX_S_AUTHUSER, ctx [CTX_T_AUTHUSER]);
+    status = base64_decode_string (sdsc, ctx [CTX_W_AUTHUSER], udsc);
+
+    IF .status THEN
+    BEGIN
+    	udsc [DSC$W_LENGTH] = .ctx [CTX_W_AUTHUSER];
+    	INIT_SDESC (sdsc, .ctx [CTX_W_RCVLEN], ctx [CTX_T_RCVBUF]);
+    	INIT_SDESC (pdsc, %ALLOCATION (pbuf), pbuf);
+    	status = base64_decode_string (sdsc, pdsc [DSC$W_LENGTH], pdsc);
+    END;
+
+    IF NOT .status THEN
+    BEGIN
+    	SEND (snd_ast, '501 5.5.2 Invalid base64 encoding for authentication request.');
+        CH$FILL (%CHAR (0), %ALLOCATION (pbuf), pbuf);
+        CH$FILL (%CHAR (0), CTX_S_AUTHSALT, ctx [CTX_T_AUTHSALT]);
+        RETURN SS$_NORMAL;
+    END;
+        
+    ctx [CTX_L_AAASTAT] = 0;
+    ctx [CTX_L_AAAID] = 0;
+
+    IF .status then
+    	status = user_authenticate (ctx [CTX_L_AAACTX], udsc, pdsc,
+    	    	    	    	    ctx [CTX_X_PEER], SIN_S_SINDEF, ctx [CTX_L_AAAID],
+    	    	      	    	    ctx [CTX_L_AAASTAT], userauth_ast, .ctx);
+    IF NOT .status THEN
+    	userauth_completion (.ctx);
+
+    CH$FILL (%CHAR (0), %ALLOCATION (pbuf), pbuf);
+    CH$FILL (%CHAR (0), CTX_S_AUTHSALT, ctx [CTX_T_AUTHSALT]);
+ 
+    SS$_NORMAL
+
+END; ! auth_login_password
+
+
+%SBTTL 'userauth_completion'
+ROUTINE userauth_completion (ctx : REF CTXDEF) = 
+BEGIN
+!++
+! FUNCTIONAL DESCRIPTION:
+!
+!   Completes an authentication sequence using LOGIN.
+!
+! RETURNS:  	cond_value, longword (unsigned), write only, by value
+!
+! PROTOTYPE:
+!
+!   userauth_completion ctx
+!
+! IMPLICIT INPUTS:  None.
+!
+! IMPLICIT OUTPUTS: None.
+!
+! COMPLETION CODES:
+!
+!   SS$_NORMAL:	    	normal successful completion.
+!
+! SIDE EFFECTS:
+!
+!   None.
+!--
+    BIND
+	DUNIT	= CTX [CTX_L_DUNIT],
+    	peer	= ctx [CTX_X_PEER]  	: SINDEF;
+
+    LOCAL
+    	alen    : WORD,
+    	abuf    : VECTOR [32,BYTE],
+    	adsc    : BLOCK [DSC$K_S_BLN,BYTE],
+    	str     : BLOCK [DSC$K_S_BLN,BYTE];
+
+    INIT_SDESC (adsc, %ALLOCATION (abuf), abuf);
+    INIT_DYNDESC (str);
+    NETLIB_ADDRTOSTR (peer [SIN_X_ADDR], adsc, alen);
+
+    IF .ctx [CTX_L_AAASTAT] THEN
+    BEGIN
+    	ctx [CTX_V_AUTHENTICATED] = 1;
+        IF .ctx [CTX_V_OKIFAUTHEN] THEN
+            ctx [CTX_V_REJECTALL] = 0;
+    	SEND (snd_ast, '235 2.7.0 Authentication successful.');
+    	DPRINT ('Authentication (PLAIN) successful for username !AD, source address !AD, id !UL',
+                .ctx [CTX_W_AUTHUSER], ctx [CTX_T_AUTHUSER], .alen, abuf, .ctx [CTX_L_AAAID]);
+        IF .ctx [CTX_L_AAAID] NEQU 0 THEN
+        BEGIN
+            LIB$SYS_FAO (%ASCID'SMTP (PLAIN) authentication success for user !AD, source address !AD, id !XL',
+                         0, str, .ctx [CTX_W_AUTHUSER], ctx [CTX_T_AUTHUSER], .alen, abuf, .ctx [CTX_L_AAAID]);
+            LIB$PUT_OUTPUT (str); ! XXX - where to log this?
+        END;
+    END
+    ELSE
+    BEGIN
+    	$SETIMR (DAYTIM=ctx [CTX_Q_AUTHRETRY], REQIDT=.ctx, ASTADR=authfail_tmo_ast);
+    	ctx [CTX_L_AUTHFAILS] = .ctx [CTX_L_AUTHFAILS] + 1;
+    	DPRINT ('Authentication (PLAIN) failed for username !AD, source address !AD',
+                .ctx [CTX_W_AUTHUSER], ctx [CTX_T_AUTHUSER], .alen, abuf);
+    	LIB$SYS_FAO (%ASCID'SMTP (PLAIN) authentication failed for user !AD, source address !AD', 0, str,
+    	    	    	    .ctx [CTX_W_AUTHUSER], ctx [CTX_T_AUTHUSER], .alen, abuf);
+    	LOG_EVENT (str, mx_smtp_authfail_event_class);
+    END;
+
+    FREE_STRINGS (str);
+    SS$_NORMAL
+
+END; ! userauth_completion
+
+
+%IF %VARIANT %THEN
+%SBTTL 'PRINT_TO_LOG'
+ROUTINE PRINT_TO_LOG (STR_A, CTX_A_A) =
+BEGIN
+!++
+! FUNCTIONAL DESCRIPTION:
+!
+!   Prints to a debug log.
+!
+! RETURNS:	cond_value, longword (unsigned), write only, by value
+!
+! PROTOTYPE:
+!
+!   PRINT_TO_LOG
+!
+! IMPLICIT INPUTS:  None.
+!
+! IMPLICIT OUTPUTS: None.
+!
+! COMPLETION CODES:
+!
+!   SS$_NORMAL:		normal successful completion.
+!
+! SIDE EFFECTS:
+!
+!   None.
+!--
+    BIND
+	STR = .STR_A	: BLOCK [DSC$K_S_BLN,BYTE],
+	CTX = .CTX_A_A	: REF CTXDEF;
+
+    LOCAL
+	FAOBUF	: VECTOR [512,BYTE],
+	FAOLEN	: WORD,
+	FAODSC	: BLOCK [DSC$K_S_BLN,BYTE] PRESET (
+		    [DSC$B_DTYPE] = DSC$K_DTYPE_T,
+		    [DSC$B_CLASS] = DSC$K_CLASS_S,
+		    [DSC$W_LENGTH] = %ALLOCATION (FAOBUF),
+		    [DSC$A_POINTER] = FAOBUF);
+
+    IF .CTX [CTX_V_DEBUG] AND .CTX [CTX_L_DUNIT] NEQ 0 THEN
+    BEGIN
+	$FAO (%ASCID'STM[!UL]: !AS', FAOLEN, FAODSC, .CTX [CTX_L_CXID], STR);
+	FAODSC [DSC$W_LENGTH] = .FAOLEN;
+	MX_FILE_WRITE (.CTX [CTX_L_DUNIT], FAODSC);
+    END;
+
+    SS$_NORMAL
+
+END; ! PRINT_TO_LOG
+%FI
+
+%SBTTL 'tls_reset'
+ROUTINE tls_reset : NOVALUE = 
+BEGIN
+!++
+! FUNCTIONAL DESCRIPTION:
+!
+!   Configures the TLS/SSL environment for STARTTLS.
+!
+! RETURNS:	    None.
+!
+! PROTOTYPE:
+!
+!   tls_reset
+!
+! IMPLICIT INPUTS:  None.
+!
+! IMPLICIT OUTPUTS: None.
+!
+! COMPLETION CODES: None.
+!
+! SIDE EFFECTS:
+!
+!   None.
+!--
+    LOCAL
+	status,
+    	str     : BLOCK [DSC$K_S_BLN,BYTE];
+
+    INIT_DYNDESC (str);
+
+    IF .ssl_ctx NEQA 0 THEN
+    BEGIN
+	SSL_CTX_free (.ssl_ctx);
+	ssl_ctx = 0;
+    END;
+
+    IF .smtp_info [SMTP_V_TLS] THEN
+    BEGIN
+	ssl_ctx = SSL_CTX_new (TLSv1_method ());
+	IF .ssl_ctx NEQA 0 THEN
+	BEGIN
+	    status = MX_FILE_OPEN (MX__FILE_EXISTS, %ASCID'MX_SMTP_SERVER_CERT', 0,
+			 %ASCID'MX_SMTP_DIR:.CRT', str);
+	    IF .status THEN
+	    BEGIN
+		STR$APPEND (str, %ASCID %STRING (%CHAR (0)));
+		status = SSL_CTX_use_certificate_file (.ssl_ctx, .str [DSC$A_POINTER],
+				SSL_FILETYPE_PEM);
+	    END;
+
+	    IF .status THEN
+	    BEGIN
+		status = MX_FILE_OPEN (MX__FILE_EXISTS, %ASCID'MX_SMTP_SERVER_KEY',
+				      0, %ASCID'MX_SMTP_DIR:.KEY', str);
+		IF .status THEN
+		BEGIN
+		    STR$APPEND (str, %ASCID %STRING (%CHAR (0)));
+		    status = SSL_CTX_use_PrivateKey_file (.ssl_ctx, .str [DSC$A_POINTER],
+					SSL_FILETYPE_PEM);
+		END;
+	    END;
+
+	    IF .status THEN status = SSL_CTX_check_private_key (.ssl_ctx);
+	END;
+
+	IF NOT .status THEN
+	BEGIN
+	    LOCAL
+		msgbuf	: VECTOR [512,BYTE],
+		msgdsc	: BLOCK [DSC$K_S_BLN,BYTE];
+
+	    INIT_SDESC (msgdsc, %ALLOCATION (msgbuf), msgbuf);
+
+	    IF $GETMSG (MSGID=MX__TLSINIERR, MSGLEN=msgdsc [DSC$W_LENGTH],
+			BUFADR=msgdsc) THEN
+		LOG_EVENT (msgdsc);
+
+	    ! Errors from OpenSSL calls above are indicated with a
+	    ! status of 0, so we now loop on ERR_get_error which
+	    ! pops successive SSL errors from the error queue.
+	    IF .status EQL 0 THEN
+	    BEGIN
+		WHILE status = ERR_get_error () NEQ 0 DO
+		BEGIN
+		    LIB$SYS_FAO (%ASCID'!AZ', 0, STR, ERR_error_string (.status, 0));
+		    LOG_EVENT (STR);
+		END;
+	    END
+	    ELSE
+	    BEGIN
+		INIT_SDESC (msgdsc, %ALLOCATION (msgbuf), msgbuf);
+
+		IF $GETMSG (MSGID=.status, MSGLEN=msgdsc [DSC$W_LENGTH],
+			    BUFADR=msgdsc) THEN
+		    LOG_EVENT (msgdsc);
+	    END;
+
+	    IF .ssl_ctx NEQA 0 THEN SSL_CTX_free (.ssl_ctx);
+	END;
+    END;
+END;
+
+%SBTTL 'CLEANUP'
+ROUTINE CLEANUP (CTX_A_A) =
+BEGIN
+!++
+! FUNCTIONAL DESCRIPTION:
+!
+!   Cleans up after a thread.
+!
+! RETURNS:	cond_value, longword (unsigned), write only, by value
+!
+! PROTOTYPE:
+!
+!   CLEANUP  ctx
+!
+! IMPLICIT INPUTS:  None.
+!
+! IMPLICIT OUTPUTS: None.
+!
+! COMPLETION CODES:
+!
+!   SS$_NORMAL:		normal successful completion.
+!
+! SIDE EFFECTS:
+!
+!   None.
+!--
+    BIND
+	CTX 	= .CTX_A_A	    	: REF CTXDEF,
+        qent    = CTX [CTX_X_QENT]      : QENTDEF,
+	QCTX	= CTX [CTX_L_QCTX],
+	DUNIT	= CTX [CTX_L_DUNIT],
+	HDRQUE	= CTX [CTX_Q_HDRQ]  	: QUEDEF,
+    	envl	= ctx [CTX_X_ENVELOPE]	: ENVLDEF;
+
+    LOCAL
+	TXT 	: REF TXTDEF,
+        status,
+    	aststat;
+
+    XPRINT ('in CLEANUP, ctx=!UL', .ctx [CTX_L_CXID]);
+
+    PROTECTED_REMQUE (.CTX, CTX);
+
+    accept_check_cleanup (ctx [CTX_L_ACCCHKCTX]);
+    NETLIB_CLOSE (CTX [CTX_L_TCPCTX]);
+    IF .CTX [CTX_L_UNIT] NEQ 0 THEN MX_FILE_CLOSE (.CTX [CTX_L_UNIT]);
+    IF .ctx [CTX_L_AAACTX] NEQU 0 THEN user_auth_close (ctx [CTX_L_AAACTX]);
+    IF .qent [QENT_L_ENTNUM] NEQU 0 THEN
+    BEGIN
+	status = FLQ_PURGE (CTX [CTX_L_QCTX], QENT);
+        IF NOT .status THEN
+        BEGIN
+            DPRINT ('CLEANUP: status = !XL deleting queue entry !UL, cancelling',
+                    .status, .qent [QENT_L_ENTNUM]);
+            qent [QENT_L_STATUS] = FLQ_K_STCAN;
+            status = FLQ_UPDATE (QCTX, QENT);
+            DPRINT ('CLEANUP: status = !XL cancelling queue entry !UL',
+                    .status, .qent [QENT_L_ENTNUM]);
+        END;
+        qent [QENT_L_ENTNUM] = 0;
+    END;
+    IF .CTX [CTX_L_QCTX] NEQ 0 THEN FLQ_CLOSE (CTX [CTX_L_QCTX]);
+    WHILE NOT REMQUE (.HDRQUE [QUE_L_HEAD], TXT) DO FREETXT (TXT);
+    DISPOSE_ENVELOPE (envl);
+    FREETXT (ctx [CTX_A_REMHOST]);
+
+    IF NOT .CTX [CTX_V_INSIDE] THEN
+    BEGIN
+    	OUTSIDE_INUSE = .OUTSIDE_INUSE - 1;
+        DPRINT ('CLEANUP: outside count now !UL, max !UL', .outside_inuse, .outside_max);
+    END;
+
+    IF .CTX [CTX_V_VINIT] THEN
+    BEGIN
+    	CTX [CTX_V_VINIT] = 0;
+    	VERIFY_END (.CTX);
+    END;
+    IF .CTX [CTX_V_DEBUG] THEN
+    BEGIN
+%IF %VARIANT %THEN
+	LOCAL VCTX, VZONE;
+	EXTERNAL ROUTINE G_HAT (LIB$SHOW_VM, LIB$FIND_VM_ZONE, LIB$SHOW_VM_ZONE);
+	LIB$SHOW_VM (%REF (0), PRINT_TO_LOG, CTX);
+	VCTX = 0;
+	WHILE LIB$FIND_VM_ZONE (VCTX, VZONE) DO
+	BEGIN
+	    $SETAST (ENBFLG=0);
+	    LIB$SHOW_VM_ZONE (VZONE, %REF (3), PRINT_TO_LOG, CTX);
+	    $SETAST (ENBFLG=1);
+	END;
+%FI
+	IF .CTX [CTX_L_DUNIT] NEQ 0 THEN MX_FILE_CLOSE (.CTX [CTX_L_DUNIT]);
+    	CTX [CTX_L_DUNIT] = 0;
+    END;
+    FREE_STRINGS (CTX [CTX_Q_CURHDR]);
+    CTX [CTX_L_SESSFLAGS] = CTX [CTX_L_MSGFLAGS] = 0;
+    WHILE NOT REMQUE_HEAD (ctx [CTX_Q_RBLQUE], txt) DO
+    	FREETXT (txt);
+    IF .ctx [CTX_L_RBLCUR] NEQA 0 THEN
+    	FREETXT (ctx [CTX_L_RBLCUR]);
+    ctx [CTX_L_RBLCUR] = 0;
+
+    PROTECTED_INSQUE (.CTX, .CTXQUE [QUE_L_TAIL]);
+
+    XPRINT ('   ...end of cleanup for ctx=!UL, accept_pending=!UL',
+    	    	.ctx [CTX_L_CXID], .ACCEPT_PENDING);
+
+    SS$_NORMAL
+
+END; ! CLEANUP
+
+%SBTTL 'SND_AST'
+ROUTINE SND_AST (CTX : REF CTXDEF) =
+BEGIN
+!++
+! FUNCTIONAL DESCRIPTION:
+!
+!   AST routine executed when START completes.
+!
+! RETURNS:	cond_value, longword (unsigned), write only, by value
+!
+! PROTOTYPE:
+!
+!   SND_AST ctx (AST level)
+!
+! IMPLICIT INPUTS:  None.
+!
+! IMPLICIT OUTPUTS: None.
+!
+! COMPLETION CODES:
+!
+!   SS$_NORMAL:		normal successful completion.
+!
+! SIDE EFFECTS:
+!
+!   None.
+!--
+    BIND
+    	wrk 	= CTX [CTX_X_WRK] : WRKDEF;
+
+    WRK [WRK_L_ROUTINE] = READ_CMD;
+    WRK [WRK_L_CTX] = .CTX;
+    INSQUE (WRK, .WRKQUE [QUE_L_TAIL]);
+    $WAKE ()
+
+END; ! SND_AST
+
+%SBTTL 'AUTH1_AST'
+ROUTINE AUTH1_AST (CTX : REF CTXDEF) =
+BEGIN
+!++
+! FUNCTIONAL DESCRIPTION:
+!
+!   AST routine executed when START completes.
+!
+! RETURNS:	cond_value, longword (unsigned), write only, by value
+!
+! PROTOTYPE:
+!
+!   AUTH1_AST ctx (AST level)
+!
+! IMPLICIT INPUTS:  None.
+!
+! IMPLICIT OUTPUTS: None.
+!
+! COMPLETION CODES:
+!
+!   SS$_NORMAL:		normal successful completion.
+!
+! SIDE EFFECTS:
+!
+!   None.
+!--
+    BIND
+    	wrk 	= CTX [CTX_X_WRK] : WRKDEF;
+
+    WRK [WRK_L_ROUTINE] = auth_read;
+    WRK [WRK_L_CTX] = .CTX;
+    INSQUE (WRK, .WRKQUE [QUE_L_TAIL]);
+    $WAKE ()
+
+END; ! AUTH1_AST
+
+%SBTTL 'AUTH2_AST'
+ROUTINE AUTH2_AST (CTX : REF CTXDEF) =
+BEGIN
+!++
+! FUNCTIONAL DESCRIPTION:
+!
+!   AST routine executed when START completes.
+!
+! RETURNS:	cond_value, longword (unsigned), write only, by value
+!
+! PROTOTYPE:
+!
+!   AUTH2_AST ctx (AST level)
+!
+! IMPLICIT INPUTS:  None.
+!
+! IMPLICIT OUTPUTS: None.
+!
+! COMPLETION CODES:
+!
+!   SS$_NORMAL:		normal successful completion.
+!
+! SIDE EFFECTS:
+!
+!   None.
+!--
+    BIND
+    	wrk 	= CTX [CTX_X_WRK] : WRKDEF;
+
+    WRK [WRK_L_ROUTINE] = (CASE .ctx [CTX_L_AUTHTYPE] FROM AUTH_K_CRAM_MD5 TO AUTH_K_LOGIN OF
+    	    	    	   SET
+    	    	    	    	[AUTH_K_CRAM_MD5] : auth_authenticate;
+                                [AUTH_K_PLAIN]    : auth_plain_finish;
+    	    	    	    	[AUTH_K_LOGIN]	  : auth_login_username
+    	    	    	   TES);
+    WRK [WRK_L_CTX] = .CTX;
+    INSQUE (WRK, .WRKQUE [QUE_L_TAIL]);
+    $WAKE ()
+
+END; ! AUTH2_AST
+
+%SBTTL 'login_ast'
+ROUTINE login_ast (CTX : REF CTXDEF) =
+BEGIN
+!++
+! FUNCTIONAL DESCRIPTION:
+!
+!   AST routine executed when START completes.
+!
+! RETURNS:	cond_value, longword (unsigned), write only, by value
+!
+! PROTOTYPE:
+!
+!   login_ast ctx (AST level)
+!
+! IMPLICIT INPUTS:  None.
+!
+! IMPLICIT OUTPUTS: None.
+!
+! COMPLETION CODES:
+!
+!   SS$_NORMAL:		normal successful completion.
+!
+! SIDE EFFECTS:
+!
+!   None.
+!--
+    BIND
+    	wrk 	= CTX [CTX_X_WRK] : WRKDEF;
+
+    WRK [WRK_L_ROUTINE] = auth_login_password;
+    WRK [WRK_L_CTX] = .CTX;
+    INSQUE (WRK, .WRKQUE [QUE_L_TAIL]);
+    $WAKE ()
+
+END; ! login_ast
+
+%SBTTL 'userauth_ast'
+ROUTINE userauth_ast (CTX : REF CTXDEF) =
+BEGIN
+!++
+! FUNCTIONAL DESCRIPTION:
+!
+!   AST routine executed when START completes.
+!
+! RETURNS:	cond_value, longword (unsigned), write only, by value
+!
+! PROTOTYPE:
+!
+!   userauth_ast ctx (AST level)
+!
+! IMPLICIT INPUTS:  None.
+!
+! IMPLICIT OUTPUTS: None.
+!
+! COMPLETION CODES:
+!
+!   SS$_NORMAL:		normal successful completion.
+!
+! SIDE EFFECTS:
+!
+!   None.
+!--
+    BIND
+    	wrk 	= CTX [CTX_X_WRK] : WRKDEF;
+
+    WRK [WRK_L_ROUTINE] = userauth_completion;
+    WRK [WRK_L_CTX] = .CTX;
+    INSQUE (WRK, .WRKQUE [QUE_L_TAIL]);
+    $WAKE ()
+
+END; ! userauth_ast
+
+%SBTTL 'authfail_notify'
+ROUTINE authfail_notify (CTX : REF CTXDEF) =
+BEGIN
+!++
+! FUNCTIONAL DESCRIPTION:
+!
+!   AST routine executed when START completes.
+!
+! RETURNS:	cond_value, longword (unsigned), write only, by value
+!
+! PROTOTYPE:
+!
+!   authfail_notify ctx (AST level)
+!
+! IMPLICIT INPUTS:  None.
+!
+! IMPLICIT OUTPUTS: None.
+!
+! COMPLETION CODES:
+!
+!   SS$_NORMAL:		normal successful completion.
+!
+! SIDE EFFECTS:
+!
+!   None.
+!--
+    BIND
+    	dunit	= ctx [CTX_L_DUNIT];
+
+    SEND (snd_ast, '535 5.7.0 Authentication failed');
+
+    SS$_NORMAL
+
+END; ! authfail_notify
+
+%SBTTL 'authfail_tmo_ast'
+ROUTINE authfail_tmo_ast (CTX : REF CTXDEF) =
+BEGIN
+!++
+! FUNCTIONAL DESCRIPTION:
+!
+!   AST routine executed when START completes.
+!
+! RETURNS:	cond_value, longword (unsigned), write only, by value
+!
+! PROTOTYPE:
+!
+!   authfail_tmo_ast ctx (AST level)
+!
+! IMPLICIT INPUTS:  None.
+!
+! IMPLICIT OUTPUTS: None.
+!
+! COMPLETION CODES:
+!
+!   SS$_NORMAL:		normal successful completion.
+!
+! SIDE EFFECTS:
+!
+!   None.
+!--
+    BIND
+    	wrk 	= CTX [CTX_X_WRK] : WRKDEF;
+
+    WRK [WRK_L_ROUTINE] = authfail_notify;
+    WRK [WRK_L_CTX] = .CTX;
+    INSQUE (WRK, .WRKQUE [QUE_L_TAIL]);
+    $WAKE ()
+
+END; ! authfail_tmo_ast
+
+ROUTINE BLKG_AST =
+BEGIN
+    LOCAL
+	STATUS;
+
+    STATUS = $ENQ (LKMODE=LCK$K_NLMODE, LKSB=LOCKSB,
+		   FLAGS=LCK$M_SYNCSTS OR LCK$M_CONVERT OR LCK$M_NODLCKWT,
+    	    	   ASTADR=ENQ1_AST);
+    IF .STATUS EQL SS$_SYNCH THEN
+    BEGIN
+    	status = .locksb [LSB_W_STATUS];
+    	IF .status THEN
+    	BEGIN
+	    status = $ENQ (LKMODE=LCK$K_EXMODE, LKSB=HDSKLSB,
+		    	   FLAGS=LCK$M_CONVERT OR LCK$M_NODLCKWT,
+    	    	    	   ASTADR=ENQ1A_AST);
+    	    IF NOT .status THEN
+    	    	$ENQ (LKMODE=LCK$K_PRMODE, LKSB=LOCKSB, BLKAST=BLKG_AST,
+    	    	      FLAGS=LCK$M_CONVERT OR LCK$M_NODLCKWT);
+    	END;
+    END
+    ELSE IF NOT .STATUS THEN
+	$ENQ (LKMODE=LCK$K_PRMODE, LKSB=LOCKSB,  BLKAST=BLKG_AST,
+		FLAGS=LCK$M_CONVERT OR LCK$M_NODLCKWT);
+
+    SS$_NORMAL
+
+END; ! BLKG_AST
+
+
+ROUTINE ENQ1_AST =
+BEGIN
+
+    LOCAL
+    	status;
+
+    status = .LOCKSB [LSB_W_STATUS];
+    IF .status THEN
+	status = $ENQ (LKMODE=LCK$K_EXMODE, LKSB=HDSKLSB,
+	      	       FLAGS=LCK$M_CONVERT OR LCK$M_NODLCKWT,
+    	      	       ASTADR=ENQ1A_AST);
+
+    IF NOT .status THEN
+	$ENQ (LKMODE=LCK$K_PRMODE, LKSB=LOCKSB, BLKAST=BLKG_AST,
+		FLAGS=LCK$M_CONVERT OR LCK$M_NODLCKWT);
+
+    SS$_NORMAL
+
+END; ! ENQ1_AST
+
+
+ROUTINE ENQ1A_AST =
+BEGIN
+
+    $ENQ (LKMODE=LCK$K_PRMODE, LKSB=LOCKSB, ASTADR=ENQ2_AST,
+	    FLAGS=LCK$M_CONVERT OR LCK$M_VALBLK OR LCK$M_NODLCKBLK OR LCK$M_NODLCKWT,
+    	    BLKAST=BLKG_AST);
+
+    SS$_NORMAL
+
+END; ! ENQ1A_AST
+
+
+ROUTINE ENQ2_AST =
+BEGIN
+
+! Return the handshake lock to NL mode
+
+    $ENQ (LKMODE=LCK$K_NLMODE, LKSB=HDSKLSB,
+    	  FLAGS=LCK$M_CONVERT OR LCK$M_SYNCSTS OR LCK$M_NODLCKWT);
+
+    IF .LOCKSB [LSB_W_STATUS] THEN
+    BEGIN
+	IF .LOCKSB [LSB_B_CMD] EQL MX_K_CMD_SHUTDOWN THEN
+    	BEGIN
+	    IF .LOCKSB [LSB_L_CSID] EQL 0 OR .LOCKSB [LSB_L_CSID] EQL .MYCSID
+	    THEN
+	    BEGIN
+		SHUTDOWN_FLAG = 1;
+		$WAKE ();
+	    END;
+    	END
+    	ELSE IF .LOCKSB [LSB_B_CMD] EQL MX_K_CMD_RESET THEN
+    	BEGIN
+    	    IF .LOCKSB [LSB_L_CSID] EQL 0 OR .LOCKSB [LSB_L_CSID] EQL .MYCSID THEN
+    	    BEGIN
+    	    	RESET_MASK = .LOCKSB [LSB_L_RMASK] AND 1;  ! only interested in config resets
+    	    	$WAKE ();
+    	    END;
+    	END;
+    END; ! if lsb status OK
+
+    SS$_NORMAL
+
+END; ! ENQ2_AST
+
+
+ROUTINE CMD_AST = 
+BEGIN
+
+    ! fill in status information
+
+    CMDSB [LSB_B_CMD]    = MX_K_CMD_NOOP;   ! for default, avoids trouble
+    CMDSB [LSB_L_STCODE] = .STATUS_CODE;
+    CMDSB [LSB_L_STPAR]  = .STATUS_PARAM;
+
+    ! release lock so that requestor receives information and can
+    ! send command
+
+    $ENQ (EFN=.CMDEF, LKMODE=LCK$K_NLMODE, LKSB=CMDSB, ASTADR=CMD2_AST,
+	  FLAGS=LCK$M_CONVERT OR LCK$M_VALBLK OR LCK$M_NODLCKWT);
+    
+
+    SS$_NORMAL
+
+END; ! CMD_AST
+
+
+ROUTINE CMD2_AST =
+BEGIN
+    LOCAL
+    	status;
+    ! convert to null complete, request exclusive again
+
+    status = .CMDSB [LSB_W_STATUS];
+    IF .status THEN
+	status = $ENQ (EFN=.CMDEF, LKMODE=LCK$K_EXMODE, LKSB=CMDSB,
+	      	       FLAGS=LCK$M_CONVERT OR LCK$M_VALBLK OR LCK$M_NODLCKWT,
+    	      	       BLKAST=CMD_AST, ASTADR=CMD3_AST);
+    IF NOT .status THEN
+	$ENQ (EFN=.CMDEF, LKMODE=LCK$K_EXMODE, LKSB=CMDSB,
+	      FLAGS=LCK$M_CONVERT OR LCK$M_VALBLK OR LCK$M_NODLCKWT,
+    	      BLKAST=CMD_AST);
+ 
+   SS$_NORMAL
+
+END; ! CMD2_AST
+
+
+ROUTINE CMD3_AST =
+BEGIN
+
+    ! we got EXMODE again, so check for command
+    IF .CMDSB [LSB_W_STATUS] THEN
+    BEGIN
+	SELECTONE .CMDSB [LSB_B_CMD] OF
+	SET
+	[MX_K_CMD_NOOP] :
+	    BEGIN
+		SS$_NORMAL;
+	    END;
+	[MX_K_CMD_SHUTDOWN] :
+	    IF .CMDSB [LSB_L_CSID] EQL 0 OR .CMDSB [LSB_L_CSID] EQL .MYCSID THEN
+    	    BEGIN
+		SHUTDOWN_FLAG = 1;
+		$WAKE ();
+	    END;
+    	[MX_K_CMD_RESET] :
+    	    IF .CMDSB [LSB_L_CSID] EQL 0 OR .CMDSB [LSB_L_CSID] EQL .MYCSID THEN
+    	    BEGIN
+    	    	RESET_MASK = .CMDSB [LSB_L_RMASK] AND 1; ! only interested in config resets
+    	    	$WAKE ();
+    	    END;
+	[OTHERWISE] :
+	    SS$_NORMAL;
+	TES;
+    END;
+
+    SS$_NORMAL
+    
+END; ! CMD3_AST
+
+%SBTTL 'LOG_SPAM'
+ROUTINE LOG_SPAM (ruleid, adr_a, lclp_a, domp_a, rcp_a, flag, reason_a) : NOVALUE = 
+BEGIN
+!++
+! FUNCTIONAL DESCRIPTION:
+!
+!   description
+!
+! RETURNS:  	novalue
+!
+! PROTOTYPE:
+!
+!   LOG_SPAM  adr, lclp, domp
+!
+! IMPLICIT INPUTS:  None.
+!
+! IMPLICIT OUTPUTS: None.
+!
+! COMPLETION CODES: None.
+!
+! SIDE EFFECTS:
+!
+!   None.
+!--
+    BUILTIN
+    	ACTUALCOUNT;
+
+    LOCAL
+        idbuf   : VECTOR [32,BYTE],
+    	abuf	: VECTOR [64,BYTE],
+    	obuf	: VECTOR [256,BYTE],
+        iddsc   : BLOCK [DSC$K_S_BLN,BYTE],
+    	adsc	: BLOCK [DSC$K_S_BLN,BYTE],
+    	odsc	: BLOCK [DSC$K_S_BLN,BYTE],
+    	reason  : REF BLOCK [,BYTE],
+    	status;
+
+    IF ACTUALCOUNT () GTR 6 THEN
+    	reason = .reason_a
+    ELSE
+    	reason = 0;
+
+    INIT_SDESC (iddsc, %ALLOCATION (idbuf), idbuf);
+    IF .ruleid EQLU 0 THEN
+        iddsc [DSC$W_LENGTH] = 0
+    ELSE
+        $FAO (%ASCID' [rule id !UL]', iddsc [DSC$W_LENGTH], iddsc, .ruleid);
+
+    INIT_SDESC (adsc, %ALLOCATION (abuf), abuf);
+    status = NETLIB_ADDRTOSTR (.adr_a, adsc, adsc [DSC$W_LENGTH]);
+    IF NOT .status THEN RETURN;
+
+    status = 0;
+    INIT_SDESC (odsc, %ALLOCATION (obuf), obuf);
+    IF ACTUALCOUNT () GTR 6 AND .reason_a NEQA 0 AND .flag NEQ 2 THEN
+    	status = $FAO (%ASCID'MX SMTP server: !AS message from !AS sent by [!AS] due to !AD!AS',
+    	    	       odsc [DSC$W_LENGTH], odsc, 
+    	    	       (IF .flag THEN %ASCID'rejected' ELSE %ASCID'trapped and forwarded'),
+    	    	       .lclp_a, adsc, .reason [DSC$W_LENGTH], .reason [DSC$A_POINTER], iddsc)
+    ELSE IF ACTUALCOUNT () GTR 5 AND .flag EQL 1 THEN
+    	status = $FAO (%ASCID'MX SMTP server: rejected message from !AS sent by [!AS] due to RFC822 header!AS',
+    	    	       odsc [DSC$W_LENGTH], odsc, .lclp_a, adsc, iddsc)
+    ELSE IF ACTUALCOUNT () GTR 5 AND .flag EQL 2 THEN
+    	status = $FAO (%ASCID'MX SMTP server: rejected message from <!AS@!AS> sent by black-holed system [!AS]!AS!AS!AS',
+    	    	       odsc [DSC$W_LENGTH], odsc, .lclp_a, .domp_a, adsc,
+    	    	       (IF .reason EQLA 0 THEN %ASCID'' ELSE %ASCID' (on list '),
+    	    	       (IF .reason EQLA 0 THEN %ASCID'' ELSE .reason),
+    	    	       (IF .reason EQLA 0 THEN %ASCID'' ELSE %ASCID')'))
+    ELSE IF ACTUALCOUNT () GTR 5 AND .flag EQL 3 THEN
+    	status = $FAO (%ASCID'MX SMTP server: rejected message from !AS to !AS sent by [!AS] due to disabled relay',
+    	    	       odsc [DSC$W_LENGTH], odsc, .lclp_a, .rcp_a, adsc)
+    ELSE IF ACTUALCOUNT () GTR 5 AND .flag EQL 4 THEN
+    	status = $FAO (%ASCID'MX SMTP server: rejected message from !AS sent by [!AS] due to invalid domain name',
+    	    	       odsc [DSC$W_LENGTH], odsc, .lclp_a, adsc)
+    ELSE IF ACTUALCOUNT () GTR 4 AND .rcp_a NEQA 0 THEN
+    	status = $FAO (%ASCID'MX SMTP server: rejected message from !AS to !AS sent by [!AS]!AS',
+    	    	       odsc [DSC$W_LENGTH], odsc, .lclp_a, .rcp_a, adsc, iddsc)
+    ELSE IF .domp_a NEQA 0 THEN
+    	status = $FAO (%ASCID'MX SMTP server: rejected message from <!AS@!AS> sent by [!AS]!AS',
+    	    	      odsc [DSC$W_LENGTH], odsc, .lclp_a, .domp_a, adsc, iddsc)
+    ELSE
+    	status = $FAO (%ASCID'MX SMTP server: rejected message from !AS sent by [!AS]!AS',
+    	    	      odsc [DSC$W_LENGTH], odsc, .lclp_a, adsc, iddsc);
+    IF .status THEN LOG_EVENT (odsc, mx_smtp_rejection_event_class);
+
+END; ! log_spam
+
+%SBTTL 'free_paraminfo'
+ROUTINE free_paraminfo (pi_a) : NOVALUE = 
+BEGIN
+!++
+! FUNCTIONAL DESCRIPTION:
+!
+!   description
+!
+! RETURNS:  	cond_value, longword (unsigned), write only, by value
+!
+! PROTOTYPE:
+!
+!   x
+!
+! IMPLICIT INPUTS:  None.
+!
+! IMPLICIT OUTPUTS: None.
+!
+! COMPLETION CODES:
+!
+!   SS$_NORMAL:	    	normal successful completion.
+!
+! SIDE EFFECTS:
+!
+!   None.
+!--
+    BIND pi = .pi_a : SMTPPRMDEF;
+
+    IF .pi [SMTPPRM_A_ENVID] NEQA 0 THEN FREETXT (pi [SMTPPRM_A_ENVID]);
+    IF .pi [SMTPPRM_A_ORTYPE] NEQA 0 THEN FREETXT (pi [SMTPPRM_A_ORTYPE]);
+    IF .pi [SMTPPRM_A_ORADDR] NEQA 0 THEN FREETXT (pi [SMTPPRM_A_ORADDR]);
+    IF .pi [SMTPPRM_A_AUTHADDR] NEQA 0 THEN FREETXT (pi [SMTPPRM_A_AUTHADDR]);
+
+END; ! free_paraminfo
+
+%SBTTL 'dump_server_info'
+GLOBAL ROUTINE dump_server_info (badw : REF WRKDEF, maxthreads) : NOVALUE = 
+BEGIN
+!++
+! FUNCTIONAL DESCRIPTION:
+!
+!   description
+!
+! RETURNS:  	cond_value, longword (unsigned), write only, by value
+!
+! PROTOTYPE:
+!
+!   x
+!
+! IMPLICIT INPUTS:  None.
+!
+! IMPLICIT OUTPUTS: None.
+!
+! COMPLETION CODES:
+!
+!   SS$_NORMAL:	    	normal successful completion.
+!
+! SIDE EFFECTS:	    None.
+!--
+
+    LOCAL
+    	buf 	: VECTOR [256,BYTE],
+    	tmp 	: VECTOR [64,BYTE],
+    	faodsc	: BLOCK [DSC$K_S_BLN,BYTE],
+    	tmpdsc	: BLOCK [DSC$K_S_BLN,BYTE],
+    	w   	: REF WRKDEF,
+    	c   	: REF CTXDEF,
+    	vmctx,
+    	vmzone,
+    	aststat,
+    	count;
+    EXTERNAL ROUTINE
+    	G_HAT (LIB$PUT_OUTPUT, LIB$FIND_VM_ZONE, LIB$SHOW_VM);
+
+    MACRO
+    	print (ctrstr) [] =
+    	BEGIN
+    	    INIT_SDESC (faodsc, %ALLOCATION (buf), buf);
+    	    $FAO (%ASCID %STRING ('!%D: ', ctrstr), faodsc [DSC$W_LENGTH],
+    	    	  faodsc, 0 %IF NOT %NULL (%REMAINING) %THEN , %REMAINING %FI);
+    	    LIB$PUT_OUTPUT (faodsc);
+    	END %;
+
+    aststat = $SETAST (ENBFLG=0);
+
+    print ('+-+-+-+- FATAL ERROR: work queue corruption, dump begins -+-+-+-+');
+    print ('Corrupted entry: address=!XL, routine=!XL, ctx=!XL', .badw, .badw [WRK_L_ROUTINE], .badw [WRK_L_CTX]);
+    print ('Work queue dump:  head=!XL, tail=!XL', .wrkque [QUE_L_HEAD], .wrkque [QUE_L_TAIL]);
+    w = .wrkque [QUE_L_HEAD];
+    count = 0;
+    WHILE .w NEQA wrkque [QUE_L_HEAD] DO
+    BEGIN
+    	count = .count + 1;
+    	IF .count GTR .maxthreads THEN
+    	BEGIN
+    	    print ('**** entry count exceeds max threads (!UL)!!', .maxthreads);
+    	    EXITLOOP;
+    	END;
+    	print ('    [!UL]: Addr=!XL, Routine=!XL, CTX=!XL, FLink=!XL, BLink=!XL', .count, .w,
+    	       .w [WRK_L_ROUTINE], .w [WRK_L_CTX], .w [WRK_L_FLINK], .w [WRK_L_BLINK]);
+    	w = .w [WRK_L_FLINK];
+    END;
+
+    print ('Active thread context queue: head=!XL, tail=!XL', .pndque [QUE_L_HEAD], .pndque [QUE_L_TAIL]);
+    c = .pndque [QUE_L_HEAD];
+    count = 0;
+    WHILE .c NEQA pndque [QUE_L_HEAD] DO
+    BEGIN
+    	BIND
+    	    rh = c [CTX_A_REMHOST] : REF TXTDEF,
+    	    remsin = c [CTX_X_PEER] : SINDEF;
+    	count = .count + 1;
+    	IF .count GTR .maxthreads THEN
+    	BEGIN
+    	    print ('**** entry count exceeds max threads (!UL)!!', .maxthreads);
+    	    EXITLOOP;
+    	END;
+    	print ('  Entry [!UL]: Stream ID:        !UL', .count, .c [CTX_L_CXID]);
+    	print ('               Context address:  !XL', .c);
+    	print ('               NETLIB context:   !XL', .c [CTX_L_TCPCTX]);
+    	print ('               FLQ context:      !XL', .c [CTX_L_QCTX]);
+    	BEGIN
+    	    BIND qent = c [CTX_X_QENT] : QENTDEF;
+            IF .qent [QENT_L_ENTNUM] NEQU 0 THEN
+    	    	print ('                 Entry number:     !UL', .qent [QENT_L_ENTNUM]);
+    	END;
+    	print ('               State:            !UL', .c [CTX_L_STATE]);
+    	w = c [CTX_X_WRK];
+    	print ('               WRK routine:      !XL', .w [WRK_L_ROUTINE]);
+    	print ('               WRK CTX:          !XL', .w [WRK_L_CTX]);
+    	print ('               Remote Host:      !AD',
+    	    	(IF .rh EQLA 0 THEN 6 ELSE .rh [TXT_W_LEN]),
+    	    	(IF .rh EQLA 0 THEN UPLIT ('(None)') ELSE rh [TXT_T_TEXT]));
+    	INIT_SDESC (tmpdsc, %ALLOCATION (tmp), tmp);
+    	NETLIB_ADDRTOSTR (remsin [SIN_X_ADDR], tmpdsc, tmpdsc [DSC$W_LENGTH]);
+    	print ('               Remote Addresss:  !AS', tmpdsc);
+    	c = .c [CTX_L_FLINK];
+    END;
+
+    c = .ctxque [QUE_L_HEAD];
+    count = 0;
+    WHILE .c NEQA ctxque [QUE_L_HEAD] DO
+    BEGIN
+    	count = .count + 1;
+    	IF .count GTR .maxthreads THEN EXITLOOP;
+    	c = .c [CTX_L_FLINK];
+    END;
+    print ('Free Context Queue has !UL entries!AS.', .count,
+    	    (IF .count GTR .maxthreads THEN %ASCID' (too many?)' ELSE null_d));
+
+    print ('');
+    print ('Valid routines:');    
+    print ('         do_rbl_check: !XL', do_rbl_check);
+    print ('    do_rbl_completion: !XL', do_rbl_completion);
+    print ('           smtp_start: !XL', smtp_start);
+    print ('             read_cmd: !XL', read_cmd);
+    print ('          process_cmd: !XL', process_cmd);
+    print ('          helo_verify: !XL', helo_verify);
+    print ('          mail_verify: !XL', mail_verify);
+    print ('            auth_read: !XL', auth_read);
+    print ('    auth_authenticate: !XL', auth_authenticate);
+    print ('');
+    print ('Dump of VM zones follows.');
+    print ('');
+    LIB$SHOW_VM (%REF (0));
+    vmctx = 0;
+    WHILE LIB$FIND_VM_ZONE (vmctx, vmzone) DO
+    	LIB$SHOW_VM_ZONE (vmzone, %REF (3));
+    
+    print ('+-+-+-+- End of dump -+-+-+-+');
+
+    IF .aststat EQL SS$_WASSET THEN $SETAST (ENBFLG=1);
+
+END; ! dump_server_info
+
+END
+ELUDOM

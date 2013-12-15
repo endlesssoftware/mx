@@ -1,0 +1,289 @@
+%TITLE 'MX_DNSMTP'
+MODULE MX_DNSMTP (IDENT='V2.0', MAIN=MX_DNSMTP, ADDRESSING_MODE (EXTERNAL=LONG_RELATIVE)) =
+BEGIN
+!++
+! FACILITY: 	    MX DNSMTP agent
+!
+! ABSTRACT: 	    Main mail agent routines.
+!
+! MODULE DESCRIPTION:
+!
+!   This module contains the main processing routines for the MX DNSMTP agent.
+!
+! AUTHOR:   	    M. Madison
+!
+! Copyright (c) 2008, Matthew Madison.
+! 
+! All rights reserved.
+! 
+! Redistribution and use in source and binary forms, with or without
+! modification, are permitted provided that the following conditions
+! are met:
+! 
+!     * Redistributions of source code must retain the above
+!       copyright notice, this list of conditions and the following
+!       disclaimer.
+!     * Redistributions in binary form must reproduce the above
+!       copyright notice, this list of conditions and the following
+!       disclaimer in the documentation and/or other materials provided
+!       with the distribution.
+!     * Neither the name of the copyright owner nor the names of any
+!       other contributors may be used to endorse or promote products
+!       derived from this software without specific prior written
+!       permission.
+! 
+! THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
+! "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
+! LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
+! A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
+! OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
+! SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
+! LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
+! DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
+! THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
+! (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
+! OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+!
+! CREATION DATE:    29-OCT-1991
+!
+! MODIFICATION HISTORY:
+!
+!   29-OCT-1991	V1.0	Madison	    	Initial coding.
+!   10-APR-1994 V1.1	Altmayer	Include agent status codes for MCP STAT
+!   30-AUG-1997	V1.2	Madison	    	Moved agent processing to separate module.
+!   10-JUL-1998	V2.0	Madison	    	The big SMTP reorg.
+!--
+    LIBRARY 'SYS$LIBRARY:STARLET';
+    LIBRARY 'MX_SRC_COMMON:FLQ';
+    LIBRARY 'MX_SRC_COMMON:MX';
+    LIBRARY 'MX_SRC_COMMON:AGENT';
+    LIBRARY 'MX_SRC_COMMON:MX_LCLDEFS';
+    LIBRARY 'MX_SRC_COMMON:ACCOUNTING';
+    LIBRARY 'SMTP';
+
+    ACC_DEFINE;
+
+    FORWARD ROUTINE
+    	MX_DNSMTP,
+    	INIT,
+    	PROCESS,
+    	CLEAR_FWDREF;
+
+    EXTERNAL ROUTINE
+    	SMTP_PROCESS_MESSAGE,
+    	LOAD_MXCONFIG,
+    	AGENT_MAIN,
+    	G_HAT (LIB$GETSYI, STR$PREFIX);
+
+    GLOBAL
+    	IPHOSTNM    : BLOCK [DSC$K_S_BLN,BYTE],
+    	DNSMTP_INFO : DNSMTPDEF;
+
+    TRACE_DECLARATIONS (GLOBAL);
+
+    EXTERNAL
+    	CONFIG	    : CFGDEF,
+    	SHUTDOWN_FLAG;
+
+    OWN
+    	SCSNODE	    : BLOCK [DSC$K_S_BLN,BYTE],
+    	IPHOSTBUF   : VECTOR [256,BYTE];
+
+
+%SBTTL 'MX_DNSMTP'
+GLOBAL ROUTINE MX_DNSMTP = 
+BEGIN
+!++
+! FUNCTIONAL DESCRIPTION:
+!
+!   description
+!
+! RETURNS:  	cond_value, longword (unsigned), write only, by value
+!
+! PROTOTYPE:
+!
+!   x
+!
+! IMPLICIT INPUTS:  None.
+!
+! IMPLICIT OUTPUTS: None.
+!
+! COMPLETION CODES:
+!
+!   SS$_NORMAL:	    	normal successful completion.
+!
+! SIDE EFFECTS:	    None.
+!--
+
+    AGENT_MAIN (FLQ_K_MX_DNSMTP, 0, INIT, PROCESS)
+
+END;
+
+%SBTTL 'INIT'
+GLOBAL ROUTINE INIT (REINIT) = 
+BEGIN
+!++
+! FUNCTIONAL DESCRIPTION:
+!
+!   Initialization routine.
+!
+! RETURNS:  	cond_value, longword (unsigned), write only, by value
+!
+! PROTOTYPE:
+!
+!   INIT
+!
+! IMPLICIT INPUTS:  None.
+!
+! IMPLICIT OUTPUTS: None.
+!
+! COMPLETION CODES:
+!
+!   SS$_NORMAL:	    	normal successful completion.
+!
+! SIDE EFFECTS:
+!
+!   None.
+!--
+    BIND RSTMSK	= REINIT : RSTDEF;
+
+    LOCAL
+    	lnmlst	: $ITMLST_DECL (ITEMS=1),
+    	lnmlen	: WORD,
+    	STATUS;
+
+    IF .REINIT NEQ 0 THEN
+    BEGIN
+    	IF .RSTMSK [RST_V_CONFIG] THEN
+    	    FREE_STRINGS (SCSNODE)
+    END
+    ELSE
+    	INIT_DYNDESC (SCSNODE);
+
+    ACC_CLOSE;
+
+    IF .REINIT EQL 0 OR .RSTMSK [RST_V_CONFIG] THEN
+    BEGIN
+    	STATUS = LIB$GETSYI (%REF (SYI$_NODENAME), 0, SCSNODE);
+    	IF .STATUS AND .SCSNODE [DSC$W_LENGTH] GTR 0 THEN
+    	    STR$PREFIX (SCSNODE, %ASCID' on node ');
+
+    	$ITMLST_INIT (ITMLST=lnmlst,
+    	    (ITMCOD=LNM$_STRING, BUFSIZ=%ALLOCATION (iphostbuf),
+    	     BUFADR=iphostbuf, RETLEN=lnmlen));
+    	STATUS = $TRNLNM (LOGNAM=%ASCID'MX_DECNET_HOST', TABNAM=%ASCID'LNM$FILE_DEV', ITMLST=lnmlst);
+    	IF .status THEN
+    	    INIT_SDESC (iphostnm, .lnmlen, iphostbuf)
+    	ELSE
+    	BEGIN
+    	    status = $TRNLNM (LOGNAM=%ASCID'SYS$NODE', TABNAM=%ASCID'LNM$FILE_DEV', ITMLST=lnmlst);
+    	    IF .STATUS THEN
+    	    	IF .lnmlen LSSU 3 THEN STATUS = SS$_IVLOGNAM;
+    	    IF .status THEN
+    	    	INIT_SDESC (iphostnm, .lnmlen-2, iphostbuf);  ! remove the "::"
+    	END;
+
+    	IF .STATUS THEN
+    	    STATUS =  LOAD_MXCONFIG (%ASCID'MX_CONFIG', %ASCID'MX_DIR:.MXCFG', 0,
+    	    	    	CFG_M_DNSMTPINFO);
+    END;
+
+
+    IF .DNSMTP_INFO [DNSMTP_V_ACCTG]
+    THEN
+    BEGIN
+    	STATUS = ACC_INIT (%ASCID'MX_DNSMTP_ACC', %ASCID'MX_DNSMTP_DIR:.DAT',
+    	    	    .RSTMSK [RST_V_ACCTG]);
+    	IF NOT .STATUS THEN RETURN .STATUS;
+    END;
+
+    .STATUS
+
+END; ! INIT
+
+%SBTTL 'PROCESS'
+GLOBAL ROUTINE PROCESS (qctx, qent_a) = 
+BEGIN
+!++
+! FUNCTIONAL DESCRIPTION:
+!
+!   description
+!
+! RETURNS:  	cond_value, longword (unsigned), write only, by value
+!
+! PROTOTYPE:
+!
+!   PROCESS qctx, qent
+!
+! IMPLICIT INPUTS:  None.
+!
+! IMPLICIT OUTPUTS: None.
+!
+! COMPLETION CODES:
+!
+!   SS$_NORMAL:	    	normal successful completion.
+!
+! SIDE EFFECTS:	    None.
+!--
+    BIND
+    	QENT	= .QENT_A   : QENTDEF;
+
+    LOCAL
+    	status;
+
+    TRACE_INIT ('dnsmtp', 'dnsmtp');
+
+    TRACE ('===================================================');
+    TRACE ('Processing queue entry number !UL!AS!AS', .QENT [QENT_L_ENTNUM],
+    	    (IF .scsnode [DSC$W_LENGTH] NEQ 0 THEN %ASCID' on node ' ELSE %ASCID''), SCSNODE);
+
+    SMTP_PROCESS_MESSAGE (.qctx, qent, MX_K_ORG_DNSMTP, %ASCID'DNSMTP', 0, .dnsmtp_info [DNSMTP_V_ACCTG],
+    	    	    	  .dnsmtp_info [DNSMTP_L_MAXTRIES], -1, dnsmtp_info [DNSMTP_Q_RETRY]);
+    IF .DEBUG THEN
+    BEGIN
+    	TRACE ('*** End of processing pass ***');
+    	TRACE_CLOSE;
+    END;
+
+    IF .dnsmtp_info [DNSMTP_V_ACCTG] THEN ACC_FLUSH;
+
+    SS$_NORMAL
+
+END; ! PROCESS
+
+%SBTTL 'CLEAR_FWDREF'
+GLOBAL ROUTINE CLEAR_FWDREF (qent_a) = 
+BEGIN
+!++
+! FUNCTIONAL DESCRIPTION:
+!
+!   description
+!
+! RETURNS:  	cond_value, longword (unsigned), write only, by value
+!
+! PROTOTYPE:
+!
+!   x
+!
+! IMPLICIT INPUTS:  None.
+!
+! IMPLICIT OUTPUTS: None.
+!
+! COMPLETION CODES:
+!
+!   SS$_NORMAL:	    	normal successful completion.
+!
+! SIDE EFFECTS:	    None.
+!--
+    BIND
+    	qent	= .qent_a   : QENTDEF;
+
+    qent [MXQ_L_DNSMTPREF] = 0;
+
+    SS$_NORMAL
+
+END;  ! CLEAR_FWDREF
+
+
+END
+ELUDOM

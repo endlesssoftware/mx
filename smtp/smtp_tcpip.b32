@@ -1,0 +1,853 @@
+%TITLE 'SMTP_TCPIP'
+MODULE SMTP_TCPIP (IDENT='V1.1-1', ADDRESSING_MODE (EXTERNAL=LONG_RELATIVE,NONEXTERNAL=LONG_RELATIVE)) =
+BEGIN
+!++
+! FACILITY: 	    MX_SMTP
+!
+! ABSTRACT: 	    SMTP TCP/IP support routines.
+!
+! MODULE DESCRIPTION:
+!
+!   This modules binds SMTP to the TCP/IP transport protocol.
+!
+! AUTHOR:   	    M. Madison
+!
+! Copyright (c) 2008, Matthew Madison.
+! Copyright (c) 2011, Endless Software Solutions.
+! 
+! All rights reserved.
+! 
+! Redistribution and use in source and binary forms, with or without
+! modification, are permitted provided that the following conditions
+! are met:
+! 
+!     * Redistributions of source code must retain the above
+!       copyright notice, this list of conditions and the following
+!       disclaimer.
+!     * Redistributions in binary form must reproduce the above
+!       copyright notice, this list of conditions and the following
+!       disclaimer in the documentation and/or other materials provided
+!       with the distribution.
+!     * Neither the name of the copyright owner nor the names of any
+!       other contributors may be used to endorse or promote products
+!       derived from this software without specific prior written
+!       permission.
+! 
+! THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
+! "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
+! LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
+! A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
+! OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
+! SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
+! LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
+! DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
+! THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
+! (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
+! OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+!
+! CREATION DATE:    05-JUL-1998
+!
+! MODIFICATION HISTORY:
+!
+!   05-JUL-1998	V1.0	Madison	    Initial coding (from SMTP_OUT).
+!   21-JUL-1998	V1.0-1	Madison	    Add remote MTA string.
+!   16-AUG-1998	V1.0-2	Madison	    Handle SS$_ENDOFFILE better.
+!   31-AUG-1998	V1.0-3	Madison	    Skip lock check if we're at the max retry count.
+!   15-AUG-1999	V1.0-4	Madison	    Skip address lock check when at max retries, and
+!   	    	    	    	    	zero the recipient status to make sure the
+!   	    	    	    	    	actual status gets included in any bounce msg.
+!   06-JAN-2000	V1.0-5	Madison	    Fix for handling SS$_UNSUPPORTED coming from
+!   	    	    	    	    NETLIB DNS routines.
+!   18-JUL-2003 V1.1    Madison     Add logical name for IP address to bind socket
+!                                   to.
+!   06-MAY-2010 V1.1-1  Sneddon     Now dragging NETLIB from NETLIB_DIR.
+!--
+    LIBRARY 'SYS$LIBRARY:STARLET';
+    LIBRARY 'NETLIB_DIR:NETLIBDEF';
+    LIBRARY 'MX_SRC_COMMON:MX';
+    LIBRARY 'MX_SRC_COMMON:MX_LCLDEFS';
+    LIBRARY 'MX_SRC_COMMON:FIELDS';
+    LIBRARY 'SMTP';
+
+    FORWARD ROUTINE
+    	SMTP_CONNECT,
+    	SMTP_RECONNECT,
+    	SMTP_DISCONNECT,
+    	SMTP_WRITELINE,
+    	SMTP_WRITE,
+    	SMTP_READLINE,
+    	establish_connection,
+    	get_smtp_port,
+    	remove_self_from_mxlist	: NOVALUE;
+
+    EXTERNAL ROUTINE
+    	CHECK_LOCK,
+    	GET_REPLY,
+    	G_HAT (NETLIB_SOCKET, NETLIB_WRITE, NETLIB_CLOSE,
+    	    	NETLIB_SHUTDOWN, NETLIB_DNS_MX_LOOKUP,
+    	    	NETLIB_STRTOADDR, NETLIB_NAME_TO_ADDRESS,
+    	    	NETLIB_HTON_WORD, NETLIB_ADDRTOSTR, NETLIB_BIND,
+                NETLIB_GETPEERNAME, NETLIB_GETSOCKNAME,
+    	    	NETLIB_CONNECT, NETLIB_WRITELINE, NETLIB_READLINE),
+    	G_HAT (STR$COPY_R, STR$CASE_BLIND_COMPARE, LIB$CVT_DTB, LIB$SYS_FAO);
+
+    EXTERNAL LITERAL
+    	MX__NOHOST, MX__PROTOERR, MX__NODNSRESPONSE, MX__SHUTDOWN, MX__NOCONTACT,
+    	MX__INTERNAL_ERROR;
+
+    LITERAL
+    	MXREC_S_NAME  	    	= 128,
+    	MXR_MAX       	    	= 32;
+
+    _DEF (MXREC)
+    	MXREC_L_PREF	= _LONG,
+    	MXREC_L_LEN 	= _LONG,
+    	MXREC_T_NAME	= _BYTES (MXREC_S_NAME)
+    _ENDDEF (MXREC);
+
+    MACRO
+    	MXREC_ARRAY (N) = BLOCKVECTOR [N,MXREC_S_MXRECDEF,BYTE]
+    	    FIELD (MXREC_FIELDS)%;
+
+    EXTERNAL
+    	IPHOSTNM    : BLOCK [DSC$K_S_BLN,BYTE],
+    	SMTP_INFO   : SMTPDEF,
+    	shutdown_flag;
+
+    TRACE_DECLARATIONS (EXTERNAL);
+
+
+%SBTTL 'SMTP_CONNECT'
+GLOBAL ROUTINE SMTP_CONNECT (dest_a_a, actualhost_a, dsn_status_a, defrtr_a, rmtmta_a) = 
+BEGIN
+!++
+! FUNCTIONAL DESCRIPTION:
+!
+!   Attempts to establish a connection to an SMTP server.
+!
+! RETURNS:  	cond_value, longword (unsigned), write only, by value
+!
+! PROTOTYPE:
+!
+!   SMTP_SEND
+!
+! IMPLICIT INPUTS:  None.
+!
+! IMPLICIT OUTPUTS: None.
+!
+! COMPLETION CODES:
+!
+!   SS$_NORMAL:	    	normal successful completion.
+!
+! SIDE EFFECTS:
+!
+!   None.
+!--
+    BIND
+    	dest	    = .dest_a_a   	    	: REF DESTDEF,
+    	ext 	    = dest [DEST_X_ESMTP]   	: ESMTPDEF,
+    	drque	    = dest [DEST_Q_RCPTQUE]	: QUEDEF,
+    	hostname    = dest [DEST_A_HOSTNAME]	: REF TXTDEF,
+    	tcpctx	    = dest [DEST_L_TCPCTX],
+    	defrtr	    = .defrtr_a	    	    	: BLOCK [,BYTE],
+    	actualhost  = .actualhost_a 	    	: BLOCK [,BYTE],
+    	dsn_status  = .dsn_status_a;
+
+    LOCAL
+    	mxr 	    : MXREC_ARRAY (MXR_MAX),
+    	sdsc	    : BLOCK [DSC$K_S_BLN,BYTE],
+    	hostnm	    : BLOCK [DSC$K_S_BLN,BYTE],
+    	cmd 	    : BLOCK [DSC$K_S_BLN,BYTE],
+    	iosb	    : IOSBDEF,
+    	rcpt	    : REF RCPTDEF,
+    	skip_lock,
+    	mxrcnt,
+    	real_mxrcnt,
+	smtp_port,
+    	status;
+
+    INIT_SDESC (hostnm, .hostname [TXT_W_LEN], hostname [TXT_T_TEXT]);
+
+    skip_lock = 0;
+
+    rcpt = .drque [QUE_L_HEAD];
+    WHILE .rcpt NEQA drque DO
+    BEGIN
+    	IF .rcpt [RCPT_W_CNT1] GEQ .smtp_info [SMTP_L_MAXTRIES] THEN
+    	BEGIN
+    	    skip_lock = 1;
+    	    !+
+    	    !	Reset the status fields for this recipient to make
+    	    !   sure the actual final status gets into the bounce message
+    	    !	if one is generated.
+    	    !-
+    	    rcpt [RCPT_L_DSN_STATUS] = 0;
+    	    rcpt [RCPT_L_STATUS] = SS$_NORMAL;
+    	END;
+    	rcpt = .rcpt [RCPT_L_FLINK];
+    END;
+
+    IF NOT .skip_lock THEN
+    BEGIN
+    	status = CHECK_LOCK (hostnm, 0, 0, 0);
+
+    	IF NOT .status THEN
+    	BEGIN
+    	    dsn_status = MX__DSN_WR_OTHER;
+    	    RETURN .status;
+    	END;
+    END;
+
+    status = NETLIB_SOCKET (tcpctx, %REF (NETLIB_K_TYPE_STREAM));
+    IF NOT .status THEN
+    BEGIN
+    	dsn_status = MX__DSN_WS_OTHER;
+    	RETURN .status;
+    END;
+
+    !
+    !	In this two-pass loop, we first try the host name as originally
+    !	presented to us; if that fails with an SS$_ENDOFFFILE (no such host),
+    !	and there's an SMTP "default router" set, we try that on the second
+    !	pass.
+    !
+    INCR pass FROM 1 TO 2 DO
+    BEGIN
+    	BIND
+    	    hlen = hostnm [DSC$W_LENGTH]    : WORD,
+    	    hptr = hostnm [DSC$A_POINTER]   : REF VECTOR [,BYTE];
+
+    	smtp_port = get_smtp_port (dest, hostnm);
+
+    	mxrcnt = real_mxrcnt = 0;
+
+    	IF .dest [DEST_V_FORCEDROUTE] OR CH$RCHAR (.hptr) EQL %C'[' THEN  ! address literal?
+    	BEGIN
+    	    status = SS$_NORMAL;
+    	    mxrcnt = 1;
+    	    mxr [0, MXREC_L_PREF] = 0;
+    	    IF CH$RCHAR (.hptr) EQL %C'[' THEN
+    	    BEGIN
+    	    	mxr [0,MXREC_L_LEN] = MIN (.hlen-2, MXREC_S_NAME);
+    	    	CH$MOVE (.mxr [0,MXREC_L_LEN], CH$PLUS (.hptr, 1), mxr [0,MXREC_T_NAME]);
+    	    END
+    	    ELSE
+    	    BEGIN
+    	    	mxr [0,MXREC_L_LEN] = MIN (.hlen, MXREC_S_NAME);
+    	    	CH$MOVE (.mxr [0,MXREC_L_LEN], .hptr, mxr [0,MXREC_T_NAME]);
+    	    END;
+    	END
+    	ELSE
+    	BEGIN
+    	    TRACE ('  SMTP_SEND: looking up host name !AS', HOSTNM);
+
+    	    status = NETLIB_DNS_MX_LOOKUP (tcpctx, hostnm, mxr, %REF (mxr_max), mxrcnt);
+
+    	    TRACE ('  SMTP_SEND: NETLIB_DNS_MX_LOOKUP status is !XL', .status);
+    	    IF NOT .status THEN
+    	    	TRACE_PUTMSG ('             -- !AS', .status);
+
+    	    IF .status EQL SS$_UNSUPPORTED THEN
+    	    BEGIN
+    	    	LOCAL
+    	    	    adrcnt,
+    	    	    adrlst : VECTOR [32,LONG];
+    	    	status = NETLIB_NAME_TO_ADDRESS (tcpctx, %REF (NETLIB_K_LOOKUP_HOST_TABLE),
+    	    	    	    	    	    	 hostnm, adrlst, %REF (32), adrcnt);
+    	    	TRACE ('  SMTP_SEND: No DNS; host table lookup returned status=!XL, adrcnt=!UL', .status, .adrcnt);
+    	    	IF NOT .status THEN
+    	    	    TRACE_PUTMSG ('             -- !AS', .status);
+    	    	IF NOT .status OR .adrcnt EQL 0 THEN
+    	    	BEGIN
+    	    	    TRACE ('             -- treating as host name lookup failure');
+    	    	    status = SS$_ENDOFFILE;
+    	    	END
+    	    	ELSE
+    	    	BEGIN
+    	    	    status = SS$_NORMAL;
+    	    	    mxrcnt = 0;
+    	    	END;
+    	    END;
+
+    	    IF .status EQL SS$_ENDOFFILE THEN  ! name not found in DNS
+    	    BEGIN
+    	    	IF .pass EQL 2 OR .defrtr_a EQLA 0 OR .defrtr [DSC$W_LENGTH] EQL 0 THEN
+    	    	BEGIN
+    	    	    NETLIB_CLOSE (tcpctx);
+    	    	    dsn_status = MX__DSN_WR_UNARTE;
+    	    	    RETURN MX__NOHOST;
+    	    	END;
+
+    	    	INIT_SDESC (hostnm, .defrtr [DSC$W_LENGTH], .defrtr [DSC$A_POINTER]);
+    	    	dest [DEST_V_FORCEDROUTE] = 1;
+    	    END
+    	    ELSE IF NOT .status THEN  ! other name lookup failure
+    	    BEGIN
+    	    	NETLIB_CLOSE (tcpctx);
+    	    	dsn_status = MX__DSN_WR_DSFAIL;
+    	    	RETURN MX__NODNSRESPONSE;
+    	    END;
+
+    	    IF .status THEN
+    	    	remove_self_from_mxlist (mxrcnt, real_mxrcnt, mxr, hostnm);
+
+    	    IF .mxrcnt EQL 0 THEN
+    	    BEGIN
+    	    	mxrcnt = 1;
+    	    	mxr [0, MXREC_L_PREF] = 0;
+    	    	mxr [0,MXREC_L_LEN] = MIN (.hostnm [DSC$W_LENGTH], MXREC_S_NAME);
+    	    	CH$MOVE (.mxr [0,MXREC_L_LEN], .hostnm [DSC$A_POINTER], mxr [0,MXREC_T_NAME]);
+    	    END;
+
+    	END;
+
+    	IF .status THEN EXITLOOP;
+
+    END;
+
+! We should only be here if the lookup was successful.
+
+    IF NOT .status THEN SIGNAL_STOP (MX__INTERNAL_ERROR, 0);
+
+    NETLIB_CLOSE (tcpctx);
+
+    status = establish_connection (dest, .smtp_port, .mxrcnt, .real_mxrcnt, mxr, .actualhost_a, .rmtmta_a, .skip_lock);
+    IF NOT .status THEN
+    BEGIN
+    	IF .status EQL SS$_ENDOFFILE THEN
+    	BEGIN
+    	    dsn_status = MX__DSN_FR_UNARTE;
+    	    status = MX__NOCONTACT;
+    	END
+    	ELSE
+    	BEGIN
+    	    IF NOT .skip_lock THEN
+    	    	CHECK_LOCK (hostnm, 0, 1, .status);
+    	    dsn_status = MX__DSN_WR_NOANSR;
+    	END;
+    END;
+
+    .status
+
+END; ! SMTP_CONNECT
+
+%SBTTL 'SMTP_RECONNECT'
+GLOBAL ROUTINE SMTP_RECONNECT (dest_a_a, hostnm_a, dsn_status_a, rmtmta_a) = 
+BEGIN
+!++
+! FUNCTIONAL DESCRIPTION:
+!
+!   description
+!
+! RETURNS:  	cond_value, longword (unsigned), write only, by value
+!
+! PROTOTYPE:
+!
+!   x
+!
+! IMPLICIT INPUTS:  None.
+!
+! IMPLICIT OUTPUTS: None.
+!
+! COMPLETION CODES:
+!
+!   SS$_NORMAL:	    	normal successful completion.
+!
+! SIDE EFFECTS:	    None.
+!--
+    BIND
+    	dest	    = .dest_a_a	: REF DESTDEF,
+    	hostnm	    = .hostnm_a	: BLOCK [,BYTE],
+    	dsn_status  = .dsn_status_a;
+
+    LOCAL
+    	mxr 	    : MXREC_ARRAY (MXR_MAX),
+    	smtp_port,
+    	status;
+
+    CH$FILL (%CHAR (0), %ALLOCATION (mxr), mxr);
+    mxr [0,MXREC_L_LEN] = .hostnm [DSC$W_LENGTH];
+    CH$MOVE (.hostnm [DSC$W_LENGTH], .hostnm [DSC$A_POINTER], mxr [0, MXREC_T_NAME]);
+
+    smtp_port = get_smtp_port (dest, hostnm);
+
+    status = establish_connection (dest, .smtp_port, 1, 1, mxr, 0, .rmtmta_a, 0);
+    IF NOT .status THEN
+    BEGIN
+    	IF .status EQL SS$_ENDOFFILE THEN
+    	    dsn_status = MX__DSN_FR_UNARTE
+    	ELSE
+    	BEGIN
+    	    CHECK_LOCK (hostnm, 0, 1, .status);
+    	    dsn_status = MX__DSN_WR_NOANSR;
+    	END;
+    END;
+
+    .status
+
+END; ! SMTP_RECONNECT
+
+%SBTTL 'SMTP_DISCONNECT'
+GLOBAL ROUTINE SMTP_DISCONNECT (tcpctx_a) = 
+BEGIN
+!++
+! FUNCTIONAL DESCRIPTION:
+!
+!   description
+!
+! RETURNS:  	cond_value, longword (unsigned), write only, by value
+!
+! PROTOTYPE:
+!
+!   x
+!
+! IMPLICIT INPUTS:  None.
+!
+! IMPLICIT OUTPUTS: None.
+!
+! COMPLETION CODES:
+!
+!   SS$_NORMAL:	    	normal successful completion.
+!
+! SIDE EFFECTS:	    None.
+!--
+    LOCAL
+    	status;
+
+    NETLIB_SHUTDOWN (.tcpctx_a, %REF (NETLIB_K_SHUTDOWN_RECEIVER));
+    status = NETLIB_CLOSE (.tcpctx_a);
+    .tcpctx_a = 0;
+
+    .status
+
+END; ! SMTP_DISCONNECT
+
+%SBTTL 'SMTP_WRITELINE'
+GLOBAL ROUTINE SMTP_WRITELINE (tcpctx_a, dsc_a, count_a) = 
+BEGIN
+!++
+! FUNCTIONAL DESCRIPTION:
+!
+!   description
+!
+! RETURNS:  	cond_value, longword (unsigned), write only, by value
+!
+! PROTOTYPE:
+!
+!   x
+!
+! IMPLICIT INPUTS:  None.
+!
+! IMPLICIT OUTPUTS: None.
+!
+! COMPLETION CODES:
+!
+!   SS$_NORMAL:	    	normal successful completion.
+!
+! SIDE EFFECTS:	    None.
+!--
+    LOCAL
+    	status,
+    	iosb	    : IOSBDEF;
+
+    status = NETLIB_WRITELINE (.tcpctx_a, .dsc_a, iosb);
+    IF .status THEN status = .iosb [IOSB_W_STATUS];
+    IF .status THEN .count_a = .iosb [IOSB_W_COUNT];
+
+    .status
+
+END; ! SMTP_WRITELINE
+
+%SBTTL 'SMTP_WRITE'
+GLOBAL ROUTINE SMTP_WRITE (tcpctx_a, dsc_a, count_a) = 
+BEGIN
+!++
+! FUNCTIONAL DESCRIPTION:
+!
+!   description
+!
+! RETURNS:  	cond_value, longword (unsigned), write only, by value
+!
+! PROTOTYPE:
+!
+!   x
+!
+! IMPLICIT INPUTS:  None.
+!
+! IMPLICIT OUTPUTS: None.
+!
+! COMPLETION CODES:
+!
+!   SS$_NORMAL:	    	normal successful completion.
+!
+! SIDE EFFECTS:	    None.
+!--
+    LOCAL
+    	status,
+    	iosb	    : IOSBDEF;
+
+    status = NETLIB_WRITE (.tcpctx_a, .dsc_a, 0, 0, iosb);
+    IF .status THEN status = .iosb [IOSB_W_STATUS];
+    IF .status THEN .count_a = .iosb [IOSB_W_COUNT];
+
+    .status
+
+END; ! SMTP_WRITE
+
+%SBTTL 'SMTP_READLINE'
+GLOBAL ROUTINE SMTP_READLINE (tcpctx_a, dsc_a, len_a, tmo_a) = 
+BEGIN
+!++
+! FUNCTIONAL DESCRIPTION:
+!
+!   description
+!
+! RETURNS:  	cond_value, longword (unsigned), write only, by value
+!
+! PROTOTYPE:
+!
+!   x
+!
+! IMPLICIT INPUTS:  None.
+!
+! IMPLICIT OUTPUTS: None.
+!
+! COMPLETION CODES:
+!
+!   SS$_NORMAL:	    	normal successful completion.
+!
+! SIDE EFFECTS:	    None.
+!--
+    LOCAL
+    	status,
+    	iosb	    : IOSBDEF;
+
+    status = NETLIB_READLINE (.tcpctx_a, .dsc_a, .len_a, 0, .tmo_a, iosb);
+    IF .status THEN status = .iosb [IOSB_W_STATUS];
+
+    .status
+
+END; ! SMTP_READLINE
+
+%SBTTL 'get_smtp_port'
+ROUTINE get_smtp_port (dest_a_a, hostnm_a) = 
+BEGIN
+!++
+! FUNCTIONAL DESCRIPTION:
+!
+!   description
+!
+! RETURNS:  	cond_value, longword (unsigned), write only, by value
+!
+! PROTOTYPE:
+!
+!   x
+!
+! IMPLICIT INPUTS:  None.
+!
+! IMPLICIT OUTPUTS: None.
+!
+! COMPLETION CODES:
+!
+!   SS$_NORMAL:	    	normal successful completion.
+!
+! SIDE EFFECTS:	    None.
+!--
+    BIND
+    	dest	= .dest_a_a   	    	    : REF DESTDEF,
+    	hostnm	= .hostnm_a 	    	    : BLOCK [,BYTE],
+    	hlen	= hostnm [DSC$W_LENGTH]	    : WORD,
+    	hptr	= hostnm [DSC$A_POINTER]    : REF VECTOR [,BYTE];
+
+    LOCAL
+    	lnmlst	: $ITMLST_DECL (ITEMS=1),
+    	buf 	: VECTOR [64,BYTE],
+    	len 	: WORD,
+    	status,
+    	portnum;
+
+    IF .dest [DEST_V_FORCEDROUTE] THEN
+    BEGIN
+    	LOCAL cp;
+
+    	cp = CH$FIND_CH (.hlen, .hptr, %C'@');
+    	IF NOT CH$FAIL (.cp) THEN
+    	BEGIN
+    	    status = LIB$CVT_DTB (.hlen - (CH$DIFF (.cp, .hptr) + 1), CH$PLUS (.cp, 1), portnum);
+    	    hlen = CH$DIFF (.cp, .hptr);
+    	    IF .status THEN RETURN .portnum;
+	END;
+    END;
+
+    $ITMLST_INIT (ITMLST=lnmlst,
+    	(ITMCOD=LNM$_STRING, BUFSIZ=%ALLOCATION (buf), BUFADR=buf, RETLEN=len));
+
+    IF $TRNLNM (LOGNAM=%ASCID'MX_SMTP_TCPIP_PORT', TABNAM=%ASCID'LNM$FILE_DEV', ITMLST=lnmlst) THEN
+    	IF LIB$CVT_DTB (.len, buf, portnum) THEN
+    	    RETURN .portnum;
+
+    RETURN 25;
+
+END; ! get_smtp_port
+
+%SBTTL 'remove_self_from_mxlist'
+ROUTINE remove_self_from_mxlist (mxrcnt_a, real_mxrcnt_a, mxr_a, hostnm_a) : NOVALUE = 
+BEGIN
+!++
+! FUNCTIONAL DESCRIPTION:
+!
+!   description
+!
+! RETURNS:  	cond_value, longword (unsigned), write only, by value
+!
+! PROTOTYPE:
+!
+!   x
+!
+! IMPLICIT INPUTS:  None.
+!
+! IMPLICIT OUTPUTS: None.
+!
+! COMPLETION CODES:
+!
+!   SS$_NORMAL:	    	normal successful completion.
+!
+! SIDE EFFECTS:	    None.
+!--
+    BIND
+    	mxrcnt	    	= .mxrcnt_a,
+    	real_mxrcnt 	= .real_mxrcnt_a,
+    	mxr 	    	= .mxr_a    	    : MXREC_ARRAY (MXR_MAX),
+    	hostnm	    	= .hostnm_a 	    : BLOCK [,BYTE];
+
+    LOCAL
+    	sawme,
+    	mypref,
+    	sdsc	    : BLOCK [DSC$K_S_BLN,BYTE];
+
+    real_mxrcnt = .mxrcnt;
+    IF .mxrcnt EQL 0 THEN RETURN;
+
+    sawme = 0;
+    mypref = -1;
+
+    INCR i FROM 0 TO .mxrcnt-1 DO
+    BEGIN
+    	IF .mxr [.i,MXREC_L_LEN] NEQ 0 THEN
+    	BEGIN
+    	    INIT_SDESC (sdsc, .mxr [.i,MXREC_L_LEN], mxr [.i, MXREC_T_NAME]);
+    	    IF STR$CASE_BLIND_COMPARE (sdsc, iphostnm) EQL 0 THEN
+    	    BEGIN
+    	    	sawme = 1;
+    	    	IF .mypref GTRU .mxr [.i,MXREC_L_PREF] THEN mypref = .mxr [.i,MXREC_L_PREF];
+    	    END;
+    	END;
+    END;
+
+    IF NOT .sawme THEN RETURN;
+
+    INCR i FROM 0 TO .mxrcnt-1 DO
+    	IF .mxr [.i,MXREC_L_PREF] GEQU .mypref THEN
+    	BEGIN
+    	    real_mxrcnt = .real_mxrcnt - 1;
+    	    mxr [.i,MXREC_L_LEN] = 0;
+    	END;
+
+    ! If we're the only MX relay, forward directly to end host
+
+    IF .mxrcnt EQL 0 THEN
+    BEGIN
+    	mxrcnt = 1;
+    	mxr [0, MXREC_L_PREF] = 0;
+    	mxr [0,MXREC_L_LEN] = MIN (.hostnm [DSC$W_LENGTH], MXREC_S_NAME);
+    	CH$MOVE (.mxr [0,MXREC_L_LEN], .hostnm [DSC$A_POINTER], mxr [0,MXREC_T_NAME]);
+    END;
+
+END; ! remove_self_from_mxlist
+
+%SBTTL 'establish_connection'
+ROUTINE establish_connection (dest_a, smtp_port, mxrcnt, real_mxrcnt, mxr_a, relay_a, rmtmta_a, skip_lock) = 
+BEGIN
+!++
+! FUNCTIONAL DESCRIPTION:
+!
+!   description
+!
+! RETURNS:  	cond_value, longword (unsigned), write only, by value
+!
+! PROTOTYPE:
+!
+!   x
+!
+! IMPLICIT INPUTS:  None.
+!
+! IMPLICIT OUTPUTS: None.
+!
+! COMPLETION CODES:
+!
+!   SS$_NORMAL:	    	normal successful completion.
+!
+! SIDE EFFECTS:	    None.
+!--
+    BIND
+    	dest	    = .dest_a	    	    : REF DESTDEF,
+    	tcpctx	    = dest [DEST_L_TCPCTX],
+    	mxr 	    = .mxr_a	    	    : MXREC_ARRAY (MXR_MAX),
+    	relay	    = .relay_a	    	    : BLOCK [DSC$K_S_BLN,BYTE];
+
+    LOCAL
+    	sdsc	: BLOCK [DSC$K_S_BLN,BYTE],
+    	adsc	: BLOCK [DSC$K_S_BLN,BYTE],
+    	adrlst	: VECTOR [32,LONG],
+    	sbuf	: VECTOR [64,BYTE],
+        lnmbuf  : VECTOR [64,BYTE],
+        lnmlst  : $ITMLST_DECL (ITEMS=1),
+    	sin 	: SINDEF,
+        mysin   : SINDEF,
+    	iosb	: IOSBDEF,
+        lnmlen  : WORD,
+    	adrcnt,
+    	pref,
+    	idx,
+    	status,
+        do_bind;
+
+    CH$FILL (%CHAR (0), SIN_S_SINDEF, sin);
+    CH$FILL (%CHAR (0), SIN_S_SINDEF, mysin);
+    mysin [SIN_W_FAMILY] = sin [SIN_W_FAMILY] = NETLIB_K_AF_INET;
+    sin [SIN_W_PORT] = NETLIB_HTON_WORD (%REF (.smtp_port));
+
+    do_bind = 0;
+    $ITMLST_INIT (ITMLST=lnmlst,
+                    (ITMCOD=LNM$_STRING, BUFADR=lnmbuf, BUFSIZ=%ALLOCATION (lnmbuf),
+                     RETLEN=lnmlen));
+    IF $TRNLNM (LOGNAM=%ASCID'MX_SMTP_AGENT_ADDRESS', TABNAM=%ASCID'LNM$FILE_DEV',
+                ITMLST=lnmlst) THEN
+    BEGIN
+        INIT_SDESC (sdsc, .lnmlen, lnmbuf);
+        do_bind = NETLIB_STRTOADDR (sdsc, mysin [SIN_X_ADDR]);
+        IF NOT .do_bind THEN
+    	    TRACE ('  SMTP_SEND: Invalid value for MX_SMTP_AGENT_ADDRESS: !AS', sdsc);
+    END;
+
+    INCR j FROM 0 TO .mxrcnt-1 DO
+    BEGIN
+
+    	IF .shutdown_flag THEN RETURN MX__SHUTDOWN;
+
+    	pref = -1;
+    	INCR i FROM 0 TO .mxrcnt-1 DO
+    	    IF .mxr [.i,MXREC_L_LEN] GTR 0 AND .mxr [.i,MXREC_L_PREF] LSSU .pref THEN
+    	    BEGIN
+    	    	pref = .mxr [.i,MXREC_L_PREF];
+    	    	idx = .i;
+    	    END;
+
+    	IF .pref EQL -1 THEN EXITLOOP;
+
+    	INIT_SDESC (sdsc, .mxr [.idx,MXREC_L_LEN], mxr [.idx,MXREC_T_NAME]);
+
+    	status = NETLIB_SOCKET (tcpctx, %REF (NETLIB_K_TYPE_STREAM));
+    	IF NOT .status THEN RETURN .status;
+
+    	IF CH$RCHAR (.sdsc [DSC$A_POINTER]) EQL %C'[' THEN
+    	BEGIN
+    	    sdsc [DSC$A_POINTER] = CH$PLUS (.sdsc [DSC$A_POINTER], 1);
+    	    sdsc [DSC$W_LENGTH] = .sdsc [DSC$W_LENGTH] - 2;
+    	    status = NETLIB_STRTOADDR (sdsc, ADRLST [0]);
+    	    IF .status THEN adrcnt = 1;
+    	END
+    	ELSE
+    	BEGIN
+    	    status = NETLIB_NAME_TO_ADDRESS (tcpctx, %REF (NETLIB_K_LOOKUP_DNS), sdsc, adrlst, %REF (32), adrcnt);
+    	    IF .status EQL SS$_UNSUPPORTED OR
+    	    	((NOT .status OR .adrcnt EQL 0) AND .real_mxrcnt EQL 0) THEN
+    	    	status = NETLIB_NAME_TO_ADDRESS (tcpctx, %REF (NETLIB_K_LOOKUP_HOST_TABLE),
+    	    	    	    	    	    	 sdsc, adrlst, %REF (32), adrcnt);
+    	    IF .status AND .adrcnt EQL 0 THEN status = SS$_ENDOFFILE;
+    	END;
+
+    	NETLIB_CLOSE (tcpctx);
+
+    	IF .status THEN INCR a FROM 0 TO .adrcnt-1 DO
+    	BEGIN
+
+    	    IF .skip_lock THEN
+    	    	status = SS$_NORMAL
+    	    ELSE
+    	    	status = CHECK_LOCK (adrlst [.a], 1, 0, 0);
+
+    	    IF .status THEN
+    	    BEGIN
+    	    	CH$MOVE (INADDR_S_INADDRDEF, adrlst [.a], sin [SIN_X_ADDR]);
+    	    	INIT_SDESC (adsc, %ALLOCATION (sbuf), sbuf);
+    	    	NETLIB_ADDRTOSTR (adrlst [.a], adsc, adsc [DSC$W_LENGTH]);
+    	    	TRACE ('  SMTP_SEND: Attempting to start session with !AS [!AS]', sdsc, adsc);
+    	    	status = NETLIB_SOCKET (tcpctx, %REF (NETLIB_K_TYPE_STREAM));
+                IF .status AND .do_bind THEN
+                BEGIN
+                    status = NETLIB_BIND (tcpctx, mysin, %REF (SIN_S_SINDEF), iosb);
+                    IF .status THEN status = .iosb [IOSB_W_STATUS];
+                    IF NOT .status THEN
+                        TRACE ('  SMTP_SEND: Could not bind socket: !XL', .status);
+                END;
+    	    	IF .status THEN
+    	    	BEGIN
+    	    	    status = NETLIB_CONNECT (tcpctx, sin, %REF (SIN_S_SINDEF), iosb);
+    	    	    IF .status THEN status = .iosb [IOSB_W_STATUS];
+    	    	    IF .status THEN
+    	    	    BEGIN
+    	    	    	LOCAL
+                            ldsc : BLOCK [DSC$K_S_BLN,BYTE],
+                            rdsc : BLOCK [DSC$K_S_BLN,BYTE],
+                            lbuf : VECTOR [32,BYTE],
+                            rbuf : VECTOR [32,BYTE],
+                            lsin : SINDEF,
+                            rsin : SINDEF,
+                            slen,
+                            smtp_status;
+                        INIT_SDESC (ldsc, %ALLOCATION (lbuf), lbuf);
+                        INIT_SDESC (rdsc, %ALLOCATION (rbuf), rbuf);
+                        status = NETLIB_GETSOCKNAME (tcpctx, lsin, %REF (SIN_S_SINDEF), slen);
+                        IF .status THEN
+                        BEGIN
+                            NETLIB_ADDRTOSTR (lsin [SIN_X_ADDR], ldsc, ldsc [DSC$W_LENGTH]);
+                            status = NETLIB_GETPEERNAME (tcpctx, rsin, %REF (SIN_S_SINDEF), slen);
+                        END;
+                        IF .status THEN
+                        BEGIN
+                            NETLIB_ADDRTOSTR (rsin [SIN_X_ADDR], rdsc, rdsc [DSC$W_LENGTH]);
+                            TRACE ('  SMTP_SEND: Connected (local: !AS:!UW, remote: !AS:!UW)',
+                                    ldsc, NETLIB_HTON_WORD (lsin [SIN_W_PORT]),
+                                    rdsc, NETLIB_HTON_WORD (rsin [SIN_W_PORT]));
+                        END
+                        ELSE
+    	    	    	    TRACE ('  SMTP_SEND: Connected');
+    	    	    	status = GET_REPLY (dest, smtp_status);  ! get 220 banner
+    	    	    	IF .status THEN status = .smtp_status;
+    	    	    	IF .status THEN
+    	    	    	BEGIN
+    	    	    	    IF .relay_a NEQA 0 THEN
+    	    	    	    	STR$COPY_R (relay, mxr [.idx,MXREC_L_LEN], mxr [.idx,MXREC_T_NAME]);
+    	    	    	    IF .rmtmta_a NEQA 0 THEN
+    	    	    	    	LIB$SYS_FAO (%ASCID'!AD (!AS)', 0, .rmtmta_a,
+    	    	    	    	    	    	.mxr [.idx,MXREC_L_LEN], mxr [.idx,MXREC_T_NAME], adsc);
+    	    	    	    RETURN .status;
+    	    	    	END;
+    	    	    END;
+    	    	    NETLIB_CLOSE (tcpctx);
+    	    	    CHECK_LOCK (adrlst [.a], 1, 1, .status);
+    	    	END;
+    	    	TRACE ('             -- failed, status=!XL', .STATUS);
+    	     	TRACE_PUTMSG ('             --         !AS', .status);
+    	    END;
+    	END;
+    	MXR [.IDX,MXREC_L_LEN] = 0;
+    END;
+
+    MX__NOCONTACT
+
+END; ! establish_connection
+
+END
+ELUDOM

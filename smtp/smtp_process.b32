@@ -1,0 +1,390 @@
+%TITLE 'SMTP_PROCESS'
+MODULE SMTP_PROCESS (IDENT='V1.1', ADDRESSING_MODE (EXTERNAL=LONG_RELATIVE,NONEXTERNAL=LONG_RELATIVE)) =
+BEGIN
+!++
+! FACILITY: 	    MX SMTP agents (all transports)
+!
+! ABSTRACT: 	    Main message processing.
+!
+! MODULE DESCRIPTION:
+!
+!   Processes an SMTP queue entry, sorting through the recipients,
+!   organizing them by destination, and calling SMTP_SEND to deliver
+!   the message to each destination.
+!
+! AUTHOR:   	    M. Madison
+!
+! Copyright (c) 2008, Matthew Madison.
+! 
+! All rights reserved.
+! 
+! Redistribution and use in source and binary forms, with or without
+! modification, are permitted provided that the following conditions
+! are met:
+! 
+!     * Redistributions of source code must retain the above
+!       copyright notice, this list of conditions and the following
+!       disclaimer.
+!     * Redistributions in binary form must reproduce the above
+!       copyright notice, this list of conditions and the following
+!       disclaimer in the documentation and/or other materials provided
+!       with the distribution.
+!     * Neither the name of the copyright owner nor the names of any
+!       other contributors may be used to endorse or promote products
+!       derived from this software without specific prior written
+!       permission.
+! 
+! THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
+! "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
+! LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
+! A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
+! OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
+! SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
+! LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
+! DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
+! THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
+! (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
+! OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+!
+! CREATION DATE:    05-JUL-1998
+!
+! MODIFICATION HISTORY:
+!
+!   05-JUL-1998	V1.0	Madison	    Initial coding (from PROCESS.B32).
+!   29-AUG-1998	V1.1	Madison	    Handling of holding queues.
+!   29-JUN-1999	V1.1-1	Madison	    Fix ALARM call.
+!--
+
+    LIBRARY 'SYS$LIBRARY:STARLET';
+    LIBRARY 'MX_SRC_COMMON:FLQ';
+    LIBRARY 'MX_SRC_COMMON:MX';
+    LIBRARY 'MX_SRC_COMMON:ACCOUNTING';
+    LIBRARY 'SMTP';
+
+    ACC_REF;
+
+    FORWARD ROUTINE
+    	SMTP_PROCESS_MESSAGE;
+
+    EXTERNAL ROUTINE
+    	SMTP_SEND,
+    	SMTP_ROUTE_ADDRESS,
+    	SMTP_FREE_DEST,
+    	CLEAR_FWDREF,
+    	G_HAT (DSN_REPORT_INIT, DSN_REPORT_ADD_RCPT, DSN_REPORT_SEND),
+    	G_HAT (MX_FILE_OPEN, MX_FILE_CLOSE, MX_FILE_WRITE),
+    	G_HAT (READ_ENVELOPE, WRITE_ENVELOPE, DISPOSE_ENVELOPE),
+    	G_HAT (READ_HDRS, CHECK_REFS_ZERO, MEM_FREERCPT, MEM_GETTXT),
+    	G_HAT (LIB$GET_VM, LIB$FREE_VM);
+
+    EXTERNAL LITERAL
+    	MX__NOHOST, MX__SHUTDOWN;
+
+    EXTERNAL
+    	SHUTDOWN_FLAG;
+
+    TRACE_DECLARATIONS (EXTERNAL);
+
+
+%SBTTL 'SMTP_PROCESS_MESSAGE'
+GLOBAL ROUTINE SMTP_PROCESS_MESSAGE (qctx, qent_a, myprotocode, myproto_a, defrtr_a,
+    	    	    	    	     accounting, maxtries, maxdns, retry_intvl_a) = 
+BEGIN
+!++
+! FUNCTIONAL DESCRIPTION:
+!
+!   Processes a single queue entry.
+!
+! RETURNS:  	cond_value, longword (unsigned), write only, by value
+!
+! PROTOTYPE:
+!
+!   PROCESS  qctx, qent
+!
+! IMPLICIT INPUTS:  None.
+!
+! IMPLICIT OUTPUTS: None.
+!
+! COMPLETION CODES:
+!
+!   SS$_NORMAL:	    	normal successful completion.
+!
+! SIDE EFFECTS:
+!
+!   None.
+!--
+    BIND
+    	qent	= .qent_a   	: QENTDEF;
+
+    LOCAL
+    	envl	    : ENVLDEF,
+    	refent	    : QENTDEF,
+    	hdrq	    : QUEDEF,
+    	destq	    : QUEDEF,
+    	retry	    : QUEDEF,
+    	dest	    : REF DESTDEF,
+    	txt 	    : REF TXTDEF,
+    	rcpt	    : REF RCPTDEF,
+    	actualhost  : BLOCK [DSC$K_S_BLN,BYTE],
+    	suffix	    : BLOCK [DSC$K_S_BLN,BYTE],
+    	sfxbuf	    : VECTOR [64,BYTE],
+    	dsnctx,
+    	msg_size,
+    	status;
+
+    INIT_QUEUE (destq, retry, hdrq);
+    INIT_DYNDESC (actualhost);
+    INIT_SDESC (suffix, %ALLOCATION (sfxbuf), sfxbuf);
+    $FAO (%ASCID'!AS_INFO', suffix [DSC$W_LENGTH], suffix, .myproto_a);
+
+    status = 0;
+    IF .qent [MXQ_L_BACKREF] NEQU 0 THEN
+	status = FLQ_READ (qctx, .qent [MXQ_L_BACKREF], refent);
+
+    IF NOT .status THEN
+    BEGIN
+	ALARM ('MX !AS: error reading BACKREF !UL for entry !UL: !XL',
+			.myproto_a, .qent [MXQ_L_BACKREF], .qent [QENT_L_ENTNUM], .status);
+	!
+	!  Cancel this entry and return
+	!
+	TRACE ('Cancelling entry---invalid BACKREF !UL', .qent [MXQ_L_BACKREF]);
+	qent [QENT_L_STATUS] = FLQ_K_STCAN;
+	FLQ_UPDATE (qctx, qent);
+	RETURN (SS$_NORMAL);
+    END;
+
+    !
+    !  Now read the SMTP_INFO file.
+    !
+    status = READ_ENVELOPE (.qctx, qent, suffix, envl);
+    IF NOT .status
+    THEN
+    BEGIN
+	ALARM ('MX !AS: error reading !AS file for entry !UL: !XL',
+			.myproto_a, suffix, .qent [QENT_L_ENTNUM], .status);
+	TRACE ('%PROCESS, error reading !AS file for entry !UL: !XL',
+			suffix, .qent [QENT_L_ENTNUM], .status);
+    END
+    ELSE
+    BEGIN
+	status = READ_HDRS (.qctx, refent, %ASCID'HDR_INFO', hdrq);
+	IF NOT(.status)
+	THEN
+	    BEGIN
+	    ALARM ('MX !AS: error reading HDR_INFO file for entry !UL: !XL',
+			.myproto_a, .refent [QENT_L_ENTNUM], .status);
+	    TRACE ('%PROCESS, error reading HDR_INFO file for entry !UL: !XL',
+			.refent [QENT_L_ENTNUM], .status);
+	    END;
+    END;
+
+    IF NOT .status THEN
+    BEGIN
+	!
+	!  Eliminate pointer to this SMTP entry and CANCEL the Router
+	!  entry if there are no other forward pointers.
+	!
+    	CLEAR_FWDREF (refent);
+	IF CHECK_REFS_ZERO (refent) THEN    !If there are no other forwards....
+	BEGIN
+	    ALARM ('MX !AS: HOLDing Router entry !UL', .myproto_a, .refent [QENT_L_ENTNUM]);
+	    refent [QENT_L_STATUS] = FLQ_K_STOPH;
+	    TRACE ('%PROCESS, HOLDing entry !UL', .refent [QENT_L_ENTNUM]);
+	END;
+
+	status = FLQ_UPDATE (qctx, refent);
+	TRACE ('%PROCESS, Cancelling entry !UL', .qent [QENT_L_ENTNUM]);
+	qent [QENT_L_STATUS] = FLQ_K_STCAN;	!Cancel this entry
+	status = FLQ_UPDATE (qctx, qent);
+    	WHILE NOT REMQUE (.hdrq [QUE_L_HEAD], txt) DO FREETXT (txt);
+    	DISPOSE_ENVELOPE (envl);
+	RETURN (SS$_NORMAL);
+    END;
+
+    IF .envl [ENVL_L_RCPTCOUNT] EQL 0 THEN
+    BEGIN
+    	TRACE ('No recipients for this entry.');
+    	CLEAR_FWDREF (refent);
+    	IF CHECK_REFS_ZERO (refent) THEN refent [QENT_L_STATUS] = FLQ_K_STFIN;
+    	FLQ_UPDATE (qctx, refent);
+    	qent [QENT_L_STATUS] = FLQ_K_STFIN;
+    	FLQ_UPDATE (qctx, qent);
+    	WHILE NOT REMQUE (.hdrq [QUE_L_HEAD], txt) DO FREETXT (txt);
+    	DISPOSE_ENVELOPE (envl);
+    	RETURN SS$_NORMAL;
+    END;
+
+    FLQ_UPDATE (qctx, refent);  ! unlock the backref entry
+    DSN_REPORT_INIT (dsnctx, envl);
+
+    WHILE NOT REMQUE_HEAD (envl [envl_Q_RCPTQUE], rcpt) DO
+    BEGIN
+    	BIND_RCPT_FIELDS (rcpt);
+
+    	status = SMTP_ROUTE_ADDRESS (rcpt, destq);
+    	IF NOT .status THEN
+    	BEGIN
+    	    DSN_REPORT_ADD_RCPT (dsnctx, .rcpt, 0);
+    	    MEM_FREERCPT (rcpt);
+    	END
+    	ELSE
+    	    TRACE ('  Recipient: !AD, route=!AD', .addr [TXT_W_LEN], addr [TXT_T_TEXT],
+    	       	   (IF .route EQLA 0 THEN 0 ELSE .route  [TXT_W_LEN]),
+    	       	   (IF .route EQLA 0 THEN route %(any valid ptr will do )% ELSE route [TXT_T_TEXT]));
+    END;    
+
+    msg_size = .qent [QENT_L_SIZE] / .envl [ENVL_L_RCPTCOUNT];
+
+    WHILE NOT REMQUE (.destq [QUE_L_HEAD], dest) DO
+    BEGIN
+    	BIND
+    	    ext	    = dest [DEST_X_ESMTP]   : ESMTPDEF;
+
+    	IF .shutdown_flag THEN
+    	BEGIN
+    	    INSQUE (.dest, .destq [QUE_L_TAIL]);
+    	    EXITLOOP;
+    	END;
+
+    	status = SMTP_SEND (dest, qent, envl, hdrq, .msg_size, actualhost, .defrtr_a);
+
+    	IF .status EQL MX__SHUTDOWN THEN
+    	BEGIN
+    	    INSQUE_TAIL (.dest, destq);
+    	    EXITLOOP;
+    	END;
+
+    	IF .status AND .accounting THEN
+    	BEGIN
+    	    BIND
+    	    	hostname = dest [DEST_A_HOSTNAME]   : REF TXTDEF,
+    	    	drque	 = dest [DEST_Q_RCPTQUE]    : QUEDEF;
+    	    rcpt = .drque [QUE_L_HEAD];
+    	    WHILE .rcpt NEQA drque DO
+    	    BEGIN
+    	    	BIND_ENVL_FIELDS (envl);
+    	    	BIND_RCPT_FIELDS (rcpt);
+    	    	IF .rcpt [RCPT_L_STATUS] THEN
+    	    	    ACC_LOG (%STRING ('!17%D XMIT: PROTO=!AS, SOURCE="!AD",',
+    		    	    ' HOST="!AD", SENT-TO="!AS", BYTES_SENT=!UL, RCPT=!AD'), 0,
+    	    	    	    .myproto_a,
+    	    	    	    .fromadr [TXT_W_LEN], fromadr [TXT_T_TEXT],
+		    	    .hostname [TXT_W_LEN], hostname [TXT_T_TEXT],
+    	    	    	    actualhost, .dest [DEST_L_BSENT],
+    	    	    	    .addr [TXT_W_LEN], addr [TXT_T_TEXT]);
+    	    	rcpt = .rcpt [RCPT_L_FLINK];
+    	    END;
+    	END;
+
+    	WHILE NOT REMQUE_HEAD (dest [DEST_Q_RCPTQUE], rcpt) DO
+    	BEGIN
+    	    BIND
+    	    	sts = rcpt [RCPT_L_DSN_STATUS] : BLOCK [,BYTE];
+
+    	    IF .sts [STS$V_SEVERITY] EQL STS$K_WARNING THEN
+    	    BEGIN
+    	    	IF .maxdns NEQ -1 AND
+    	    	    (.rcpt [RCPT_L_DSN_STATUS] EQL MX__DSN_WR_UNARTE OR
+    	    	     .rcpt [RCPT_L_DSN_STATUS] EQL MX__DSN_WR_DSFAIL) THEN
+    	    	BEGIN
+    	    	    IF .rcpt [RCPT_W_CNT2] GEQ .maxdns THEN
+    	    	    	rcpt [RCPT_L_DSN_STATUS] = MX__DSN_FR_UNARTE
+    	    	    ELSE
+    	    	    	rcpt [RCPT_W_CNT2] = .rcpt [RCPT_W_CNT2] + 1;
+    	    	END
+    	    	ELSE
+    	    	BEGIN
+    	    	    IF .rcpt [RCPT_W_CNT1] GEQ .maxtries THEN
+    	    	    	sts [STS$V_SEVERITY] = STS$K_SEVERE
+    	    	    ELSE
+    	    	    	rcpt [RCPT_W_CNT1] = .rcpt [RCPT_W_CNT1] + 1;
+    	    	END;
+    	    END;
+
+    	    DSN_REPORT_ADD_RCPT (dsnctx, rcpt, .ext [ESMTP_V_DSN]);
+
+    	    IF .sts [STS$V_SEVERITY] EQL STS$K_WARNING THEN
+    	    	INSQUE_TAIL (.rcpt, retry)
+    	    ELSE
+    	    	MEM_FREERCPT (rcpt);
+    	END;
+
+    	SMTP_FREE_DEST (dest);
+
+    END;  ! WHILE still DESTs to be processed
+
+    IF .shutdown_flag THEN
+    BEGIN
+    	WHILE NOT REMQUE (.destq [QUE_L_HEAD], dest) DO
+    	BEGIN
+    	    WHILE NOT REMQUE_HEAD (dest [DEST_Q_RCPTQUE], rcpt) DO
+    	    	INSQUE_TAIL (.rcpt, retry);
+    	    SMTP_FREE_DEST (dest);
+    	END;
+    END;
+
+
+    IF QUEUE_EMPTY (retry) THEN
+    BEGIN
+    	TRACE ('  Entry now completely processed, no retries needed.');
+    	DSN_REPORT_SEND (dsnctx, .qctx, .myprotocode, hdrq, refent, envl);
+    	status = FLQ_READ (qctx, .qent [MXQ_L_BACKREF], refent);
+    	CLEAR_FWDREF (refent);
+    	IF CHECK_REFS_ZERO (refent) THEN refent [QENT_L_STATUS] = FLQ_K_STFIN;
+    	FLQ_UPDATE (qctx, refent);
+    	qent [QENT_L_STATUS] = FLQ_K_STFIN;
+    	FLQ_UPDATE (qctx, qent);
+    END
+    ELSE
+    BEGIN
+    	LOCAL
+    	    nowtim  : VECTOR [2,LONG],
+    	    intbuf  : VECTOR [2,LONG];
+
+    	EXTERNAL ROUTINE G_HAT (LIB$SUBX);
+
+    	envl [ENVL_L_RCPTCOUNT] = 0;
+    	WHILE NOT REMQUE (.retry [QUE_L_HEAD], rcpt) DO
+    	BEGIN
+    	    INSQUE_TAIL (.rcpt, envl [ENVL_Q_RCPTQUE]);
+    	    envl [ENVL_L_RCPTCOUNT] = .envl [ENVL_L_RCPTCOUNT] + 1;
+    	END;
+
+    	DSN_REPORT_SEND (dsnctx, .qctx, .myprotocode, hdrq, refent, envl);
+
+    	status = WRITE_ENVELOPE (.qctx, qent, suffix, envl);
+	IF NOT(.status)
+	THEN
+	    ALARM ('MX !AS: error writing !AS file for entry !UL: !XL',
+			.myproto_a, suffix, .qent [QENT_L_ENTNUM], .status);
+
+    	qent [QENT_L_STATUS] = FLQ_K_STRDY;
+    	qent [QENT_L_SIZE] = .MSG_SIZE * .envl [ENVL_L_RCPTCOUNT];
+
+    	IF NOT .shutdown_flag THEN
+    	BEGIN
+    	    qent [QENT_V_DELAY] = 1;
+    	    qent [QENT_V_LOCK] = 0;
+
+    	    $GETTIM (TIMADR=nowtim);
+    	    LIB$SUBX (nowtim, .retry_intvl_a, qent [QENT_Q_DLYDT]);
+
+    	    TRACE ('  !UL rcpts need retry, next try !%D', .envl [ENVL_L_RCPTCOUNT], QENT [QENT_Q_DLYDT]);
+    	END;
+
+    	FLQ_UPDATE (qctx, qent);
+
+    END;
+
+    WHILE NOT REMQUE (.hdrq [QUE_L_HEAD], txt) DO FREETXT (txt);
+    DISPOSE_ENVELOPE (envl);
+
+    FREE_STRINGS (actualhost);
+
+    SS$_NORMAL
+
+END; ! process_message
+
+END
+ELUDOM

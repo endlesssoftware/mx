@@ -1,0 +1,214 @@
+%TITLE 'DOMAIN_EXPANSION'
+MODULE DOMAIN_EXPANSION (IDENT='V2.0-1', ADDRESSING_MODE (EXTERNAL=GENERAL)) =
+BEGIN
+!++
+! FACILITY: 	    MX Examples
+!
+! ABSTRACT: 	    Example of a domain name expander for use with MX.
+!   	    	    Uses NETLIB routines.
+!
+! MODULE DESCRIPTION:
+!
+!   This module contains the routines necessary for implementing
+!   a domain name expander for use by the MX Router agent.  These
+!   routines can be used to eliminate SMTP mail loops when mail
+!   is addressed using an abbreviated host name, without having
+!   to DEFINE PATH LOCAL for each abbreviation.
+!
+! AUTHOR:   	    M. Madison
+!
+! Copyright (c) 2008, Matthew Madison.
+! Copyright (c) 2011, Endless Software Solutions.
+! 
+! All rights reserved.
+! 
+! Redistribution and use in source and binary forms, with or without
+! modification, are permitted provided that the following conditions
+! are met:
+! 
+!     * Redistributions of source code must retain the above
+!       copyright notice, this list of conditions and the following
+!       disclaimer.
+!     * Redistributions in binary form must reproduce the above
+!       copyright notice, this list of conditions and the following
+!       disclaimer in the documentation and/or other materials provided
+!       with the distribution.
+!     * Neither the name of the copyright owner nor the names of any
+!       other contributors may be used to endorse or promote products
+!       derived from this software without specific prior written
+!       permission.
+! 
+! THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
+! "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
+! LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
+! A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
+! OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
+! SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
+! LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
+! DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
+! THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
+! (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
+! OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+!
+! CREATION DATE:    30-JAN-1991
+!
+! MODIFICATION HISTORY:
+!
+!   30-JAN-1991	V1.0	Madison	    Initial coding.
+!   22-FEB-1991	V1.1	Madison	    Guess at whether we have a good expansion.
+!   28-MAR-1991	V1.2	Madison	    Bypass .UUCP, .BITNET addresses.
+!   17-MAR-1994	V1.3	Madison	    Bypass anything containing a dot.
+!   05-JAN-1997	V2.0	Madison	    Update to NETLIB V2.1.
+!   06-MAY-2010 V2.0-1  Sneddon     Now dragging NETLIB from NETLIB_DIR.
+!--
+    LIBRARY 'SYS$LIBRARY:STARLET';
+    LIBRARY 'NETLIB_DIR:NETLIBDEF';
+
+    EXTERNAL ROUTINE
+    	NETLIB_SOCKET, NETLIB_DNS_QUERY, NETLIB_DNS_EXPANDNAME, NETLIB_NTOH_WORD, NETLIB_CLOSE;
+
+
+%SBTTL 'INIT'
+GLOBAL ROUTINE INIT (CTX_A_A) = 
+BEGIN
+!++
+! FUNCTIONAL DESCRIPTION:
+!
+!   Called by the Router to initialize the module.  Could be used to
+!   allocate any storage that will be needed by the EXPAND routine
+!   (these routines must be reentrant, so OWN storage is right out).
+!
+! RETURNS:  	cond_value, longword (unsigned), write only, by value
+!
+! PROTOTYPE:
+!
+!   INIT  ctxptr
+!
+! ctxptr:   pointer, longword (unsigned), modify, by reference
+!
+! IMPLICIT INPUTS:  None.
+!
+! IMPLICIT OUTPUTS: None.
+!
+! COMPLETION CODES:
+!
+!   SS$_NORMAL:	    	normal successful completion.
+!
+! SIDE EFFECTS:
+!
+!   None.
+!--
+    BIND
+    	CTX 	= .CTX_A_A;
+
+    NETLIB_SOCKET (CTX, %REF (NETLIB_K_TYPE_DGRAM))
+
+END; ! INIT
+
+%SBTTL 'EXPAND'
+GLOBAL ROUTINE EXPAND (CTX_A_A, INSTR_A, OUTSTR_A) = 
+BEGIN
+!++
+! FUNCTIONAL DESCRIPTION:
+!
+!   This routine is called to perform a domain name expansion.
+!
+!   INSTR can be assumed to be a DTYPE_T, CLASS_S string descriptor
+!   (or compatible).  You must use STR$ routines to copy the result
+!   to OUTSTR!
+!
+! RETURNS:  	cond_value, longword (unsigned), write only, by value
+!
+! PROTOTYPE:
+!
+!   EXPAND  ctxptr, instr, outstr
+!
+! ctxptr:   pointer, longword (unsigned), modify, by reference
+! instr:    char_string, character string, read only, by descriptor
+! outstr:   char_string, character string, write only, by descriptor
+!
+! IMPLICIT INPUTS:  None.
+!
+! IMPLICIT OUTPUTS: None.
+!
+! COMPLETION CODES:
+!
+!   SS$_NORMAL:	    	normal successful completion.
+!
+! SIDE EFFECTS:
+!
+!   None.
+!--
+    BIND
+    	CTX 	= .CTX_A_A,
+    	INSTR	= .INSTR_A  	    : BLOCK [DSC$K_S_BLN,BYTE],
+    	OUTSTR	= .OUTSTR_A 	    : BLOCK [DSC$K_S_BLN,BYTE];
+
+    LOCAL
+    	IOSB	    : IOSBDEF,
+    	QBUF	    : VECTOR [512,BYTE],
+    	HDR 	    : REF NETLIB_DNS_HEADER,
+    	QDCOUNT,
+    	STATUS;
+
+    IF NOT CH$FAIL (CH$FIND_CH(.INSTR [DSC$W_LENGTH], .INSTR [DSC$A_POINTER], %C'.'))
+    THEN RETURN 0;
+
+    STATUS = NETLIB_DNS_QUERY (CTX, INSTR,
+    	    	    	    	%REF (NETLIB_K_DNS_CLASS_IN),
+    	    	    	    	%REF (NETLIB_K_DNS_QTYPE_ALL),
+    	    	    	    	QBUF, %REF (%ALLOCATION (QBUF)), 0, IOSB);
+    IF .STATUS THEN STATUS = .IOSB [IOSB_W_STATUS];
+    IF NOT .STATUS THEN RETURN .STATUS;
+    IF .IOSB [IOSB_W_COUNT] LSSU DNS_S_HEADER THEN RETURN SS$_PROTOCOL;
+
+    HDR = QBUF;
+    IF .HDR [DNS_V_REPLY_CODE] EQLU NETLIB_K_DNS_RC_NAMERR THEN
+    	RETURN SS$_ENDOFFILE;
+    IF .HDR [DNS_V_REPLY_CODE] NEQU NETLIB_K_DNS_RC_SUCCESS THEN
+    	RETURN SS$_PROTOCOL;
+    QDCOUNT = NETLIB_NTOH_WORD (HDR [DNS_W_QDCOUNT]);
+    IF .QDCOUNT EQL 0 THEN RETURN SS$_PROTOCOL;
+
+    NETLIB_DNS_EXPANDNAME (QBUF, IOSB [IOSB_W_COUNT], CH$PLUS (QBUF, DNS_S_HEADER), .OUTSTR_A)
+
+END; ! EXPAND
+
+%SBTTL 'CLEANUP'
+GLOBAL ROUTINE CLEANUP (CTX_A_A) = 
+BEGIN
+!++
+! FUNCTIONAL DESCRIPTION:
+!
+!   Called by the Router to clean up any context info set up by
+!   INIT.
+!
+! RETURNS:  	cond_value, longword (unsigned), write only, by value
+!
+! PROTOTYPE:
+!
+!   CLEANUP  ctxptr
+!
+! ctxptr:   pointer, longword (unsigned), modify, by reference
+!
+! IMPLICIT INPUTS:  None.
+!
+! IMPLICIT OUTPUTS: None.
+!
+! COMPLETION CODES:
+!
+!   SS$_NORMAL:	    	normal successful completion.
+!
+! SIDE EFFECTS:
+!
+!   None.
+!--
+    BIND
+    	CTX 	= .CTX_A_A;
+
+    NETLIB_CLOSE (CTX)
+
+END; ! CLEANUP
+
+END
+ELUDOM

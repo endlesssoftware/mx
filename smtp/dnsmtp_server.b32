@@ -1,0 +1,1313 @@
+%TITLE 'DNSMTP_SERVER'
+MODULE DNSMTP_SERVER (IDENT='V2.0-2', MAIN=DNSMTP_SERVER) =
+BEGIN
+!++
+! FACILITY: 	    MX SMTP-over-DECnet
+!
+! ABSTRACT: 	    MX SMTP server for DECnet.
+!
+! MODULE DESCRIPTION:
+!
+!   This module contains the SMTP server.  It will interface with
+!   DECnet.
+!
+! AUTHOR:   	    M. Madison
+!
+! Copyright (c) 2008, Matthew Madison.
+! 
+! All rights reserved.
+! 
+! Redistribution and use in source and binary forms, with or without
+! modification, are permitted provided that the following conditions
+! are met:
+! 
+!     * Redistributions of source code must retain the above
+!       copyright notice, this list of conditions and the following
+!       disclaimer.
+!     * Redistributions in binary form must reproduce the above
+!       copyright notice, this list of conditions and the following
+!       disclaimer in the documentation and/or other materials provided
+!       with the distribution.
+!     * Neither the name of the copyright owner nor the names of any
+!       other contributors may be used to endorse or promote products
+!       derived from this software without specific prior written
+!       permission.
+! 
+! THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
+! "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
+! LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
+! A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
+! OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
+! SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
+! LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
+! DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
+! THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
+! (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
+! OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+!
+! CREATION DATE:    29-OCT-1991
+!
+! MODIFICATION HISTORY:
+!
+!   29-OCT-1991	V1.0	Madison	    Initial coding (from TCP-based code).
+!   15-NOV-1991	V1.0-1	Madison	    MEM RCPT rtns.
+!   18-NOV-1991	V1.0-2	Madison	    Log wasn't going to right place.
+!   25-NOV-1991	V1.0-3	Madison	    Error msg had wrong status value.
+!   14-FEB-1929	V1.1	Madison	    Add Received: line count.
+!    4-MAY-1993 V1.2	Goatley     Don't trim trailing whitespace from msgs.
+!   10-FEB-1994 V1.3	Goatley     Modify for FLQ V2.
+!   05-JAN-1997	V1.4	Madison	    Eliminate MDMLIB.
+!   29-AUG-1997	V1.5	Madison	    RCPT change.
+!   10-JUL-1998	V2.0	Madison	    DSN, SIZE support.
+!   18-JUL-1998	V2.0-1	Madison	    Add missing definition for crlf.
+!   18-SEP-2004 V2.0-2  Madison     Fix double-free of remote host and
+!                                       setting of ORIGIN field in envelope.
+!--
+    LIBRARY 'SYS$LIBRARY:STARLET';
+    LIBRARY 'MX_SRC_COMMON:MX';
+    LIBRARY 'MX_SRC_COMMON:FLQ';
+    LIBRARY 'SMTP_CMDS';
+    LIBRARY 'MX_SRC_COMMON:FIELDS';
+    LIBRARY 'MX_SRC_COMMON:AGENT';
+    LIBRARY 'MX_SRC_COMMON:IPC';
+
+    FORWARD ROUTINE
+    	DNSMTP_SERVER,
+    	ACCEPT_CONNECTION : NOVALUE,
+    	SMTP_START,
+    	START_AST,
+    	READ_CMD,
+    	READ_AST,
+    	PROCESS_CMD,
+%IF %VARIANT %THEN
+    	PRINT_TO_LOG,
+%FI
+    	CLEANUP,
+    	SND_AST,
+    	free_paraminfo : NOVALUE;
+
+    EXTERNAL ROUTINE
+    	PARSE_SMTP_CMD,
+    	DECNET_INIT_CTX,
+    	DECNET_FREE_CTX,
+    	DECNET_GET_LINE,
+    	G_HAT (WRITE_ENVELOPE, DISPOSE_ENVELOPE, WRITE_HDRS, PARSE_HDRS,
+    	    FORMAT821, PARSE821,
+    	    MX_VERSION, MEM_GETRCPT, MEM_FREERCPT, RCVLINE_COUNT, MEM_GETTXT),
+    	G_HAT (MX_MKDATE, MX_FILE_OPEN, MX_FILE_WRITE, MX_FILE_CLOSE),
+    	G_HAT (LIB$GET_VM, LIB$FREE_VM, STR$APPEND, STR$COPY_R, STR$COPY_DX,
+    	    STR$FREE1_DX, LIB$SYS_FAO, STR$CONCAT, STR$TRIM, STR$RIGHT,
+    	    STR$CASE_BLIND_COMPARE, STR$FIND_FIRST_NOT_IN_SET,
+    	    STR$COMPARE_EQL, LIB$CVT_DTB, LIB$GETSYI, STR$LEFT,
+    	    LIB$CREATE_VM_ZONE, LIB$SHOW_VM_ZONE, STR$POSITION);
+
+    _DEF (WRK)
+    	WRK_L_FLINK 	= _LONG,
+    	WRK_L_BLINK 	= _LONG,
+    	WRK_L_ROUTINE	= _LONG,
+    	WRK_L_CTX   	= _LONG
+    _ENDDEF (WRK);
+
+    _DEF (CTX)
+    	CTX_L_FLINK 	= _LONG,
+    	CTX_L_BLINK 	= _LONG,
+    	CTX_L_NETCTX	= _LONG,
+    	CTX_W_NETCHN	= _WORD,
+    	CTX_W_FILL0 	= _WORD,
+    	CTX_L_DUNIT 	= _LONG,
+    	CTX_Q_HDRQ  	= _QUAD,
+    	CTX_Q_INSTR 	= _QUAD,
+    	CTX_Q_CURHDR	= _QUAD,
+    	CTX_Q_DNHOST	= _QUAD,
+    	CTX_Q_IOSB  	= _QUAD,
+    	_OVERLAY (CTX_Q_IOSB)
+    	    CTX_W_STAT	= _WORD,
+    	    CTX_W_CNT	= _WORD,
+    	    CTX_L_XSTAT	= _LONG,
+    	_ENDOVERLAY
+    	CTX_L_QCTX   	= _LONG,
+    	CTX_L_QENT  	= _LONG,
+    	CTX_L_FLAGS 	= _LONG,
+    	_OVERLAY (CTX_L_FLAGS)
+    	    CTX_V_DEBUG	= _BIT,
+    	    CTX_V_FAKER = _BIT,
+    	    CTX_V_ESMTP	= _BIT,
+    	_ENDOVERLAY
+    	CTX_L_UNIT  	= _LONG,
+    	CTX_L_STATE 	= _LONG,
+    	CTX_L_RCPTCT	= _LONG,
+    	CTX_L_RCVBYME	= _LONG,
+    	CTX_L_CXID  	= _LONG,
+    	CTX_L_MSGLIM	= _LONG,
+    	CTX_A_REMHOST	= _LONG,
+    	_ALIGN (QUAD)
+    	CTX_X_ENVELOPE	= _BYTES (ENVL_S_ENVLDEF)
+    _ENDDEF (CTX);
+
+    MACRO
+    	crlf = %QUOTE %CHAR (13), %QUOTE %CHAR (10)%,
+    	SEND (ASTRTN, CTRSTR) [] =
+    	BEGIN
+    	    LOCAL _STAT;
+    	    %IF %NULL (%REMAINING) %THEN
+    	    	BIND _STR = %ASCID %STRING (CTRSTR, %CHAR (13),%CHAR(10)) : BLOCK [DSC$K_S_BLN,BYTE],
+    	    	     _I = CTX [CTX_Q_IOSB] : VECTOR [4,WORD];
+    	    	_STAT = $QIO (CHAN=.CTX [CTX_W_NETCHN],
+    	    	    FUNC=IO$_WRITEVBLK, IOSB=CTX [CTX_Q_IOSB],
+    	    	    ASTADR=ASTRTN, ASTPRM=.CTX,
+    	    	    P1=._STR [DSC$A_POINTER], P2=._STR [DSC$W_LENGTH]);
+    	    	DPRINT ('Send "!AS"', %ASCID CTRSTR);
+    	    %ELSE
+    	    	LOCAL _S : BLOCK [DSC$K_S_BLN,BYTE];
+    	    	$INIT_DYNDESC (_S);
+    	    	LIB$SYS_FAO (%ASCID %STRING (CTRSTR, %CHAR (13), %CHAR (10)),
+    	    	    	0, _S, %REMAINING);
+    	    	_STAT = $QIO (CHAN=.CTX [CTX_W_NETCHN],
+    	    	    FUNC=IO$_WRITEVBLK, IOSB=CTX [CTX_Q_IOSB],
+    	    	    ASTADR=ASTRTN, ASTPRM=.CTX,
+    	    	    P1=._S [DSC$A_POINTER], P2=._S [DSC$W_LENGTH]);
+    	    	DPRINT ('Send "!AS"', _S);
+    	    	STR$FREE1_DX (_S);
+    	    %FI
+    	    ._STAT
+    	END%,
+    	DPRINT (CTRSTR) [] =
+    	BEGIN
+    	    IF .CTX [CTX_V_DEBUG] THEN
+    	    BEGIN
+    	    	%IF NOT %NULL (%REMAINING) %THEN
+    	    	EXTERNAL ROUTINE
+    	    	    LIB$SYS_FAO 	: ADDRESSING_MODE (GENERAL),
+    	    	    STR$FREE1_DX	: ADDRESSING_MODE (GENERAL);
+    	    	LOCAL
+    	    	    _DBGFAO    : BLOCK [DSC$K_S_BLN,BYTE];
+    	    	$INIT_DYNDESC (_DBGFAO);
+    	    	LIB$SYS_FAO (%ASCID
+    	    	    %STRING ('STM[!UL]: ', CTRSTR), 0, _DBGFAO,
+    	    	    	.CTX [CTX_L_CXID], %REMAINING);
+    	    	MX_FILE_WRITE (.DUNIT, _DBGFAO);
+    	    	STR$FREE1_DX (_DBGFAO);
+    	    	%ELSE
+    	    	    ; MX_FILE_WRITE (.DUNIT, %ASCID CTRSTR);
+    	    	%FI
+    	    END;
+    	END%;
+
+    LITERAL
+    	LOW_STATE   = 1,
+    	STATE_HELLO = 1,
+    	STATE_MAIL  = 2,
+    	STATE_RCPT  = 3,
+    	STATE_HDRS  = 4,
+    	STATE_MSG   = 5,
+    	STATE_CLUP  = 6,
+    	HIGH_STATE  = 6;
+
+    OWN
+    	WRKQUE	    	: QUEDEF,
+    	CTXQUE	    	: QUEDEF,
+    	ACCEPT_PENDING	: INITIAL (0),
+    	ACCEPT_FAILURES	: INITIAL (0),
+    	HOSTNAME    	: BLOCK [DSC$K_S_BLN,BYTE],
+    	MAILNAME    	: BLOCK [DSC$K_S_BLN,BYTE],
+    	LOCKSB	    	: LSBDEF,
+    	HDSKNAM	    	: BLOCK [DSC$K_S_BLN,BYTE],
+    	HDSKLSB	    	: LSBDEF,
+    	MYCSID,
+    	MAXRCVBYME,
+    	WRKZONE, QENTZONE;
+
+    IDENT_DECLARATIONS (OWN);
+
+%SBTTL 'DNSMTP_SERVER'
+GLOBAL ROUTINE DNSMTP_SERVER = 
+BEGIN
+!++
+! FUNCTIONAL DESCRIPTION:
+!
+!   This is the main DNSMTP_SERVER routine.  It obtains global information,
+!   initializes the thread context blocks, sets up the listener on
+!   the SMTP port, and handles the first-come, first-served scheduling
+!   of threads.
+!
+!   The only I/O that blocks a thread is a network I/O.
+!
+! RETURNS:  	cond_value, longword (unsigned), write only, by value
+!
+! PROTOTYPE:
+!
+!   DNSMTP_SERVER
+!
+! IMPLICIT INPUTS:  None.
+!
+! IMPLICIT OUTPUTS: None.
+!
+! COMPLETION CODES:
+!
+!   SS$_NORMAL:	    	normal successful completion.
+!
+! SIDE EFFECTS:
+!
+!   None.
+!--
+    LOCAL
+    	CTX 	: REF CTXDEF,
+    	WRK 	: REF WRKDEF,
+    	STR 	: BLOCK [DSC$K_S_BLN,BYTE],
+    	FLQNODE	: BLOCK [DSC$K_S_BLN,BYTE],
+    	LNMLST	: $ITMLST_DECL (ITEMS=1),
+    	LNMBUF	: VECTOR [1024,BYTE],
+    	LNMLEN	: WORD,
+    	MAXTHREADS,
+    	STATUS;
+
+    SET_IDENT_STRING;
+
+    INIT_DYNDESC (HOSTNAME, MAILNAME, STR, FLQNODE, HDSKNAM);
+    STATUS = LIB$CREATE_VM_ZONE (WRKZONE, %REF (LIB$K_VM_FIXED),
+    	    	%REF (WRK_S_WRKDEF), %REF (LIB$M_VM_EXTEND_AREA),
+    	    	%REF (4), %REF (4), %REF (8), %REF (8), 0,
+    	    	0, %ASCID'WRKQUE_CELL_ZONE');
+    IF NOT .STATUS THEN SIGNAL_STOP (.STATUS);
+    STATUS = LIB$CREATE_VM_ZONE (QENTZONE, %REF (LIB$K_VM_FIXED),
+    	    	%REF (QENT_S_QENTDEF), %REF (LIB$M_VM_EXTEND_AREA),
+    	    	%REF (16), %REF (4), %REF (8), %REF (8), 0,
+    	    	0, %ASCID'QUEUE_ENTRY_ZONE');
+    IF NOT .STATUS THEN SIGNAL_STOP (.STATUS);
+
+    INIT_QUEUE (WRKQUE, CTXQUE);
+
+    $ITMLST_INIT (ITMLST=LNMLST,
+    	(ITMCOD=LNM$_STRING, BUFSIZ=%ALLOCATION (LNMBUF),
+    	    BUFADR=LNMBUF, RETLEN=LNMLEN));
+    IF $TRNLNM(LOGNAM=%ASCID'MX_MAX_SELF_RECEIVE_COUNT', TABNAM=%ASCID'LNM$FILE_DEV',
+    	    	ITMLST=LNMLST) THEN
+    BEGIN
+    	IF NOT LIB$CVT_DTB (.LNMLEN, LNMBUF, MAXRCVBYME) THEN MAXRCVBYME = 8;
+    END
+    ELSE MAXRCVBYME = 8;
+
+    IF NOT $TRNLNM (LOGNAM=%ASCID'MX_DECNET_HOST', TABNAM=%ASCID'LNM$FILE_DEV',
+    	    	ITMLST=LNMLST) THEN
+    	IF $TRNLNM (LOGNAM=%ASCID'SYS$NODE', TABNAM=%ASCID'LNM$FILE_DEV', ITMLST=LNMLST)
+    	THEN LNMLEN = .LNMLEN - 2
+    	ELSE LNMLEN = 0;
+    STR$COPY_R (HOSTNAME, LNMLEN, LNMBUF);
+
+    IF NOT $TRNLNM (LOGNAM=%ASCID'MX_NODE_NAME', TABNAM=%ASCID'LNM$FILE_DEV',
+    	    	ITMLST=LNMLST) THEN LNMLEN = 0;
+    STR$COPY_R (MAILNAME, LNMLEN, LNMBUF);
+
+    MAXTHREADS = 1;
+
+    INCR I FROM 1 TO .MAXTHREADS DO
+    BEGIN
+    	STATUS = LIB$GET_VM (%REF (CTX_S_CTXDEF), CTX);
+    	IF NOT .STATUS THEN SIGNAL_STOP (.STATUS);
+    	CH$FILL (%CHAR (0), CTX_S_CTXDEF, .CTX);
+    	CTX [CTX_L_CXID] = .I;
+    	INSQUE (.CTX, .CTXQUE [QUE_L_TAIL]);
+    END;
+
+    ACCEPT_CONNECTION ();
+    WHILE 1 DO
+    BEGIN
+    	WHILE NOT REMQUE (.WRKQUE [QUE_L_HEAD], WRK) DO
+    	BEGIN
+    	    STATUS = (.WRK [WRK_L_ROUTINE]) (.WRK [WRK_L_CTX]);
+    	    IF NOT .STATUS THEN CLEANUP (WRK [WRK_L_CTX]);
+    	    LIB$FREE_VM (%REF (WRK_S_WRKDEF), WRK, WRKZONE);
+    	END;
+    	$HIBER;
+    END;
+
+    SS$_NORMAL
+
+END; ! DNSMTP_SERVER
+
+%SBTTL 'ACCEPT_CONNECTION'
+ROUTINE ACCEPT_CONNECTION : NOVALUE = 
+BEGIN
+!++
+! FUNCTIONAL DESCRIPTION:
+!
+!   Starts a connection acceptance.
+!
+! RETURNS:  	cond_value, longword (unsigned), write only, by value
+!
+! PROTOTYPE:
+!
+!   ACCEPT_CONNECTION
+!
+! IMPLICIT INPUTS:  None.
+!
+! IMPLICIT OUTPUTS: None.
+!
+! COMPLETION CODES:
+!
+!   SS$_NORMAL:	    	normal successful completion.
+!
+! SIDE EFFECTS:
+!
+!   None.
+!--
+    LOCAL
+    	CTX 	: REF CTXDEF,
+    	WRK 	: REF WRKDEF,
+    	STATUS;
+
+    IF NOT REMQUE (.CTXQUE [QUE_L_HEAD], CTX) THEN
+    BEGIN
+    	ACCEPT_PENDING = 1;
+    	STATUS = $ASSIGN (DEVNAM=%ASCID'SYS$NET', CHAN=CTX [CTX_W_NETCHN]);
+    	IF NOT .STATUS THEN
+    	    SIGNAL_STOP (.STATUS);  ! probably TCP shutdown
+    	CTX [CTX_L_NETCTX] = DECNET_INIT_CTX (.CTX [CTX_W_NETCHN]);
+    	IF .CTX [CTX_L_NETCTX] EQLA 0 THEN
+    	BEGIN
+    	    $DASSGN (CHAN=.CTX [CTX_W_NETCHN]);
+    	    SIGNAL_STOP (.STATUS);
+    	END;
+    	LIB$GET_VM (%REF (WRK_S_WRKDEF), WRK, WRKZONE);
+    	WRK [WRK_L_ROUTINE] = SMTP_START;
+    	WRK [WRK_L_CTX] = .CTX;
+    	INSQUE (.WRK, .WRKQUE [QUE_L_TAIL]);
+    END
+    ELSE ACCEPT_PENDING = 0;
+
+END; ! ACCEPT_CONNECTION
+
+%SBTTL 'SMTP_START'
+ROUTINE SMTP_START (CTX : REF CTXDEF) = 
+BEGIN
+!++
+! FUNCTIONAL DESCRIPTION:
+!
+!   Starts an SMTP transaction.
+!
+! RETURNS:  	cond_value, longword (unsigned), write only, by value
+!
+! PROTOTYPE:
+!
+!   SMTP_START  ctx
+!
+! IMPLICIT INPUTS:  None.
+!
+! IMPLICIT OUTPUTS: None.
+!
+! COMPLETION CODES:
+!
+!   SS$_NORMAL:	    	normal successful completion.
+!
+! SIDE EFFECTS:
+!
+!   None.
+!--
+    BIND
+    	HDRQUE	= CTX [CTX_Q_HDRQ]  	: QUEDEF,
+    	envl	= CTX [CTX_X_ENVELOPE]	: ENVLDEF,
+    	QENT	= CTX [CTX_L_QENT]  	: REF QENTDEF,
+    	QCTX 	= CTX [CTX_L_QCTX],
+    	DUNIT	= CTX [CTX_L_DUNIT];
+
+    LOCAL
+    	STR 	: BLOCK [DSC$K_S_BLN,BYTE],
+    	lnmlst	: $ITMLST_DECL (ITEMS=1),
+    	buf 	: VECTOR [64,BYTE],
+    	buflen	: WORD,
+    	STATUS;
+
+    INIT_DYNDESC (STR, CTX [CTX_Q_INSTR], CTX [CTX_Q_CURHDR], CTX [CTX_Q_DNHOST]);
+    HDRQUE [QUE_L_TAIL] = HDRQUE [QUE_L_HEAD] = HDRQUE;
+    CH$FILL (%CHAR (0), ENVL_S_ENVLDEF, envl);
+    envl [ENVL_V_ORIGIN] = 1;
+    envl [ENVL_L_ORIGIN] = MX_K_ORG_DNSMTP;
+    INIT_QUEUE (envl [ENVL_Q_RCPTQUE]);
+
+    CTX [CTX_V_DEBUG] = $TRNLNM (LOGNAM=%ASCID'MX_DNSMTP_SERVER_DEBUG', TABNAM=%ASCID'LNM$FILE_DEV');
+    IF .CTX [CTX_V_DEBUG] THEN
+    	MX_FILE_OPEN (MX__FILE_WRITE OR MX_M_SHARE, %ASCID'DNSMTP_SERVER_LOG', DUNIT,
+    	    %ASCID'MX_DNSMTP_DIR:.LOG')
+    ELSE
+    	DUNIT = 0;
+
+    CTX [CTX_L_QENT] = CTX [CTX_L_UNIT] = CTX [CTX_L_RCPTCT] = 0;
+    CTX [CTX_L_STATE] = STATE_HELLO;
+
+    ctx [CTX_L_MSGLIM] = 0;
+
+    $ITMLST_INIT (ITMLST=lnmlst,
+    	    	    (ITMCOD=LNM$_STRING, BUFSIZ=%ALLOCATION (buf), BUFADR=buf, RETLEN=buflen));
+    status = $TRNLNM (LOGNAM=%ASCID'MX_FLQ_MAX_ENTRY_SIZE', TABNAM=%ASCID'LNM$FILE_DEV',
+    	    	      ACMODE=%REF (PSL$C_EXEC), ITMLST=lnmlst);
+    IF .status THEN
+    	status = LIB$CVT_DTB (.buflen, buf, ctx [CTX_L_MSGLIM]);
+    IF .status AND .ctx [CTX_L_MSGLIM] NEQU 0 THEN
+    	ctx [CTX_L_MSGLIM] = 1024 * .ctx [CTX_L_MSGLIM]
+    ELSE
+    	ctx [CTX_L_MSGLIM] = %X'7FFFFFFF';  ! max positive 32-bit integer
+
+    STATUS = FLQ_OPEN (FLQ__FULL, QCTX);
+    IF NOT .STATUS THEN
+    BEGIN
+    	DPRINT ('Could not open system queue, status=!XL', .STATUS);
+    	RETURN .STATUS;
+    END;
+
+    MX_MKDATE (0, STR, 0);
+    STATUS = SEND (START_AST,
+    	'220 !AS (!AS) ESMTP server ready at !AS', HOSTNAME, mx_ident_string, STR);
+    STR$FREE1_DX (STR);
+
+    .STATUS
+
+END; ! SMTP_START
+
+%SBTTL 'START_AST'
+ROUTINE START_AST (CTX_A) = 
+BEGIN
+!++
+! FUNCTIONAL DESCRIPTION:
+!
+!   AST routine executed when START completes.
+!
+! RETURNS:  	cond_value, longword (unsigned), write only, by value
+!
+! PROTOTYPE:
+!
+!   START_AST ctx (AST level)
+!
+! IMPLICIT INPUTS:  None.
+!
+! IMPLICIT OUTPUTS: None.
+!
+! COMPLETION CODES:
+!
+!   SS$_NORMAL:	    	normal successful completion.
+!
+! SIDE EFFECTS:
+!
+!   None.
+!--
+    LOCAL
+    	WRK 	: REF WRKDEF;
+
+    LIB$GET_VM (%REF (WRK_S_WRKDEF), WRK, WRKZONE);
+    WRK [WRK_L_ROUTINE] = READ_CMD;
+    WRK [WRK_L_CTX] = .CTX_A;
+    INSQUE (.WRK, .WRKQUE [QUE_L_TAIL]);
+    $WAKE ()
+
+END; ! START_AST
+
+%SBTTL 'READ_CMD'
+ROUTINE READ_CMD (CTX : REF CTXDEF) = 
+BEGIN
+!++
+! FUNCTIONAL DESCRIPTION:
+!
+!   Reads a command.
+!
+! RETURNS:  	cond_value, longword (unsigned), write only, by value
+!
+! PROTOTYPE:
+!
+!   READ_CMD  ctx
+!
+! IMPLICIT INPUTS:  None.
+!
+! IMPLICIT OUTPUTS: None.
+!
+! COMPLETION CODES:
+!
+!   SS$_NORMAL:	    	normal successful completion.
+!
+! SIDE EFFECTS:
+!
+!   None.
+!--
+    LOCAL
+    	STATUS;
+
+    STATUS = DECNET_GET_LINE (CTX [CTX_L_NETCTX], CTX [CTX_Q_INSTR],
+    	    	CTX [CTX_Q_IOSB], READ_AST, .CTX);
+    IF NOT .STATUS THEN CLEANUP (CTX);
+
+    SS$_NORMAL
+
+END;  ! READ_CMD
+
+%SBTTL 'READ_AST'
+ROUTINE READ_AST (CTX_A) = 
+BEGIN
+!++
+! FUNCTIONAL DESCRIPTION:
+!
+!   AST routine executed when START completes.
+!
+! RETURNS:  	cond_value, longword (unsigned), write only, by value
+!
+! PROTOTYPE:
+!
+!   READ_AST ctx (AST level)
+!
+! IMPLICIT INPUTS:  None.
+!
+! IMPLICIT OUTPUTS: None.
+!
+! COMPLETION CODES:
+!
+!   SS$_NORMAL:	    	normal successful completion.
+!
+! SIDE EFFECTS:
+!
+!   None.
+!--
+    LOCAL
+    	WRK 	: REF WRKDEF;
+
+    LIB$GET_VM (%REF (WRK_S_WRKDEF), WRK, WRKZONE);
+    WRK [WRK_L_ROUTINE] = PROCESS_CMD;
+    WRK [WRK_L_CTX] = .CTX_A;
+    INSQUE (.WRK, .WRKQUE [QUE_L_TAIL]);
+    $WAKE ()
+
+END; ! READ_AST
+
+%SBTTL 'PROCESS_CMD'
+ROUTINE PROCESS_CMD (CTX : REF CTXDEF) = 
+BEGIN
+!++
+! FUNCTIONAL DESCRIPTION:
+!
+!   Issues a command read.
+!
+! RETURNS:  	cond_value, longword (unsigned), write only, by value
+!
+! PROTOTYPE:
+!
+!   PROCESS_CMD  ctx
+!
+! IMPLICIT INPUTS:  None.
+!
+! IMPLICIT OUTPUTS: None.
+!
+! COMPLETION CODES:
+!
+!   SS$_NORMAL:	    	normal successful completion.
+!
+! SIDE EFFECTS:
+!
+!   None.
+!--
+    BIND
+    	HDRQUE	= CTX [CTX_Q_HDRQ]  	: QUEDEF,
+    	envl	= ctx [CTX_X_ENVELOPE]	: ENVLDEF,
+    	QENT	= CTX [CTX_L_QENT]  	: REF QENTDEF,
+    	QCTX 	= CTX [CTX_L_QCTX],
+    	DUNIT	= CTX [CTX_L_DUNIT],
+    	UNIT	= CTX [CTX_L_UNIT],
+    	RCVBYME	= CTX [CTX_L_RCVBYME],
+    	INSTR	= CTX [CTX_Q_INSTR] 	: BLOCK [,BYTE],
+    	CURHDR	= CTX [CTX_Q_CURHDR]	: BLOCK [,BYTE],
+    	DNHOST	= CTX [CTX_Q_DNHOST]	: BLOCK [DSC$K_S_BLN,BYTE],
+    	STATE	= CTX [CTX_L_STATE],
+    	RCPT_COUNT = envl [ENVL_L_RCPTCOUNT];
+    BIND_ENVL_FIELDS (envl);
+
+    LOCAL
+    	STR 	    : BLOCK [DSC$K_S_BLN,BYTE],
+    	STR2	    : BLOCK [DSC$K_S_BLN,BYTE],
+    	LCLPART	    : BLOCK [DSC$K_S_BLN,BYTE],
+    	DOMPART	    : BLOCK [DSC$K_S_BLN,BYTE],
+    	RTEQ	    : QUEDEF,
+    	TXT 	    : REF TXTDEF,
+    	CMDCODE,
+    	STATUS;
+
+
+    TXT = 0;
+    INIT_DYNDESC (STR, STR2, LCLPART, DOMPART);
+
+    IF NOT .CTX [CTX_W_STAT] THEN
+    BEGIN
+    	DPRINT ('Error: status=!XW', .CTX [CTX_W_STAT]);
+    	CLEANUP (CTX);
+    	RETURN SS$_NORMAL;
+    END;
+
+    IF .state NEQU STATE_CLUP THEN
+        DPRINT ('Receive "!AS"', INSTR);
+
+    CASE .STATE FROM LOW_STATE TO HIGH_STATE OF
+    SET
+
+    [STATE_HELLO] :
+    	BEGIN
+    	    PARSE_SMTP_CMD (INSTR, CMDCODE, TXT);
+    	    CASE .CMDCODE FROM SMTP_CMD_LO TO SMTP_CMD_HI OF
+    	    SET
+    	    [SMTP_CMD_HELO,SMTP_CMD_EHLO] :
+    	    BEGIN
+    	    	ctx [CTX_V_ESMTP] = .CMDCODE EQL SMTP_CMD_EHLO;
+    	    	IF .TXT NEQA 0 THEN
+    	    	    IF .TXT [TXT_W_LEN] NEQ 0 THEN
+    	    	    BEGIN
+    	    	    	LOCAL
+    	    	    	    lnmlst  : $ITMLST_DECL (ITEMS=1),
+    	    	    	    i,
+    	    	    	    lnmlen  : WORD,
+    	    	    	    lnmbuf  : VECTOR [256,BYTE];
+    	    	    	STATE = STATE_MAIL;
+    	    	    	ctx [CTX_A_REMHOST] = .txt;
+    	    	    	txt = 0;
+    	    	    	IF .ctx [CTX_V_ESMTP] THEN
+    	    	    	    SEND (snd_ast, %STRING ('250-!AS', crlf,
+    	    	    	    	    	    	    '250-ENHANCEDSTATUSCODES', crlf,
+    	    	    	    	    	    	    '250-DSN', crlf,
+    	    	    	    	    	    	    '250 SIZE !UL'), hostname, .ctx [CTX_L_MSGLIM])
+    	    	    	ELSE
+    	    	    	    SEND (SND_AST, '250 !AS', hostname);
+    	    	    	CTX [CTX_V_FAKER] = 0;
+    	    	    	$ITMLST_INIT (ITMLST=lnmlst,
+    	    	    	    (ITMCOD=LNM$_STRING, BUFSIZ=%ALLOCATION (lnmbuf),
+    	    	    	     BUFADR=lnmbuf, RETLEN=lnmlen));
+    	    	    	$TRNLNM (LOGNAM=%ASCID'SYS$REM_NODE', TABNAM=%ASCID'LNM$FILE_DEV', ITMLST=lnmlst);
+    	    	    	STR$COPY_R (STR, lnmlen, lnmbuf);
+    	    	    	$TRNLNM (LOGNAM=%ASCID'SYS$REM_ID', TABNAM=%ASCID'LNM$FILE_DEV', ITMLST=lnmlst);
+    	    	    	STR$COPY_R (STR2, lnmlen, lnmbuf);
+    	    	    	STR$CONCAT (DNHOST, STR, STR2);
+    	    	    END
+    	    	    ELSE SEND (SND_AST, '501 Syntax is !AS <domain>',
+    	    	    	    	    	(IF .ctx [CTX_V_ESMTP] THEN %ASCID'EHLO' ELSE %ASCID'HELO'))
+    	    	ELSE SEND (SND_AST, '501 Syntax is !AS <domain>',
+    	    	    	    	    (IF .ctx [CTX_V_ESMTP] THEN %ASCID'EHLO' ELSE %ASCID'HELO'));
+    	    END;
+    	    [SMTP_CMD_NOOP] :
+    	    	SEND (SND_AST, '250 2.0.0 Please stop wasting my time.');
+    	    [SMTP_CMD_QUIT] :
+    	    	BEGIN
+    	    	    STATE = STATE_CLUP;
+    	    	    SEND (READ_AST,
+    	    	    	'221 2.3.0 !AS Service closing transmission channel.', HOSTNAME);
+    	    	END;
+    	    [SMTP_CMD_RSET] :
+    	    	SEND (SND_AST, '250 2.5.0 Okay.');
+    	    [SMTP_CMD_UNKNOWN] :
+    	    	SEND (SND_AST, '500 5.5.2 Please identify yourself with HELO or EHLO.');
+	    [INRANGE] :
+		SEND (SND_AST, '500 5.5.1 Please identify yourself with HELO or EHLO.');
+	    [OUTRANGE] :
+		SEND (SND_AST, '500 5.5.4 Please identify yourself with HELO or EHLO.')
+    	    TES;
+    	END;
+
+    [STATE_MAIL] :
+    	BEGIN
+    	    LOCAL
+    	    	pi  : SMTPPRMDEF;
+    	    CH$FILL (%CHAR (0), SMTPPRM_S_SMTPPRMDEF, pi);
+    	    PARSE_SMTP_CMD (INSTR, CMDCODE, TXT, pi);
+    	    CASE .CMDCODE FROM SMTP_CMD_LO TO SMTP_CMD_HI OF
+    	    SET
+
+    	    [SMTP_CMD_MAIL] :
+    	    BEGIN
+    	    	status = SS$_NORMAL;
+    	    	IF .pi [SMTPPRM_V_SIZE] THEN
+    	    	BEGIN
+    	    	    LOCAL qmsglim;
+    	    	    IF NOT FLQ_GET_MAXSIZE (qctx, qmsglim) THEN
+    	    	    BEGIN
+    	    	    	SEND (SND_AST, '452 4.3.4 Insufficient storage for any message right now.');
+    	    	    	status = 0;
+    	    	    END
+    	    	    ELSE IF .ctx [CTX_L_MSGLIM] NEQ 0 AND .ctx [CTX_L_MSGLIM] LSSU .pi [SMTPPRM_L_SIZE] THEN
+    	    	    BEGIN
+    	    	    	SEND (SND_AST, '552 5.3.4 Message exceeds administrative size limit.');
+    	    	    	status = 0;
+    	    	    END
+    	    	    ELSE IF .qmsglim NEQ 0 AND .qmsglim LSSU .pi [SMTPPRM_L_SIZE] THEN
+    	    	    BEGIN
+    	    	    	SEND (SND_AST, '452 4.3.4 Insufficient storage for message of this size.');
+    	    	    	status = 0;
+    	    	    END;
+    	    	END;
+
+    	    	IF .status THEN
+    	    	BEGIN
+    	    	    envl [ENVL_V_RCVDFROM] = .ctx [CTX_A_REMHOST] NEQA 0;
+                    IF .envl [ENVL_V_RCVDFROM] THEN
+                    BEGIN
+                        BIND remhst = ctx [CTX_A_REMHOST] : REF TXTDEF;
+    	    	        envl [ENVL_A_RCVDFROM] = MEM_GETTXT (.remhst [TXT_W_LEN], remhst [TXT_T_TEXT]);
+                    END;
+    	    	    IF .pi [SMTPPRM_V_RET] THEN
+    	    	    BEGIN
+    	    	    	envl [ENVL_V_DSN_FULL] = .pi [SMTPPRM_L_RETURNTYPE] EQL SMTPPRM_K_RET_FULL;
+    	    	    	envl [ENVL_V_DSN_HDRSONLY] = .pi [SMTPPRM_L_RETURNTYPE] EQL SMTPPRM_K_RET_HDRS;
+    	    	    END;
+    	    	    IF .pi [SMTPPRM_V_ENVID] THEN
+    	    	    BEGIN
+    	    	    	envl [ENVL_V_DSN_ENVID] = 1;
+    	    	    	envl [ENVL_A_DSN_ENVID] = .pi [SMTPPRM_A_ENVID];
+    	    	    	pi [SMTPPRM_A_ENVID] = 0;
+    	    	    END;
+    	    	END;
+
+    	    	IF .status THEN IF .TXT NEQA 0 THEN IF .TXT [TXT_W_LEN] NEQ 0 THEN
+    	    	BEGIN
+    	    	    STR$COPY_R (STR, TXT [TXT_W_LEN], TXT [TXT_T_TEXT]);
+    	    	    IF NOT PARSE821 (STR, RTEQ, LCLPART, DOMPART) AND
+    	    	    	    STR$COMPARE_EQL (STR, %ASCID'<>') NEQ 0 THEN
+    	    	    	SEND (SND_AST, '501 5.1.7 Invalid address: !AD', .TXT [TXT_W_LEN], TXT [TXT_T_TEXT])
+    	    	    ELSE
+    	    	    BEGIN
+    	    	    	LOCAL
+    	    	    	    R : REF TXTDEF;
+    	    	    	IF STR$COMPARE_EQL (STR, %ASCID'<>') NEQ 0 THEN
+    	    	    	BEGIN
+    	    	    	    FORMAT821 (RTEQ, LCLPART, DOMPART, str);
+    	    	    	    WHILE NOT REMQUE (.RTEQ [QUE_L_HEAD], R) DO
+    	    	    	    	    FREETXT (R);
+    	    	    	END;
+    	    	    	envl [ENVL_A_FROMADR] = MEM_GETTXT (.str [DSC$W_LENGTH], .str [DSC$A_POINTER]);
+    	    	    	envl [ENVL_V_FROMADR] = 1;
+    	    	    	LIB$GET_VM (%REF (QENT_S_QENTDEF), QENT, QENTZONE);
+    	    	    	FLQ_INIT_QENT (.QENT);
+    	    	    	QENT [QENT_L_STATUS] = FLQ_K_STINP;
+    	    	    	QENT [QENT_V_LOCK] = 1;
+			qent [QENT_L_DSTPRC] = FLQ_K_MX_ROUTER;
+			qent [QENT_L_ORIGIN] = MX_K_ORG_DNSMTP;
+    	    	    	QENT [QENT_W_ORGADR] = MIN (QENT_S_ORGADR, .STR [DSC$W_LENGTH]);
+    	    	    	CH$MOVE (.QENT [QENT_W_ORGADR], .STR [DSC$A_POINTER], QENT [QENT_T_ORGADR]);
+    	    	    	envl [ENVL_L_RCPTCOUNT] = 0;
+
+    	    	    	STATUS = FLQ_ADD (QCTX, .QENT);
+    	    	    	IF NOT .STATUS THEN
+    	    	    	BEGIN
+    	    	    	    LIB$FREE_VM (%REF (QENT_S_QENTDEF), QENT, QENTZONE);
+    	    	    	    QENT = 0;
+    	    	    	    SEND (SND_AST, '451 4.3.0 Unable to receive right now.');
+    	    	    	END
+    	    	    	ELSE
+    	    	    	BEGIN
+    	    	    	    RCPT_COUNT = 0;
+    	    	    	    STATE = STATE_RCPT;
+    	    	    	    SEND (SND_AST, '250 2.1.0 MAIL command accepted.');
+    	    	    	END;
+    	    	    END;
+    	    	END
+    	    	ELSE SEND (SND_AST, '501 5.5.4 Syntax error.')
+    	    	ELSE SEND (SND_AST, '501 5.5.4 Syntax error.');
+
+    	    END;
+
+	    [SMTP_CMD_RSET] :
+		SEND (SND_AST, '250 2.5.0 Okay.');
+
+	    [SMTP_CMD_NOOP] :
+		SEND (SND_AST, '250 2.0.0 Okay.');
+
+	    [SMTP_CMD_QUIT] :
+		BEGIN
+		    STATE = STATE_CLUP;
+		    SEND (READ_AST,
+			'221 2.3.0 !AS Service closing transmission channel', HOSTNAME);
+		END;
+
+    	    [SMTP_CMD_VRFY] :
+    	    	IF .txt EQLA 0 OR .txt [TXT_W_LEN] EQL 0 THEN
+    	    	    SEND (SND_AST, '501 5.5.4 Format is: VRFY <address>')
+    	    	ELSE
+    	    	    SEND (SND_AST, '252 2.1.0 Cannot verify address: not implemented.');
+
+	    [SMTP_CMD_UNKNOWN] :
+		SEND (SND_AST, '500 5.5.1 Syntax error; command unrecognized.');
+
+	    [INRANGE] :
+		SEND (SND_AST, '503 5.5.1 Bad sequence of commands.');
+
+	    [OUTRANGE] :
+		SEND (SND_AST, '501 5.5.4 Syntax error in command arguments.');
+    	    TES;
+
+    	    free_paraminfo (pi);
+
+    	END;
+
+    [STATE_RCPT] :
+    	BEGIN
+    	    LOCAL pi : SMTPPRMDEF;
+
+    	    CH$FILL (%CHAR (0), SMTPPRM_S_SMTPPRMDEF, pi);
+
+    	    PARSE_SMTP_CMD (INSTR, CMDCODE, TXT, pi);
+    	    CASE .CMDCODE FROM SMTP_CMD_LO TO SMTP_CMD_HI OF
+    	    SET
+    	    [SMTP_CMD_RCPT] :
+    	    	IF .TXT NEQA 0 THEN IF .TXT [TXT_W_LEN] NEQ 0 THEN
+    	    	BEGIN
+    	    	    LOCAL R : REF TXTDEF, RCPT : REF RCPTDEF;
+    	    	    STR$COPY_R (STR, TXT [TXT_W_LEN], TXT [TXT_T_TEXT]);
+    	    	    IF NOT PARSE821 (STR, RTEQ, LCLPART, DOMPART) THEN
+    	    	    	SEND (SND_AST, '501 5.1.3 Syntax error in address')
+    	    	    ELSE
+    	    	    BEGIN
+    	    	    	IF .RTEQ [QUE_L_HEAD] NEQA RTEQ [QUE_L_HEAD] THEN
+    	    	    	BEGIN
+    	    	    	    LOCAL
+    	    	    	    	S : BLOCK [DSC$K_S_BLN,BYTE];
+
+    	    	    	    REMQUE (.RTEQ [QUE_L_HEAD], R);
+    	    	    	    S [DSC$B_DTYPE] = DSC$K_DTYPE_T;
+    	    	    	    S [DSC$B_CLASS] = DSC$K_CLASS_S;
+    	    	    	    S [DSC$A_POINTER] = R [TXT_T_TEXT];
+    	    	    	    S [DSC$W_LENGTH] = .R [TXT_W_LEN];
+    	    	    	    IF STR$CASE_BLIND_COMPARE (S, MAILNAME) EQL 0
+    	    	    	    OR STR$CASE_BLIND_COMPARE (S, HOSTNAME) EQL 0
+    	    	    	    THEN FREETXT (R)
+    	    	    	    ELSE INSQUE (.R, RTEQ);
+    	    	    	END;
+    	    	    	FORMAT821 (RTEQ, LCLPART, DOMPART, STR);
+    	    	    	MEM_GETRCPT (RCPT);
+    	    	    	rcpt [RCPT_A_ADDR] = MEM_GETTXT (.str [DSC$W_LENGTH], .str [DSC$A_POINTER]);
+    	    	    	IF .pi [SMTPPRM_V_NOTIFY] THEN
+    	    	    	BEGIN
+    	    	    	    IF .pi [SMTPPRM_L_NTFYMSK] EQL 0 THEN
+    	    	    	    	rcpt [RCPT_V_DSN_NEVER] = 1
+    	    	    	    ELSE
+    	    	    	    BEGIN
+    	    	    	    	rcpt [RCPT_V_DSN_SUCCESS] = .pi [SMTPPRM_V_NOTIFY_SUCCESS];
+    	    	    	    	rcpt [RCPT_V_DSN_FAILURE] = .pi [SMTPPRM_V_NOTIFY_FAILURE];
+    	    	    	    	rcpt [RCPT_V_DSN_DELAY]   = .pi [SMTPPRM_V_NOTIFY_DELAY];
+    	    	    	    END;
+    	    	    	END;
+    	    	    	IF .pi [SMTPPRM_V_ORCPT] THEN
+    	    	    	BEGIN
+    	    	    	    rcpt [RCPT_A_ORTYPE] = .pi [SMTPPRM_A_ORTYPE];
+    	    	    	    rcpt [RCPT_A_ORADDR] = .pi [SMTPPRM_A_ORADDR];
+    	    	    	    pi [SMTPPRM_A_ORTYPE] = pi [SMTPPRM_A_ORADDR] = 0;
+    	    	    	END;
+    	    	    	INSQUE_TAIL (.RCPT, envl [ENVL_Q_RCPTQUE]);
+    	    	    	WHILE NOT REMQUE (.RTEQ [QUE_L_HEAD], R) DO FREETXT (R);
+    	    	    	envl [ENVL_L_RCPTCOUNT] = .envl [ENVL_L_RCPTCOUNT] + 1;
+    	    	    	SEND (SND_AST, '250 2.1.5 Recipient okay (at least in form)');
+    	    	    END;
+    	    	END
+    	    	ELSE SEND (SND_AST, '501 5.5.4 Syntax error.')
+    	    	ELSE SEND (SND_AST, '501 5.5.4 Syntax error.');
+
+    	    [SMTP_CMD_DATA] :
+    	    	IF .envl [ENVL_L_RCPTCOUNT] EQL 0 THEN
+    	    	    SEND (SND_AST, '554 5.5.0 No valid recipients for this message.')
+    	    	ELSE
+    	    	BEGIN
+    	    	    WRITE_ENVELOPE (.qctx, .qent, %ASCID'SRC_INFO', envl);
+    	    	    DISPOSE_ENVELOPE (envl);
+    	    	    STR$FREE1_DX (CURHDR);
+    	    	    STATE = STATE_HDRS;
+    	    	    SEND (SND_AST,
+    	    	    	'354 Start mail input; end with <crlf>.<crlf>');
+    	    	END;
+
+    	    [SMTP_CMD_VRFY] :
+    	    	SEND (SND_AST, '252 2.0.0 Cannot verify address: not implemented.');
+
+    	    [SMTP_CMD_QUIT] :
+    	    	BEGIN
+    	    	    STATE = STATE_CLUP;
+    	    	    SEND (READ_AST,
+    	    	    	'221 !AS 2.3.0 Service closing transmission channel', HOSTNAME);
+    	    	END;
+
+    	    [SMTP_CMD_RSET] :
+    	    	BEGIN
+    	    	    DISPOSE_ENVELOPE (envl);
+    	    	    CH$FILL (%CHAR (0), ENVL_S_ENVLDEF, envl);
+    	    	    envl [ENVL_V_ORIGIN] = 1;
+    	    	    envl [ENVL_L_ORIGIN] = MX_K_ORG_DNSMTP;
+    	    	    INIT_QUEUE (envl [ENVL_Q_RCPTQUE]);
+    	    	    STATE = STATE_MAIL;
+    	    	    QENT [QENT_L_STATUS] = FLQ_K_STCAN;
+    	    	    FLQ_UPDATE (QCTX, .QENT);
+    	    	    LIB$FREE_VM (%REF (QENT_S_QENTDEF), QENT, QENTZONE);
+    	    	    QENT = 0;
+    	    	    SEND (SND_AST, '250 2.5.0 Server has reset to initial state.');
+    	    	END;
+
+    	    [SMTP_CMD_NOOP] :
+    	    	SEND (SND_AST, '250 2.0.0 Stop wasting my time.');
+
+    	    [SMTP_CMD_UNKNOWN] :
+    	    	SEND (SND_AST, '500 5.5.2 Syntax error; command not recognized');
+
+	    [INRANGE] :
+		SEND (SND_AST, '503 5.5.1 Bad sequence of commands.');
+
+    	    [OUTRANGE] :
+		SEND (SND_AST, '501 5.5.4 Syntax error in command arguments.');
+
+    	    TES;
+
+    	END;
+
+    [STATE_HDRS] :
+    	BEGIN
+    	    STR$TRIM (STR, INSTR);
+    	    STATUS = SS$_NORMAL;
+    	    IF .STR [DSC$W_LENGTH] EQL 1 THEN
+    	    BEGIN
+    	    	IF CH$RCHAR (.STR [DSC$A_POINTER]) EQL %C'.' THEN
+    	    	BEGIN
+    	    	    STATUS = RMS$_EOF;
+    	    	    STR$FREE1_DX (STR);
+    	    	END
+    	    END
+    	    ELSE IF .STR [DSC$W_LENGTH] GTR 1 AND
+    	    	    CH$RCHAR (.STR [DSC$A_POINTER]) EQL %C'.' THEN
+    	    	STR$RIGHT (STR, STR, %REF (2));
+    	    IF .STATUS EQL RMS$_EOF OR .STR [DSC$W_LENGTH] EQL 0 THEN
+    	    BEGIN
+    	    	BIND remhost = ctx [CTX_A_REMHOST] : REF TXTDEF;
+    	    	LOCAL
+    	    	    remhdsc : BLOCK [DSC$K_S_BLN,BYTE],
+    	    	    H : REF TXTDEF,
+    	    	    HDRQ2 : QUEDEF;
+
+    	    	IF .CURHDR [DSC$W_LENGTH] GTR 0 THEN
+    	    	    INSTXT (CURHDR, .HDRQUE [QUE_L_TAIL]);
+    	    	MX_MKDATE (0, STR, 0);
+    	    	INIT_SDESC (remhdsc, .remhost [TXT_W_LEN], remhost [TXT_T_TEXT]);
+    	    	STR$CONCAT (CURHDR,
+    	    	    %ASCID'Received: from ', remhdsc, %ASCID ' (',
+    	    	    	DNHOST, %ASCID') by ',
+    	    	    	HOSTNAME, %ASCID' (', MX_IDENT_STRING,
+    	    	    	%ASCID') with ');
+    	    	IF .ctx [CTX_V_ESMTP] THEN STR$APPEND (curhdr, %ASCID'E');
+    	    	STR$APPEND (curhdr, %ASCID'SMTP (DECnet); ');
+    	    	STR$APPEND (curhdr, STR);
+    	    	INSTXT (CURHDR, HDRQUE);
+    	    	HDRQ2 [QUE_L_TAIL] = HDRQ2 [QUE_L_HEAD] = HDRQ2;
+    	    	PARSE_HDRS (HDRQUE, HDRQ2);
+    	    	STR$CONCAT (STR, %ASCID'by ', HOSTNAME, %ASCID' (',
+    	    	    MX_IDENT_STRING, %ASCID') with SMTP');
+    	    	RCVBYME = RCVLINE_COUNT (HDRQ2, STR);
+    	    	STR$CONCAT (STR, %ASCID'by ', HOSTNAME, %ASCID' (',
+    	    	    MX_IDENT_STRING, %ASCID') with ESMTP');
+    	    	RCVBYME = .RCVBYME + RCVLINE_COUNT (HDRQ2, STR);
+    	    	WRITE_HDRS (.QCTX, .QENT, %ASCID'HDR_INFO', HDRQ2);
+    	    	WHILE NOT REMQUE (.HDRQUE [QUE_L_HEAD], H) DO FREETXT (H);
+    	    	WHILE NOT REMQUE (.HDRQ2 [QUE_L_HEAD], H) DO FREETXT (H);
+    	    	FLQ_MAKE_FSPEC (.QENT [QENT_L_ENTNUM], %ASCID'MSG_TEXT', STR);
+    	    	MX_FILE_OPEN (MX__FILE_WRITE, STR, UNIT);
+    	    	IF .STATUS EQL RMS$_EOF THEN
+    	    	BEGIN
+    	    	    LOCAL MSGP;
+    	    	    STATE = STATE_MAIL;
+    	    	    IF .RCVBYME GTR .MAXRCVBYME THEN
+    	    	    BEGIN
+    	    	    	QENT [QENT_L_STATUS] = FLQ_K_STCAN;
+    	    	    	MSGP = %ASCID'554 5.4.6 Received too many times by this host.';
+    	    	    END
+    	    	    ELSE
+    	    	    BEGIN
+		    	QENT [QENT_L_STATUS] = FLQ_K_STRDY;
+		    	MSGP =  %ASCID'250 2.5.0 Message received and queued.';
+    	    	    END;
+    	    	    MX_FILE_CLOSE (.UNIT, (.qent [QENT_L_STATUS] EQL FLQ_K_STCAN));
+    	    	    UNIT = 0;
+    	    	    FLQ_UPDATE (QCTX, .QENT);
+    	    	    LIB$FREE_VM (%REF (QENT_S_QENTDEF), QENT, QENTZONE);
+    	    	    QENT = 0;
+    	    	    SEND (SND_AST, '!AS', .MSGP);
+    	    	END
+    	    	ELSE
+    	    	BEGIN
+    	    	    STATE = STATE_MSG;
+    	    	    READ_CMD (.CTX);
+    	    	END;
+    	    END
+    	    ELSE
+    	    BEGIN
+    	    	IF CH$RCHAR (.STR [DSC$A_POINTER]) EQL %C' ' OR
+    	    	    	CH$RCHAR (.STR [DSC$A_POINTER]) EQL %CHAR (9) THEN
+    	    	BEGIN
+    	    	    LOCAL I;
+    	    	    I = MAX (1, STR$FIND_FIRST_NOT_IN_SET (STR,
+    	    	    	%ASCID %STRING (' ', %CHAR (9))));
+    	    	    STR$RIGHT (STR2, STR, I);
+    	    	    STR$APPEND (CURHDR, %ASCID' ');
+    	    	    STR$APPEND (CURHDR, STR2);
+    	    	END
+    	    	ELSE
+    	    	BEGIN
+    	    	    IF .CURHDR [DSC$W_LENGTH] GTR 0 THEN
+    	    	    	INSTXT (CURHDR, .HDRQUE [QUE_L_TAIL]);
+    	    	    STR$COPY_DX (CURHDR, STR);
+    	    	END;
+    	    	READ_CMD (.CTX);
+    	    END;
+    	END;
+
+    [STATE_MSG] :
+    	BEGIN
+    	    STR$COPY_DX (STR, INSTR);
+    	    STATUS = SS$_NORMAL;
+    	    IF .STR [DSC$W_LENGTH] EQL 1 THEN
+    	    BEGIN
+    	    	IF CH$RCHAR (.STR [DSC$A_POINTER]) EQL %C'.' THEN
+    	    	BEGIN
+    	    	    STATUS = RMS$_EOF;
+    	    	    STR$FREE1_DX (STR);
+    	    	END
+    	    END
+    	    ELSE IF .STR [DSC$W_LENGTH] GTR 1 AND
+    	    	    CH$RCHAR (.STR [DSC$A_POINTER]) EQL %C'.' THEN
+    	    	STR$RIGHT (STR, STR, %REF (2));
+    	    IF .STATUS EQL RMS$_EOF THEN
+    	    BEGIN
+    	    	LOCAL MSGP;
+    	    	IF .RCVBYME GTR .MAXRCVBYME THEN
+    	    	BEGIN
+    	    	    QENT [QENT_L_STATUS] = FLQ_K_STCAN;
+    	    	    MSGP = %ASCID'554 5.4.6 Received too many times by this host.';
+    	    	END
+    	    	ELSE
+    	    	BEGIN
+    	    	    LOCAL qmsglim;
+    	    	    IF NOT FLQ_GET_MAXSIZE (qctx, qmsglim) THEN
+    	    	    BEGIN
+    	    	    	MSGP = %ASCID'452 4.3.4 Message queue is full.';
+    	    	    	qent [QENT_L_STATUS] = FLQ_K_STCAN;
+    	    	    END
+    	    	    ELSE IF .ctx [CTX_L_MSGLIM] NEQ 0 AND .ctx [CTX_L_MSGLIM] LSSU .qent [QENT_L_SIZE] THEN
+    	    	    BEGIN
+    	    	    	MSGP = %ASCID'552 5.3.4 Message exceeds administrative size limit.';
+    	    	    	qent [QENT_L_STATUS] = FLQ_K_STCAN;
+    	    	    END
+    	    	    ELSE IF .qmsglim NEQ 0 AND .qmsglim LSSU .qent [QENT_L_SIZE] THEN
+    	    	    BEGIN
+    	    	    	MSGP = %ASCID'452 4.3.4 Insufficient storage for message.';
+    	    	    	QENT [QENT_L_STATUS] = FLQ_K_STCAN;
+    	    	    END
+    	    	    ELSE
+    	    	    BEGIN
+		    	QENT [QENT_L_STATUS] = FLQ_K_STRDY;
+		    	MSGP =  %ASCID'250 2.5.0 Message received and queued.';
+    	    	    END;
+    	    	END;
+    	    	MX_FILE_CLOSE (.UNIT, (.qent [QENT_L_STATUS] EQL FLQ_K_STCAN));
+    	    	UNIT = 0;
+    	    	STATE = STATE_MAIL;
+    	    	FLQ_UPDATE (QCTX, .QENT);
+    	    	LIB$FREE_VM (%REF (QENT_S_QENTDEF), QENT, QENTZONE);
+    	    	QENT = 0;
+    	    	SEND (SND_AST, '!AS', .MSGP);
+    	    END
+    	    ELSE
+    	    BEGIN
+    	    	QENT [QENT_L_SIZE] = .QENT [QENT_L_SIZE] + .STR [DSC$W_LENGTH];
+    	    	MX_FILE_WRITE (.UNIT, STR);
+    	    	READ_CMD (.CTX);
+    	    END;
+    	END;
+
+    [STATE_CLUP] :
+    	CLEANUP (CTX);
+
+    TES;
+
+    IF .TXT NEQA 0 THEN FREETXT (TXT);
+    FREE_STRINGS (STR, LCLPART, DOMPART, STR2);
+
+    SS$_NORMAL
+
+END; ! PROCESS_CMD
+
+%IF %VARIANT %THEN
+%SBTTL 'PRINT_TO_LOG'
+ROUTINE PRINT_TO_LOG (STR_A, CTX_A_A) = 
+BEGIN
+!++
+! FUNCTIONAL DESCRIPTION:
+!
+!   Prints to a debug log.
+!
+! RETURNS:  	cond_value, longword (unsigned), write only, by value
+!
+! PROTOTYPE:
+!
+!   PRINT_TO_LOG
+!
+! IMPLICIT INPUTS:  None.
+!
+! IMPLICIT OUTPUTS: None.
+!
+! COMPLETION CODES:
+!
+!   SS$_NORMAL:	    	normal successful completion.
+!
+! SIDE EFFECTS:
+!
+!   None.
+!--
+    BIND
+    	STR = .STR_A	: BLOCK [DSC$K_S_BLN,BYTE],
+    	CTX = .CTX_A_A	: REF CTXDEF;
+
+    LOCAL
+    	FAOBUF	: VECTOR [512,BYTE],
+    	FAOLEN	: WORD,
+    	FAODSC	: BLOCK [DSC$K_S_BLN,BYTE] PRESET (
+    	    	    [DSC$B_DTYPE] = DSC$K_DTYPE_T,
+    	    	    [DSC$B_CLASS] = DSC$K_CLASS_S,
+    	    	    [DSC$W_LENGTH] = %ALLOCATION (FAOBUF),
+    	    	    [DSC$A_POINTER] = FAOBUF);
+
+    IF .CTX [CTX_V_DEBUG] AND .CTX [CTX_L_DUNIT] NEQ 0 THEN
+    BEGIN
+    	$FAO (%ASCID'STM[!UL]: !AS', FAOLEN, FAODSC, .CTX [CTX_L_CXID], STR);
+    	FAODSC [DSC$W_LENGTH] = .FAOLEN;
+    	MX_FILE_WRITE (.CTX [CTX_L_DUNIT], FAODSC);
+    END;
+
+    SS$_NORMAL
+
+END; ! PRINT_TO_LOG
+%FI
+
+%SBTTL 'CLEANUP'
+ROUTINE CLEANUP (CTX_A_A) = 
+BEGIN
+!++
+! FUNCTIONAL DESCRIPTION:
+!
+!   Cleans up after a thread.
+!
+! RETURNS:  	cond_value, longword (unsigned), write only, by value
+!
+! PROTOTYPE:
+!
+!   CLEANUP  ctx
+!
+! IMPLICIT INPUTS:  None.
+!
+! IMPLICIT OUTPUTS: None.
+!
+! COMPLETION CODES:
+!
+!   SS$_NORMAL:	    	normal successful completion.
+!
+! SIDE EFFECTS:
+!
+!   None.
+!--
+    BIND
+    	CTX 	= .CTX_A_A  	    : REF CTXDEF,
+    	HDRQUE	= CTX [CTX_Q_HDRQ]  : QUEDEF,
+    	envl	= ctx [CTX_X_ENVELOPE] : ENVLDEF;
+
+    LOCAL
+    	RCPT	: REF RCPTDEF,
+    	TXT 	: REF TXTDEF;
+
+    REMQUE (.CTX, CTX);
+    DECNET_FREE_CTX (CTX [CTX_L_NETCTX]);
+    $DASSGN (CHAN=.CTX [CTX_W_NETCHN]);
+    IF .CTX [CTX_L_UNIT] NEQ 0 THEN MX_FILE_CLOSE (.CTX [CTX_L_UNIT]);
+    IF .CTX [CTX_L_QENT] NEQ 0 THEN
+    BEGIN
+    	BIND QENT = .CTX [CTX_L_QENT] : QENTDEF;
+    	QENT [QENT_L_STATUS] = FLQ_K_STCAN;
+    	FLQ_UPDATE (CTX [CTX_L_QCTX], QENT);
+    END;
+    IF .CTX [CTX_L_QCTX] NEQ 0 THEN FLQ_CLOSE (CTX [CTX_L_QCTX]);
+    WHILE NOT REMQUE (.HDRQUE [QUE_L_HEAD], TXT) DO FREETXT (TXT);
+    DISPOSE_ENVELOPE (envl);
+    IF .CTX [CTX_V_DEBUG] THEN
+    	MX_FILE_CLOSE (.CTX [CTX_L_DUNIT]);
+    FREE_STRINGS (CTX [CTX_Q_CURHDR], CTX [CTX_Q_INSTR]);
+    FREETXT (ctx [CTX_A_REMHOST]);
+
+    LIB$FREE_VM (%REF (CTX_S_CTXDEF), CTX);
+
+    $EXIT ();
+
+    SS$_NORMAL
+
+END; ! CLEANUP
+
+%SBTTL 'SND_AST'
+ROUTINE SND_AST (CTX_A) = 
+BEGIN
+!++
+! FUNCTIONAL DESCRIPTION:
+!
+!   AST routine executed when START completes.
+!
+! RETURNS:  	cond_value, longword (unsigned), write only, by value
+!
+! PROTOTYPE:
+!
+!   SND_AST ctx (AST level)
+!
+! IMPLICIT INPUTS:  None.
+!
+! IMPLICIT OUTPUTS: None.
+!
+! COMPLETION CODES:
+!
+!   SS$_NORMAL:	    	normal successful completion.
+!
+! SIDE EFFECTS:
+!
+!   None.
+!--
+    LOCAL
+    	WRK 	: REF WRKDEF;
+
+    LIB$GET_VM (%REF (WRK_S_WRKDEF), WRK, WRKZONE);
+    WRK [WRK_L_ROUTINE] = READ_CMD;
+    WRK [WRK_L_CTX] = .CTX_A;
+    INSQUE (.WRK, .WRKQUE [QUE_L_TAIL]);
+    $WAKE ()
+
+END; ! SND_AST
+
+%SBTTL 'free_paraminfo'
+ROUTINE free_paraminfo (pi_a) : NOVALUE = 
+BEGIN
+!++
+! FUNCTIONAL DESCRIPTION:
+!
+!   description
+!
+! RETURNS:  	cond_value, longword (unsigned), write only, by value
+!
+! PROTOTYPE:
+!
+!   x
+!
+! IMPLICIT INPUTS:  None.
+!
+! IMPLICIT OUTPUTS: None.
+!
+! COMPLETION CODES:
+!
+!   SS$_NORMAL:	    	normal successful completion.
+!
+! SIDE EFFECTS:
+!
+!   None.
+!--
+    BIND pi = .pi_a : SMTPPRMDEF;
+
+    IF .pi [SMTPPRM_A_ENVID] NEQA 0 THEN FREETXT (pi [SMTPPRM_A_ENVID]);
+    IF .pi [SMTPPRM_A_ORTYPE] NEQA 0 THEN FREETXT (pi [SMTPPRM_A_ORTYPE]);
+    IF .pi [SMTPPRM_A_ORADDR] NEQA 0 THEN FREETXT (pi [SMTPPRM_A_ORADDR]);
+
+END; ! free_paraminfo
+
+END
+ELUDOM

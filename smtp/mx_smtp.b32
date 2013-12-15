@@ -1,0 +1,467 @@
+%TITLE 'MX_SMTP'
+MODULE MX_SMTP (IDENT='V2.2', MAIN=MX_SMTP, ADDRESSING_MODE (EXTERNAL=LONG_RELATIVE,NONEXTERNAL=LONG_RELATIVE)) =
+BEGIN
+!++
+! FACILITY: 	    MX SMTP agent
+!
+! ABSTRACT: 	    Main mail agent routines.
+!
+! MODULE DESCRIPTION:
+!
+!   This module contains the main processing routines for the MX SMTP agent.
+!
+! AUTHOR:   	    M. Madison
+!
+! Copyright (c) 2008, Matthew Madison.
+! 
+! All rights reserved.
+! 
+! Redistribution and use in source and binary forms, with or without
+! modification, are permitted provided that the following conditions
+! are met:
+! 
+!     * Redistributions of source code must retain the above
+!       copyright notice, this list of conditions and the following
+!       disclaimer.
+!     * Redistributions in binary form must reproduce the above
+!       copyright notice, this list of conditions and the following
+!       disclaimer in the documentation and/or other materials provided
+!       with the distribution.
+!     * Neither the name of the copyright owner nor the names of any
+!       other contributors may be used to endorse or promote products
+!       derived from this software without specific prior written
+!       permission.
+! 
+! THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
+! "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
+! LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
+! A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
+! OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
+! SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
+! LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
+! DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
+! THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
+! (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
+! OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+!
+! CREATION DATE:    05-DEC-1989
+!
+! MODIFICATION HISTORY:
+!
+!   05-DEC-1989	V1.0	Madison	    	Initial coding.
+!   24-SEP-1990	V1.1	Madison	    	IPC update.
+!   10-APR-1994 V1.2	Altmayer	Include agent status codes for MCP STAT
+!   30-AUG-1997	V1.3	Madison	    	Moved agent processing to separate module.
+!   09-JUL-1998	V2.0	Madison	    	Reorganization; moved INIT and PROCESS here.
+!   16-AUG-1998	V2.0-1	Madison	    	Remove extra "on node" in trace message.
+!   27-AUG-1998	V2.1	Madison	    	Holding queue support.
+!   25-NOV-2000	V2.2	Madison	    	More holding queues; change in SMTP_INFO.
+!--
+
+    LIBRARY 'SYS$LIBRARY:STARLET';
+    LIBRARY 'MX_SRC_COMMON:FLQ';
+    LIBRARY 'MX_SRC_COMMON:MX';
+    LIBRARY 'MX_SRC_COMMON:AGENT';
+    LIBRARY 'MX_SRC_COMMON:MX_LCLDEFS';
+    LIBRARY 'MX_SRC_COMMON:ACCOUNTING';
+    LIBRARY 'SMTP';
+
+    ACC_DEFINE;
+
+    FORWARD ROUTINE
+    	MX_SMTP,
+    	INIT,
+    	PROCESS,
+    	CLEAR_FWDREF,
+    	close_connection;
+
+    EXTERNAL ROUTINE
+    	SMTP_FORCE_DEST,
+    	SMTP_PROCESS_MESSAGE,
+    	SMTP_CLOSE_FORCED_DEST,
+    	SMTP_SEND_ETRN,
+    	LOAD_MXCONFIG,
+    	AGENT_MAIN,
+    	G_HAT (CLI$DCL_PARSE, CLI$PRESENT, CLI$GET_VALUE),
+    	G_HAT (LIB$CVT_DTB, LIB$GET_VM, LIB$FREE_VM, LIB$GET_FOREIGN),
+    	G_HAT (LIB$GETSYI, STR$PREFIX, NETLIB_GET_HOSTNAME);
+
+    EXTERNAL
+    	AGENT_CLD,
+    	CONFIG	    : CFGDEF,
+    	SHUTDOWN_FLAG;
+
+    EXTERNAL LITERAL
+    	CLI$_PRESENT;
+
+    GLOBAL
+    	IPHOSTNM    : BLOCK [DSC$K_S_BLN,BYTE],
+    	PATHLIST    : QUEDEF,
+    	SMTP_INFO   : SMTPDEF;
+
+    TRACE_DECLARATIONS (GLOBAL);
+
+    OWN
+    	SCSNODE	    : BLOCK [DSC$K_S_BLN,BYTE],
+    	IPHOSTBUF   : VECTOR [256,BYTE],
+    	exit_intvl  : VECTOR [2,LONG],
+    	am_idle	    : INITIAL (0),
+    	etrnque	    : QUEDEF,
+    	this_agent,
+    	this_path,
+    	do_etrn;
+
+    BIND
+    	intvl_d	    = %ASCID'0 00:01:00.00' 	: BLOCK [,BYTE];
+
+
+%SBTTL 'MX_SMTP'
+GLOBAL ROUTINE MX_SMTP = 
+BEGIN
+!++
+! FUNCTIONAL DESCRIPTION:
+!
+!   description
+!
+! RETURNS:  	cond_value, longword (unsigned), write only, by value
+!
+! PROTOTYPE:
+!
+!   MX_SMTP
+!
+! IMPLICIT INPUTS:  None.
+!
+! IMPLICIT OUTPUTS: None.
+!
+! COMPLETION CODES:
+!
+!   SS$_NORMAL:	    	normal successful completion.
+!
+! SIDE EFFECTS:	    None.
+!--
+    LOCAL
+    	str 	    : BLOCK [DSC$K_S_BLN,BYTE],
+    	idle_routine,
+    	is_single_agent,
+    	status;
+
+    this_agent = FLQ_K_MX_SMTP;
+    this_path  = MX_K_PATH_SMTP;
+    idle_routine = 0;
+    do_etrn = 0;
+    is_single_agent = 0;
+
+    INIT_DYNDESC (str);
+    status = LIB$GET_FOREIGN (str);
+    IF .status AND .str [DSC$W_LENGTH] GTRU 0 THEN
+    BEGIN
+    	STR$PREFIX (str, %ASCID'AGENT ');
+    	status = CLI$DCL_PARSE (str, agent_cld, LIB$GET_FOREIGN, LIB$GET_FOREIGN);
+    	IF .status THEN
+    	BEGIN
+    	    IF CLI$PRESENT (%ASCID'HOLDING_QUEUE') EQL CLI$_PRESENT THEN
+    	    BEGIN
+    	    	LOCAL n;
+    	    	CLI$GET_VALUE (%ASCID'HOLDING_QUEUE', str);
+    	    	LIB$CVT_DTB (.str [DSC$W_LENGTH], .str [DSC$A_POINTER], n);
+    	    	IF .n LSS 1 OR .n GTR MX_K_HOLDQ_MAX THEN SIGNAL_STOP (SS$_BADPARAM);
+    	    	this_agent = FLQ_K_MX_HOLDQ_BASE + (.n-1);
+    	    	this_path  = MX_K_PATH_HOLDQ_BASE + (.n-1);
+    	    	idle_routine = close_connection;
+    	    	do_etrn = CLI$PRESENT (%ASCID'REQUEST_DELIVERY') EQL CLI$_PRESENT;
+    	    	IF .do_etrn THEN
+    	    	BEGIN
+    	    	    INIT_QUEUE (etrnque);
+    	    	    WHILE CLI$GET_VALUE (%ASCID'REQUEST_DELIVERY', str) DO
+    	    	    	INSTXT (str, .etrnque [QUE_L_TAIL]);
+    	    	END;
+    	    	is_single_agent = 1;
+    	    	$BINTIM (TIMBUF=intvl_d, TIMADR=exit_intvl);
+    	    END;
+    	END;
+    END;
+
+    status = AGENT_MAIN (.this_agent, .is_single_agent, INIT, PROCESS, 0, 0, .idle_routine);
+
+    IF .this_path NEQ MX_K_PATH_SMTP THEN
+    	SMTP_CLOSE_FORCED_DEST (1);
+
+    .status
+
+END;
+
+%SBTTL 'INIT'
+GLOBAL ROUTINE INIT (REINIT) = 
+BEGIN
+!++
+! FUNCTIONAL DESCRIPTION:
+!
+!   Initialization routine.
+!
+! RETURNS:  	cond_value, longword (unsigned), write only, by value
+!
+! PROTOTYPE:
+!
+!   INIT
+!
+! IMPLICIT INPUTS:  None.
+!
+! IMPLICIT OUTPUTS: None.
+!
+! COMPLETION CODES:
+!
+!   SS$_NORMAL:	    	normal successful completion.
+!
+! SIDE EFFECTS:
+!
+!   None.
+!--
+    BIND RSTMSK	= REINIT : RSTDEF;
+
+    LOCAL
+    	path	    : REF PATHDEF,
+    	txt 	    : REF TXTDEF,
+    	STATUS;
+
+    IF .REINIT NEQ 0 THEN
+    BEGIN
+    	IF .RSTMSK [RST_V_CONFIG] THEN
+    	BEGIN
+    	    WHILE NOT REMQUE (.PATHLIST [QUE_L_HEAD], path) DO
+    	    	LIB$FREE_VM (%REF (PATH_S_PATHDEF), path);
+    	    WHILE NOT REMQUE_HEAD (smtp_info [SMTP_Q_RBLQUE], txt) DO
+    	    	FREETXT (txt);
+    	    FREE_STRINGS (SCSNODE);
+    	    SMTP_CLOSE_FORCED_DEST (1);
+    	END;
+    END
+    ELSE
+    BEGIN
+    	INIT_QUEUE (PATHLIST);
+    	INIT_DYNDESC (SCSNODE);
+    END;
+
+    ACC_CLOSE;
+
+    IF .REINIT EQL 0 OR .RSTMSK [RST_V_CONFIG] THEN
+    BEGIN
+    	LOCAL
+    	    lnmlst : $ITMLST_DECL (ITEMS=1),
+    	    ilen   : WORD;
+
+    	STATUS = LIB$GETSYI (%REF (SYI$_NODENAME), 0, SCSNODE);
+
+    	INIT_SDESC (IPHOSTNM, %ALLOCATION (iphostbuf), iphostbuf);
+    	$ITMLST_INIT (ITMLST=lnmlst,
+    	    (ITMCOD=LNM$_STRING, BUFSIZ=%ALLOCATION (iphostbuf), BUFADR=iphostbuf, RETLEN=ilen));
+    	status = $TRNLNM (LOGNAM=%ASCID'MX_INET_HOST', TABNAM=%ASCID'LNM$FILE_DEV',
+    	    	    	    ITMLST=lnmlst);
+    	IF NOT .status THEN status = NETLIB_GET_HOSTNAME (iphostnm, ilen);
+    	IF .status THEN iphostnm [DSC$W_LENGTH] = .ilen;
+
+    	IF .STATUS THEN
+    	    STATUS =  LOAD_MXCONFIG (%ASCID'MX_CONFIG', %ASCID'MX_DIR:.MXCFG', 0, CFG_M_SMTPINFO OR CFG_M_PATHLIST);
+
+    	IF .status AND .this_path NEQ MX_K_PATH_SMTP THEN
+    	BEGIN
+    	    EXTERNAL LITERAL MX__NOPATH;
+
+    	    path = .PATHLIST [QUE_L_HEAD];
+    	    WHILE .path NEQA PATHLIST DO
+    	    BEGIN
+    	    	IF .path [PATH_W_PATH] EQL .this_path THEN
+    	    	    IF .path [PATH_W_PARAM] NEQ 0 OR
+    	    	    	CH$FAIL (CH$FIND_CH (.path [PATH_W_DOMAIN], path [PATH_T_DOMAIN], %C'*')) THEN EXITLOOP;
+    	    	path = .path [PATH_L_FLINK];
+    	    END;
+
+    	    IF .path EQLA PATHLIST THEN SIGNAL_STOP (MX__NOPATH);
+
+    	    IF .path [PATH_W_PARAM] NEQ 0 THEN
+    	    	SMTP_FORCE_DEST (.path [PATH_W_PARAM], path [PATH_T_PARAM])
+    	    ELSE
+    	    	SMTP_FORCE_DEST (.path [PATH_W_DOMAIN], path [PATH_T_DOMAIN]);
+    	END;
+    END;
+
+    IF .SMTP_INFO [SMTP_V_ACCTG]
+    THEN
+    BEGIN
+    	STATUS = ACC_INIT (%ASCID'MX_SMTP_ACC', %ASCID'MX_SMTP_DIR:.DAT', .RSTMSK [RST_V_ACCTG]);
+    	IF NOT .STATUS THEN RETURN .STATUS;
+    END;
+
+    .STATUS
+
+END; ! INIT
+
+%SBTTL 'PROCESS'
+GLOBAL ROUTINE PROCESS (qctx, qent_a) = 
+BEGIN
+!++
+! FUNCTIONAL DESCRIPTION:
+!
+!   description
+!
+! RETURNS:  	cond_value, longword (unsigned), write only, by value
+!
+! PROTOTYPE:
+!
+!   PROCESS qctx, qent
+!
+! IMPLICIT INPUTS:  None.
+!
+! IMPLICIT OUTPUTS: None.
+!
+! COMPLETION CODES:
+!
+!   SS$_NORMAL:	    	normal successful completion.
+!
+! SIDE EFFECTS:	    None.
+!--
+    BIND
+    	QENT	= .QENT_A   : QENTDEF;
+
+    LOCAL
+    	defrtr	: BLOCK [DSC$K_S_BLN,BYTE],
+    	namedsc	: BLOCK [DSC$K_S_BLN,BYTE],
+    	namebuf	: VECTOR [16,BYTE],
+    	status;
+
+    TRACE_INIT ('smtp', 'smtp');
+
+    am_idle = 0;
+
+    TRACE ('===================================================');
+    TRACE ('Processing queue entry number !UL!AS!AS for path number !UL', .QENT [QENT_L_ENTNUM],
+    	    (IF .scsnode [DSC$W_LENGTH] NEQ 0 THEN %ASCID' on node ' ELSE %ASCID''), SCSNODE, .this_path);
+
+    INIT_SDESC (defrtr, .smtp_info [SMTP_W_DEFRTR], smtp_info [SMTP_T_DEFRTR]);
+
+    IF .this_path EQL MX_K_PATH_SMTP THEN
+    	INIT_SDESC (namedsc, 4, UPLIT ('SMTP'))
+    ELSE
+    BEGIN
+    	INIT_SDESC (namedsc, %ALLOCATION (namebuf), namebuf);
+    	$FAO (%ASCID'HOLD!UL', namedsc [DSC$W_LENGTH], namedsc,
+    	     .this_path-MX_K_PATH_HOLDQ_BASE+1);
+    END;
+    
+    SMTP_PROCESS_MESSAGE (.qctx, qent, MX_K_ORG_SMTP, namedsc,
+    	    	    	  defrtr, .smtp_info [SMTP_V_ACCTG],
+    	    	    	  .smtp_info [SMTP_L_MAXTRIES], .smtp_info [SMTP_L_MAXDNS], smtp_info [SMTP_Q_RETRY]);
+    IF .DEBUG THEN
+    BEGIN
+    	TRACE ('*** End of processing pass ***');
+    	TRACE_CLOSE;
+    END;
+
+    IF .smtp_info [SMTP_V_ACCTG] THEN ACC_FLUSH;
+
+    SS$_NORMAL
+
+END; ! PROCESS
+
+%SBTTL 'CLEAR_FWDREF'
+GLOBAL ROUTINE CLEAR_FWDREF (qent_a) = 
+BEGIN
+!++
+! FUNCTIONAL DESCRIPTION:
+!
+!   description
+!
+! RETURNS:  	cond_value, longword (unsigned), write only, by value
+!
+! PROTOTYPE:
+!
+!   x
+!
+! IMPLICIT INPUTS:  None.
+!
+! IMPLICIT OUTPUTS: None.
+!
+! COMPLETION CODES:
+!
+!   SS$_NORMAL:	    	normal successful completion.
+!
+! SIDE EFFECTS:	    None.
+!--
+    BIND
+    	qent	= .qent_a   : QENTDEF;
+
+    IF .this_agent EQL FLQ_K_MX_SMTP THEN
+    	qent [MXQ_L_SMTPREF] = 0
+    ELSE
+    BEGIN
+    	BIND fwdref = qent [MXQ_L_HOLDQREF_BASE] : VECTOR [,LONG];
+    	fwdref [.this_agent-FLQ_K_MX_HOLDQ_BASE] = 0;
+    END;
+
+    SS$_NORMAL
+
+END;  ! CLEAR_FWDREF
+
+%SBTTL 'close_connection'
+ROUTINE close_connection = 
+BEGIN
+!++
+! FUNCTIONAL DESCRIPTION:
+!
+!   description
+!
+! RETURNS:  	cond_value, longword (unsigned), write only, by value
+!
+! PROTOTYPE:
+!
+!   close_connection
+!
+! IMPLICIT INPUTS:  None.
+!
+! IMPLICIT OUTPUTS: None.
+!
+! COMPLETION CODES:
+!
+!   SS$_NORMAL:	    	normal successful completion.
+!
+! SIDE EFFECTS:	    None.
+!--
+    BIND
+    	mxname	= config [CFG_Q_MXNODE]	    : BLOCK [,BYTE];
+
+    LOCAL
+    	path	: REF PATHDEF,
+    	txt 	: REF TXTDEF;
+
+    IF .am_idle THEN
+    	shutdown_flag = 1
+    ELSE
+    BEGIN
+    	IF .do_etrn THEN
+    	BEGIN
+    	    IF QUEUE_EMPTY (etrnque) THEN
+    	    BEGIN
+    	    	SMTP_SEND_ETRN (.mxname [DSC$W_LENGTH], .mxname [DSC$A_POINTER], 0);
+    	    	SMTP_SEND_ETRN (.iphostnm [DSC$W_LENGTH], .iphostnm [DSC$A_POINTER], 1);
+    	    END
+    	    ELSE
+    	    BEGIN
+    	    	txt = .etrnque [QUE_L_HEAD];
+    	    	WHILE .txt NEQA etrnque DO
+    	    	BEGIN
+    	    	    SMTP_SEND_ETRN (.txt [TXT_W_LEN], txt [TXT_T_TEXT], 0);
+    	    	    txt = .txt [TXT_L_FLINK];
+    	    	END;
+    	    END;
+    	END;
+    	am_idle = 1;
+    END;
+
+    SMTP_CLOSE_FORCED_DEST (.shutdown_flag);
+    IF NOT .shutdown_flag THEN $SCHDWK (DAYTIM=exit_intvl);
+
+    SS$_NORMAL
+
+END; ! close_connection
+
+END
+ELUDOM

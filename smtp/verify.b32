@@ -1,0 +1,4135 @@
+%TITLE 'VERIFY'
+MODULE VERIFY (IDENT='V2.11', ADDRESSING_MODE (EXTERNAL=LONG_RELATIVE, NONEXTERNAL=LONG_RELATIVE)) =
+BEGIN
+!++
+! FACILITY: 	    VERIFY
+!
+! ABSTRACT: 	    Address verification code
+!
+! MODULE DESCRIPTION:
+!
+!   This module contains routines that use the router's address processing
+!   code to verify a recipient address for the SMTP server.
+!
+! AUTHOR:   	    M. Madison
+!
+! Copyright (c) 2008, Matthew Madison.
+! Copyright (c) 2012, Endless Software Solutions.
+! 
+! All rights reserved.
+! 
+! Redistribution and use in source and binary forms, with or without
+! modification, are permitted provided that the following conditions
+! are met:
+! 
+!     * Redistributions of source code must retain the above
+!       copyright notice, this list of conditions and the following
+!       disclaimer.
+!     * Redistributions in binary form must reproduce the above
+!       copyright notice, this list of conditions and the following
+!       disclaimer in the documentation and/or other materials provided
+!       with the distribution.
+!     * Neither the name of the copyright owner nor the names of any
+!       other contributors may be used to endorse or promote products
+!       derived from this software without specific prior written
+!       permission.
+! 
+! THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
+! "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
+! LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
+! A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
+! OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
+! SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
+! LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
+! DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
+! THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
+! (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
+! OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+!
+! CREATION DATE:    02-FEB-1997
+!
+! MODIFICATION HISTORY:
+!
+!   02-FEB-1997	V1.0	Madison	    Initial coding.
+!   17-FEB-1997	V1.1	Madison	    Add IS_SPAM routine.
+!   02-APR-1997	V1.2	Madison	    Local domain checks for relay prevention.
+!   08-MAY-1997	V1.2-1	Madison	    Fix reinit code.
+!   08-MAY-1997	V1.2-2	Madison	    Change locality to mean non-SMTP.
+!    3-JUN-1997 V1.2-3	Goatley     Free STR at end of VERIFY_ADDRESS.
+!   05-SEP-1997	V1.3	Madison	    Additional anti-spam measures.
+!   10-SEP-1997	V1.3-1	Madison	    Fix wildcard header comparisons.
+!   15-SEP-1997 V1.3-2	Goatley     Ignore X-MX-Warning headers in spam check.
+!   05-OCT-1997	V1.3-3	Madison	    Add VALIDATE_DOMAIN, VERIFY_RESET_CHECK.
+!    7-OCT-1997 V1.3-4	Goatley	    Add LOG_EVENT() call on RESETs.
+!   16-OCT-1997	V1.3-5	Madison	    Fix DID_ESPAM check on FORCE_FLUSH.
+!   16-NOV-1997	V1.3-6	Madison	    Local path also counts as local domain.
+!   03-DEC-1997	V1.4	Madison	    Add debugging code; fix <@> problem.
+!   05-DEC-1997	V1.4-1	Madison	    Debug levels to reduce output.
+!   13-DEC-1997	V1.4-2	Madison	    Modify IS_LOCAL_DOMAIN to be usable for
+!   	    	    	    	    /VALIDATE_DOMAIN checks; change VERIFY_ADDRESS
+!   	    	    	    	    to check for local domain both pre- and post-REWRITE.
+!   19-APR-1998	V1.5	Madison	    Local user routine now in MX_SHR.
+!   24-APR-1998	V1.6	Madison	    RBL check info moved to SMTP_INFO.
+!   17-MAY-1998	V1.7	Madison	    Incorporate SPAMFILTER checks.
+!   14-JUN-1998	V2.0	Madison	    SPAMFILTER config now in database.
+!   16-JUN-1998	V2.0-1	Madison	    Disable FROM-TO-SENDER check when sender is local.
+!   20-JUN-1998	V2.0-2	Madison	    Add heuristic debug info, fix hotmail checks.
+!   26-JUN-1998	V2.0-3	Madison	    Add anti-relay bypass.
+!   29-JUN-1998	V2.1	Madison	    Enhanced status codes.
+!   16-JUL-1998	V2.1-1	Madison	    Allow for logging of spam even when forwarded.
+!   21-JUL-1998	V2.1-2	Madison	    Fix bug in hotmail check, dbgprt() statements.
+!   05-AUG-1998	V2.1-3	Madison	    Fix bug in header_match.
+!   15-AUG-1998	V2.1-4	Madison	    Parse To: address to strengthen FROM_TO_SENDER_SAME check.
+!   29-AUG-1998	V2.2	Madison	    Add ETRN_CHECK.
+!   13-SEP-1998	V2.2-1	Madison	    Tighten FROM_TO_SENDER_SAME (single To: address, no CC or BCC hdrs)
+!   31-OCT-1999	V2.3	Madison	    Add callout for identifying inside network addresses.
+!   13-NOV-1999	V2.3-1	Madison	    Fix AOL address check, tighten MSGID_CONTAINS_TO,
+!   	    	    	    	    remove origiphdr check on Hotmail addresses for now.
+!   30-JAN-2000	V2.3-2	Madison	    More holding queues.
+!   25-JUN-2000	V2.3-3	Madison	    MX_LOCAL_FORWARDER.
+!   25-NOV-2000	V2.4	Madison	    Header for X-Junk-Mail-Rating and -Reason; remove JNET support; more RBLs.
+!   11-DEC-2000	V2.4-1	Madison	    Flush debug log.
+!   17-DEC-2000	V2.5	Madison	    Add authentication callout; add new ADDRESS_REWRITER hook.
+!   28-JAN-2001 V2.5-1  Madison     Add "reason" argument to IS_SPAM_HEADER for text of matching rule.
+!   22-FEB-2001 V2.5-2  Madison     Fix ACCVIO.
+!   25-FEB-2001 V2.5-3  Madison     Differentiate between src and dest domains in IS_LOCAL_DOMAIN.
+!   10-MAR-2001 V2.5-4  Madison     Fix ACCVIO in debug code.
+!   25-SEP-2001 V2.5-5  Madison     Just call $HASH_PASSWORD.
+!   20-OCT-2001 V2.5-6  Madison     Prevent uninitialized variables from triggering unwanted accepts.
+!   14-FEB-2002 V2.6    Madison     SMTP percent hack check, rejection rule IDs, regex.
+!   09-MAR-2003 V2.7    Madison     Use time interval to control when to update spam database.
+!   20-SEP-2003 V2.8    Madison     Address validation for invalid-domain check.
+!   10-NOV-2004 V2.9    Madison     IA64 support.
+!   15-MAR-2010 V2.10   Sneddon     Added support for new heuristics.
+!   06-MAY-2010 V2.10-1 Sneddon	    Now dragging NETLIB from NETLIB_DIR.
+!   16-JUL-2012 V2.11   Sneddon	    ADD REJ/HEAD/ACCEPT support.
+!--
+
+    LIBRARY 'SYS$LIBRARY:STARLET';
+    LIBRARY 'NETLIB_DIR:NETLIBDEF';
+    LIBRARY 'MX_SRC_COMMON:MX';
+    LIBRARY 'MX_SRC_COMMON:MX_LCLDEFS';
+    LIBRARY 'MX_SRC_COMMON:ROUTER';
+    LIBRARY 'MX_SRC_COMMON:FIELDS';
+    LIBRARY 'MX_SRC_COMMON:REGEX';
+    LIBRARY 'SMTP_CODES';
+
+    FORWARD ROUTINE
+    	VERIFY_INIT,
+    	VALIDATE_DOMAIN,
+    	auth_cram_enabled,
+    	auth_plain_enabled,
+    	VERIFY_RESET_CHECK,
+    	VERIFY_BEGIN,
+    	VERIFY_END,
+    	VERIFY_ADDRESS,
+    	IS_LOCAL_ADDRESS,
+    	IS_SPAM,
+    	IS_SPAM_TO,
+    	espam_match,
+    	IS_SPAM_HEADER,
+    	IS_SPAM_HEADER_COMBINATION,
+    	IS_LOCAL_DOMAIN,
+        has_valid_addresses,
+        match_regex,
+    	match_wild,
+    	validate_aol_address,
+    	validate_hotmail_address,
+    	validate_local_part,
+    	is_excluded,
+    	header_match,
+    	ETRN_CHECK,
+    	user_authenticate,
+    	user_auth_close	    : NOVALUE,
+    	vms_authenticate,
+    	hash_password,
+    	update_evasion_list : NOVALUE,
+    	do_accounting	    : NOVALUE,
+    	accept_check_init,
+    	accept_check,
+        accept_check_hello,
+    	accept_check_cleanup,
+    	find_image_symbol;
+
+    EXTERNAL ROUTINE
+    	REWRITE_INIT,
+    	REWRITE,
+    	REWRITE_VIRTUAL_DOMAIN,
+    	FINDPATH,
+    	FINDALIAS,
+    	LOAD_MXCONFIG,
+    	SAVE_ESPAMDB,
+    	MLF_REQUEST,
+    	G_HAT (STR$CONCAT, STR$COPY_DX, STR$POSITION, STR$COPY_R, STR$PREFIX, STR$APPEND,
+    	       STR$UPCASE, STR$TRANSLATE, STR$MATCH_WILD, STR$CASE_BLIND_COMPARE),
+    	G_HAT (LIB$GET_VM, LIB$FREE_VM, LIB$ANALYZE_SDESC, LIB$SYS_FAO,
+    	       LIB$GETJPI, LIB$CVT_DTB, LIB$SCOPY_DXDX, LIB$SCOPY_R_DX,
+    	       LIB$FIND_IMAGE_SYMBOL, LIB$EMUL, LIB$ADD_TIMES, LIB$SUB_TIMES),
+    	G_HAT (PARSE821, FORMAT821, FORMAT_HDR, LOG_EVENT),
+    	G_HAT (NETLIB_ADDRTOSTR, NETLIB_STRTOADDR, NETLIB_NTOH_WORD),
+    	G_HAT (MX_LOCAL_USER_INIT, MX_LOCAL_USER, MX_LOCAL_USER_FINISH),
+    	G_HAT (MX_FILE_OPEN, MX_FILE_CLOSE, MX_FILE_WRITE, PARSE_MBOX, PARSE_ADDRLIST),
+    	G_HAT (MEM_GETRCPT, MEM_FREERCPT, MX_FMT_LCL_ADDR, MEM_GETTXT, MX_FILE_FLUSH),
+        G_HAT (MTH$RANDOM);
+
+    EXTERNAL LITERAL
+    	MX__NOPATH, MX__AUTHFAIL, LIB$_NORMAL;
+
+    GLOBAL
+    	RWRULES	    : QUEDEF,
+    	PATHLIST    : QUEDEF,
+    	ALIASES	    : QUEDEF,
+    	MLISTS	    : QUEDEF,
+    	FSRVQUE	    : QUEDEF,
+    	LCLDOMS	    : QUEDEF,
+    	ESPAMQUE    : QUEDEF,
+    	ROUTER_INFO : ROUTERDEF,
+    	SMTP_INFO   : SMTPDEF,
+    	RELAYQUE    : QUEDEF,
+    	GHEUR_INFO  : GHEURDEF,
+    	HEURTBL	    : HEURDEF_ARRAY (HEUR_K_COUNT),
+        SPAMLASTID  : LONG;
+
+    EXTERNAL
+    	MAILNAME    : BLOCK [DSC$K_S_BLN,BYTE],
+    	HOSTNAME    : BLOCK [DSC$K_S_BLN,BYTE],
+    	PRCNAM	    : BLOCK [DSC$K_S_BLN,BYTE],
+    	rblque	    : QUEDEF,
+    	RESET_MASK,
+	PID,
+    	rbl_check;
+
+    LITERAL
+    	NUMEXCEPT_K_COUNT   = 3,
+    	EVR_S_USERNAME	    = 32;
+
+    _DEF (EVR)
+    	EVR_L_FLINK 	= _LONG,
+    	EVR_L_BLINK 	= _LONG,
+    	EVR_Q_EXPIRY	= _QUAD,
+    	EVR_Q_EVEXPIRY	= _QUAD,
+    	EVR_L_FAILURES	= _LONG,
+    	EVR_L_FLAGS 	= _LONG,
+    	_OVERLAY (EVR_L_FLAGS)
+    	    EVR_V_EVASION   = _BIT,
+    	_ENDOVERLAY
+    	EVR_L_IPADDR	= _LONG,
+    	EVR_W_USERNAME	= _WORD,
+    	EVR_T_USERNAME	= _BYTES (EVR_S_USERNAME)
+    _ENDDEF (EVR);
+
+    OWN
+    	EVRQUE	    	: QUEDEF,
+    	CALLER_COUNT	: INITIAL (0),
+    	MAICTX	    	: INITIAL (0),
+    	ESPAMFILE   	: BLOCK [DSC$K_S_BLN,BYTE],
+    	ESPAMRDT    	: VECTOR [2,LONG],
+        SPAMUPDINTVL    : VECTOR [2,LONG],
+        SPAMLASTUPD     : VECTOR [2,LONG],
+    	DID_ESPAM   	: INITIAL (0),
+    	SPAMDBG	    	: INITIAL (0),
+    	DBGLVL	    	: INITIAL (0),
+    	DUNIT	    	: INITIAL (0),
+    	lclchk_init 	: INITIAL (0),
+    	lclchk_check 	: INITIAL (0),
+    	lclchk_clup 	: INITIAL (0),
+    	lclchk_ctx  	: INITIAL (0),
+    	auth_init   	: INITIAL (0),
+    	auth_auth	: INITIAL (0),
+    	auth_acctg  	: INITIAL (0),
+    	auth_clup   	: INITIAL (0),
+    	auth_ident  	: INITIAL (0),
+    	accchk_init 	: INITIAL (0),
+    	accchk_check	: INITIAL (0),
+        accchk_hello    : INITIAL (0),
+    	accchk_clup 	: INITIAL (0),
+    	DBGBUF	    	: VECTOR [512,BYTE],
+    	numexcept   	: VECTOR [NUMEXCEPT_K_COUNT,LONG] INITIAL (
+    	    	    	    %ASCID'MCIMAIL.COM', %ASCID'IBMMAIL.COM', %ASCID'SKYTEL.COM'),
+    	heurnam   	: VECTOR [HEUR_K_COUNT,LONG] INITIAL (
+    	    	    	    %ASCID'NULL_FROM', %ASCID'NULL_TO', %ASCID'FROM_TO_SENDER_SAME',
+    	    	    	    %ASCID'MSGID_HAS_TO', %ASCID'INVALID_AOL_ADDRESS', %ASCID'NUMERIC_ADDRESS',
+    	    	    	    %ASCID'RECEIVED_AFTER_FROM', %ASCID'X_UIDL', %ASCID'NULL_MSGID',
+    	    	    	    %ASCID'INVALID_HOTMAIL_ADDRESS', %ASCID'RECEIVED_ALL_ZEROS', %ASCID'UIDL_AUTH_SENDER',
+    	    	    	    %ASCID'PRECEDENCE_BULK', %ASCID'MSGID_HAS_FROM', %ASCID'INVALID_FROM',
+                            %ASCID'INVALID_TO', %ASCID'FROM_BAD_LOCAL_USER', %ASCID'FROM_USER_MSGID_HOST'),
+        vmsaaaid;
+
+    BIND
+    	lnm_system_d	= %ASCID'LNM$SYSTEM'	: BLOCK [DSC$K_S_BLN,BYTE],
+        lnm_file_dev_d  = %ASCID'LNM$FILE_DEV'  : BLOCK [DSC$K_S_BLN,BYTE],
+    	auth_img_d  	= %ASCID'MX_SITE_SMTP_AUTHENTICATION' : BLOCK [DSC$K_S_BLN,BYTE],
+    	lcl_net_chk_d	= %ASCID'MX_SITE_LOCAL_NETWORK_CHECK' : BLOCK [DSC$K_S_BLN,BYTE],
+    	accept_chk_d	= %ASCID'MX_SITE_CLIENT_ACCESS_CHECK' : BLOCK [DSC$K_S_BLN,BYTE],
+        spamupd_intvl_d = %ASCID'MX_ANTI_SPAM_UPDATE_INTERVAL' : BLOCK [DSC$K_S_BLN,BYTE],
+    	alnum	    	= %ASCID'ABCDEFGHIJKLMNOPQRSTUVXWYZabcdefghijklmnopqrstuvxwyz0123456789' : BLOCK [DSC$K_S_BLN,BYTE];
+
+    MACRO
+    	dbgprt (_level, _ctrstr) [] =
+    	BEGIN
+    	    IF .spamdbg AND .dbglvl GEQ _level THEN
+    	    BEGIN
+    	    	LOCAL
+    	    	    __dbgfao	: BLOCK [DSC$K_S_BLN,BYTE];
+    	    	INIT_SDESC (__dbgfao, %ALLOCATION (dbgbuf), dbgbuf);
+    	    	$FAO (%ASCID %STRING ('!%D <anti-spam>: ', _ctrstr),
+    	    	    	__dbgfao [DSC$W_LENGTH], __dbgfao, 0
+    	    	    	%IF NOT %NULL (%REMAINING) %THEN , %REMAINING %FI);
+    	    	MX_FILE_WRITE (.dunit, __dbgfao);
+    	    END;
+    	END%;
+
+%SBTTL 'VERIFY_INIT'
+GLOBAL ROUTINE VERIFY_INIT (REINIT) = 
+BEGIN
+!++
+! FUNCTIONAL DESCRIPTION:
+!
+!   Initializes the verification code.
+!
+! RETURNS:  	cond_value, longword (unsigned), write only, by value
+!
+! PROTOTYPE:
+!
+!   x
+!
+! IMPLICIT INPUTS:  None.
+!
+! IMPLICIT OUTPUTS: None.
+!
+! COMPLETION CODES:
+!
+!   SS$_NORMAL:	    	normal successful completion.
+!
+! SIDE EFFECTS:
+!
+!   None.
+!--
+    BUILTIN
+        CVTLF, CVTFL, MULF;
+
+    LOCAL
+	R   	: REF RULEDEF,
+	F   	: REF FSRVDEF,
+	P   	: REF PATHDEF,
+	M   	: REF MLSTDEF,
+    	L   	: REF LCLDOMDEF,
+    	E   	: REF EXTSPAMDEF,
+    	RY  	: REF RELAYDEF,
+    	T   	: REF TXTDEF,
+    	lnmbuf 	: BLOCK [128,BYTE],
+    	lnmlst	: $ITMLST_DECL (ITEMS=1),
+    	lnmlen	: WORD,
+        update_ids,
+	STATUS;
+
+    status = SS$_NORMAL;
+
+    IF .REINIT THEN
+    BEGIN
+	LOCAL
+	    buff	: $BBLOCK [255],
+	    buff_d	: $BBLOCK [DSC$K_S_BLN];
+
+	INIT_SDESC (buff_d, %ALLOCATION(buff), buff);
+	LIB$SYS_FAO (%ASCID'!AS (pid !XL) resetting', buff_d, buff_d, PRCNAM, .PID);
+	LOG_EVENT (buff_d);
+
+    	WHILE NOT REMQUE_HEAD (smtp_info [SMTP_Q_RBLQUE], t) DO
+    	    FREETXT (t);
+	WHILE NOT REMQUE (.RWRULES [QUE_L_HEAD], R) DO
+        BEGIN
+            IF .r [RULE_A_LHSREGEX] NEQA 0 THEN
+            BEGIN
+                MX_REGFREE(.r [RULE_A_LHSREGEX]);
+                LIB$FREE_VM (%REF (REGEX_S_REGEXDEF), r [RULE_A_LHSREGEX]);
+            END;
+            FREETXT (r [RULE_A_LHS], r [RULE_A_RHS]);
+	    LIB$FREE_VM (%REF (RULE_S_RULEDEF), R);
+        END;
+	WHILE NOT REMQUE (.ALIASES [QUE_L_HEAD], R) DO
+	    LIB$FREE_VM (%REF (RULEPRE53_S_RULEPRE53DEF), R);
+	WHILE NOT REMQUE (.FSRVQUE [QUE_L_HEAD], F) DO
+	    LIB$FREE_VM (%REF (FSRV_S_FSRVDEF), F);
+	WHILE NOT REMQUE (.PATHLIST [QUE_L_HEAD], P) DO
+	    LIB$FREE_VM (%REF (PATH_S_PATHDEF), P);
+	WHILE NOT REMQUE (.MLISTS [QUE_L_HEAD], M) DO
+	    LIB$FREE_VM (%REF (MLST_S_MLSTDEF), M);
+    	WHILE NOT REMQUE (.LCLDOMS [QUE_L_HEAD], L) DO
+    	    LIB$FREE_VM (%REF (LCLDOM_S_LCLDOMDEF), L);
+    	WHILE NOT REMQUE (.RELAYQUE [QUE_L_HEAD], L) DO
+    	    LIB$FREE_VM (%REF (RELAY_S_RELAYDEF), RY);
+    	WHILE NOT REMQUE_HEAD (gheur_info [GHEUR_Q_GBLEXCL], t) DO
+    	    FREETXT (t);
+    	INCR i FROM 0 TO HEUR_K_COUNT-1 DO
+    	    WHILE NOT REMQUE_HEAD (HEURTBL [.i,HEUR_Q_EXCL], t) DO
+    	    	FREETXT (t);
+
+    	IF .DID_ESPAM NEQ 0 THEN
+    	BEGIN
+    	    dbgprt (1, 'Updating rejection database.');
+    	    status = SAVE_ESPAMDB (ESPAMFILE, ESPAMRDT, 0, 1);
+    	    IF NOT .status THEN
+    	    	dbgprt (1, 'Status=!XL writing rejection database !AS (rdt=!%D)',
+    	    	    	    .status, espamfile, espamrdt);
+    	    status = SS$_NORMAL;
+    	END;
+    	IF .MAICTX NEQU 0 THEN MX_LOCAL_USER_FINISH (MAICTX);
+    	IF .lclchk_clup NEQA 0 AND .lclchk_ctx NEQU 0 THEN
+    	    (.lclchk_clup) (lclchk_ctx);
+    	lclchk_ctx = 0;
+    END
+    ELSE
+    BEGIN
+    	lclchk_ctx = 0;
+	INIT_QUEUE (RWRULES, PATHLIST, ALIASES, MLISTS, FSRVQUE, LCLDOMS, ESPAMQUE, RELAYQUE, EVRQUE);
+    	espamrdt [0] = espamrdt [1] = 0;
+    	$INIT_DYNDESC (ESPAMFILE);
+
+    	$ITMLST_INIT (itmlst=lnmlst,
+    	    	    	(ITMCOD=LNM$_STRING, BUFADR=lnmbuf, BUFSIZ=%ALLOCATION (lnmbuf), RETLEN=lnmlen));
+    	status = $TRNLNM (LOGNAM=%ASCID'MX_SMTP_AUTH_IDENTIFIER', TABNAM=lnm_system_d, ACMODE=%REF (PSL$C_EXEC),
+    	    	    	  ITMLST=lnmlst);
+    	IF .status AND .lnmlen GTRU 0 THEN
+    	BEGIN
+    	    LOCAL
+    	    	dsc 	: BLOCK [DSC$K_S_BLN,BYTE];
+    	    INIT_SDESC (dsc, .lnmlen, lnmbuf);
+    	    IF NOT $ASCTOID (NAME=dsc, ID=auth_ident) THEN
+    	    	auth_ident = 0;
+    	END;
+    	status = $TRNLNM (LOGNAM=accept_chk_d, TABNAM=lnm_file_dev_d);
+    	IF .status THEN
+    	    status = find_image_symbol (accept_chk_d, %ASCID'INIT', accchk_init);
+    	IF .status THEN
+    	BEGIN
+    	    status = find_image_symbol (accept_chk_d, %ASCID'CHECK', accchk_check);
+            IF NOT find_image_symbol (accept_chk_d, %ASCID'CHECK_HELLO', accchk_hello) THEN
+                accchk_hello = 0;
+    	    IF .status THEN
+    	    	status = find_image_symbol (accept_chk_d, %ASCID'CLEANUP', accchk_clup);
+    	END;
+    	IF NOT .status THEN
+    	    accchk_init = accchk_check = accchk_hello = accchk_clup = 0;
+
+    	status = $TRNLNM (LOGNAM=lcl_net_chk_d, TABNAM=lnm_file_dev_d);
+    	IF .status THEN
+    	    status = find_image_symbol (lcl_net_chk_d, %ASCID'INIT', lclchk_init);
+    	IF .status THEN
+    	BEGIN
+    	    status = find_image_symbol (lcl_net_chk_d, %ASCID'CHECK', lclchk_check);
+    	    IF .status THEN
+    	    	status = find_image_symbol (lcl_net_chk_d, %ASCID'CLEANUP', lclchk_clup);
+    	END;
+    	IF NOT .status THEN
+    	    lclchk_init = lclchk_check = lclchk_clup = 0;
+    	status = $TRNLNM (LOGNAM=auth_img_d, TABNAM=lnm_file_dev_d);
+    	IF .status THEN
+    	    status = find_image_symbol (auth_img_d, %ASCID'INIT', auth_init);
+    	IF .status THEN
+    	BEGIN
+    	    status = find_image_symbol (auth_img_d, %ASCID'AUTHENTICATE', auth_auth);
+    	    IF .status THEN
+    	    	status = find_image_symbol (auth_img_d, %ASCID'CLEANUP', auth_clup);
+    	    IF NOT find_image_symbol (auth_img_d, %ASCID'ACCOUNTING', auth_acctg) THEN
+    	    	auth_acctg = 0;
+    	END;
+    	IF NOT .status THEN 
+    	    auth_init = auth_auth = auth_clup = auth_acctg = 0;
+    	status = 1;
+        BEGIN
+            LOCAL
+                seed        : VECTOR [2],
+                max_f, rand_f, prod_f;
+            CVTLF(%REF (1000000), max_f);
+            $GETTIM (TIMADR=seed);
+%IF %BLISS (BLISS32V) %THEN
+            rand_f = MTH$RANDOM (seed [0]);
+%ELSE
+            MTH$RANDOM (seed [0]; %FFLOAT (rand_f));
+%FI
+            MULF (max_f, rand_f, prod_f);
+            CVTFL (prod_f, vmsaaaid);
+        END;
+    END;
+
+    IF .spamdbg AND .dunit NEQ 0 THEN
+    BEGIN
+    	MX_FILE_CLOSE (.dunit);
+    	dunit = 0;
+    END;
+    $ITMLST_INIT (ITMLST=lnmlst,
+    	    	  (ITMCOD=LNM$_STRING, BUFADR=lnmbuf, BUFSIZ=%ALLOCATION (lnmbuf), RETLEN=lnmlen));
+    spamdbg = $TRNLNM (TABNAM=%ASCID'LNM$FILE_DEV', LOGNAM=%ASCID'MX_ANTI_SPAM_DEBUG', ITMLST=lnmlst);
+    IF .spamdbg THEN
+    BEGIN
+    	LOCAL
+    	    tmp	    : VECTOR [256,BYTE],
+    	    tmpdsc  : BLOCK [DSC$K_S_BLN,BYTE],
+    	    pid;
+    	dbglvl = 0;
+    	LIB$CVT_DTB (.lnmlen, lnmbuf, dbglvl);
+    	IF .dbglvl EQL 0 THEN dbglvl = 1;
+    	INIT_SDESC (tmpdsc, %ALLOCATION (tmp), tmp);
+    	LIB$GETJPI (%REF (JPI$_PID), 0, 0, pid);
+    	$FAO (%ASCID'MX_SMTP_DIR:.LOG_!XL', tmpdsc [DSC$W_LENGTH], tmpdsc, .pid);
+	IF NOT MX_FILE_OPEN (MX__FILE_APPEND OR MX_M_CIF OR MX_M_SHARE,
+    	    	    	    	%ASCID'MX_ANTI_SPAM_LOG', DUNIT, tmpdsc) THEN
+    	BEGIN
+    	    spamdbg = 0;
+    	    dunit = 0;
+    	END;
+    END;
+
+    IF .status THEN
+    BEGIN
+        $ITMLST_INIT (ITMLST=lnmlst,
+    	    	     (ITMCOD=LNM$_STRING, BUFADR=lnmbuf, BUFSIZ=%ALLOCATION (lnmbuf), RETLEN=lnmlen));
+        status = $TRNLNM (TABNAM=%ASCID'LNM$FILE_DEV', LOGNAM=spamupd_intvl_d, ITMLST=lnmlst);
+        IF .status THEN
+        BEGIN
+            LOCAL tdsc : BLOCK [DSC$K_S_BLN,BYTE];
+            INIT_SDESC (tdsc, .lnmlen, lnmbuf);
+            status = $BINTIM (TIMADR=spamupdintvl, TIMBUF=tdsc);
+            ! Must be delta-time (i.e., negative)
+            IF .status THEN
+                IF .spamupdintvl [1] GEQ 0 THEN
+                    status = 0;
+        END;
+        IF NOT .status THEN
+            status = $BINTIM (TIMADR=spamupdintvl, TIMBUF=%ASCID'0 01:00:00.00');
+
+        dbgprt (1, 'Rejection database update interval: !%T', spamupdintvl);
+
+    END;
+
+    IF .STATUS THEN
+    BEGIN
+    	STATUS = LOAD_MXCONFIG (%ASCID'MX_CONFIG', %ASCID'MX_DIR:.MXCFG', 0,
+	                       CFG_M_RWRULES OR CFG_M_PATHLIST OR CFG_M_ALIASES OR CFG_M_MLISTS
+	    	    	       OR CFG_M_FSRVINFO OR CFG_M_ROUTERINFO 
+    	    	    	       OR CFG_M_SMTPINFO OR CFG_M_LCLDOMS OR CFG_M_RELAYS);
+    	IF NOT .status THEN
+    	    dbgprt (1, 'Status=!XL loading MX_CONFIG', .status);
+    END;
+
+    DID_ESPAM = 0;
+
+    IF .STATUS THEN
+    BEGIN
+    	LOCAL e : REF EXTSPAMDEF;
+    	STATUS = LOAD_MXCONFIG (%ASCID'MX_REJECTION_DATABASE', %ASCID'MX_DIR:.MXCFG',
+    	    	    	    	ESPAMFILE, CFG_M_EXTSPAM OR CFG_M_SPAMHEUR, ESPAMRDT);
+    	IF NOT .status THEN
+    	BEGIN
+    	    dbgprt (1, 'Status=!XL loading MX_REJECTION_DATABASE', .status);
+    	    WHILE NOT REMQUE (.ESPAMQUE [QUE_L_HEAD], E) DO
+    	    BEGIN
+    	    	IF .E [EXTSPAM_A_IPMATCH] NEQA 0 THEN FREETXT (E [EXTSPAM_A_IPMATCH]);
+    	    	IF .E [EXTSPAM_A_FRMATCH] NEQA 0 THEN FREETXT (E [EXTSPAM_A_FRMATCH]);
+    	    	IF .E [EXTSPAM_A_TOMATCH] NEQA 0 THEN FREETXT (E [EXTSPAM_A_TOMATCH]);
+    	    	IF .E [EXTSPAM_A_HDMATCH] NEQA 0 THEN FREETXT (E [EXTSPAM_A_HDMATCH]);
+                IF .E [EXTSPAM_A_FRREGEX] NEQA 0 THEN
+                BEGIN
+                    MX_REGFREE (.E [EXTSPAM_A_FRREGEX]);
+                    LIB$FREE_VM (%REF (REGEX_S_REGEXDEF), E [EXTSPAM_A_FRREGEX]);
+                END;
+                IF .E [EXTSPAM_A_TOREGEX] NEQA 0 THEN
+                BEGIN
+                    MX_REGFREE (.E [EXTSPAM_A_TOREGEX]);
+                    LIB$FREE_VM (%REF (REGEX_S_REGEXDEF), E [EXTSPAM_A_TOREGEX]);
+                END;
+                IF .E [EXTSPAM_A_HDREGEX] NEQA 0 THEN
+                BEGIN
+                    MX_REGFREE (.E [EXTSPAM_A_HDREGEX]);
+                    LIB$FREE_VM (%REF (REGEX_S_REGEXDEF), E [EXTSPAM_A_HDREGEX]);
+                END;
+    	    	LIB$FREE_VM (%REF (EXTSPAM_S_EXTSPAMDEF), E);
+    	    END;
+    	END;
+    	IF .STATUS EQL RMS$_FNF THEN STATUS = SS$_NORMAL;
+
+! If we have any EXTSPAM records, zero out the reference count.  When we do the
+! update, our counts will be added to the existing counts in the on-disk database.
+
+        update_ids = .spamlastid EQLU 0;
+
+    	e = .ESPAMQUE [QUE_L_HEAD];
+    	WHILE .e NEQA ESPAMQUE DO
+    	BEGIN
+    	    e [EXTSPAM_L_REFCNT] = 0;
+            IF .update_ids THEN
+            BEGIN
+                spamlastid = .spamlastid + 1;
+                e [EXTSPAM_L_RULEID] = .spamlastid;
+            END;
+    	    e = .e [EXTSPAM_L_FLINK];
+    	END;
+
+        $GETTIM (TIMADR=SPAMLASTUPD);
+    	    
+    END;
+
+    IF .STATUS THEN
+	STATUS = REWRITE_INIT (.REINIT);
+
+    IF .STATUS THEN
+    	STATUS = MX_LOCAL_USER_INIT (MAICTX);
+
+    IF .status THEN
+    BEGIN
+    	LOCAL
+    	    aststat;
+
+    	!+
+    	!   Disable ASTs - the rbl_XXX globals can be accessed
+    	!   from both AST and non-AST level.
+    	!-
+    	aststat = $SETAST (ENBFLG=0);
+
+    	rbl_check = .smtp_info [SMTP_V_RBL];
+    	WHILE NOT REMQUE (.rblque [QUE_L_HEAD], t) DO
+    	    FREETXT (t);
+
+    	IF .smtp_info [SMTP_V_RBL] THEN
+    	BEGIN
+    	    BIND smtp_rblque = smtp_info [SMTP_Q_RBLQUE] : QUEDEF;
+    	    t = .smtp_rblque [QUE_L_HEAD];
+    	    WHILE .t NEQA smtp_rblque DO
+    	    BEGIN
+    	    	LOCAL t2 : REF TXTDEF;
+    	    	t2 = mem_gettxt (.t [TXT_W_LEN], t [TXT_T_TEXT]);
+    	    	INSQUE (.t2, .rblque [QUE_L_TAIL]);
+    	    	t = .t [TXT_L_FLINK];
+    	    END;
+    	    IF queue_empty (rblque) THEN
+            BEGIN
+                dbgprt (1, 'No RBL domains specified, disabling RBL checks');
+                smtp_info [SMTP_V_RBL] = 0;
+            END;
+    	END;
+
+    	IF .aststat EQL SS$_WASSET THEN $SETAST (ENBFLG=1);
+
+    END;
+
+    IF .status AND (.lclchk_init NEQA 0) THEN
+    BEGIN
+    	status = (.lclchk_init) (lclchk_ctx);
+    	IF NOT .status THEN
+    	    lclchk_ctx = 0;
+    END;
+
+    dbgprt (1, 'Final status from VERIFY_INIT: !XL', .status);
+
+    .STATUS
+
+END; ! VERIFY_INIT
+
+%SBTTL 'VALIDATE_DOMAIN'
+GLOBAL ROUTINE VALIDATE_DOMAIN = 
+BEGIN
+!++
+! FUNCTIONAL DESCRIPTION:
+!
+!   Returns value of SMTP_INFO [SMTP_V_VALDOM].
+!
+! RETURNS:  	1 or 0
+!
+! PROTOTYPE:
+!
+!   VALIDATE_DOMAIN
+!
+! IMPLICIT INPUTS:  None.
+!
+! IMPLICIT OUTPUTS: None.
+!
+! COMPLETION CODES: 1, 0.
+!
+! SIDE EFFECTS:
+!
+!   None.
+!--
+    LOCAL
+    	STATUS;
+
+    IF .CALLER_COUNT EQL 0 THEN
+    BEGIN
+    	IF .RESET_MASK NEQ 0 THEN
+    	BEGIN
+    	    STATUS = VERIFY_INIT (1);
+    	    IF NOT .STATUS THEN RETURN 0;
+    	    RESET_MASK = 0;
+    	END;
+    END;
+
+    .SMTP_INFO [SMTP_V_VALDOM]
+
+END; ! VALIDATE_DOMAIN
+
+%SBTTL 'auth_cram_enabled'
+GLOBAL ROUTINE auth_cram_enabled = 
+BEGIN
+!++
+! FUNCTIONAL DESCRIPTION:
+!
+!   Returns value of SMTP_INFO [SMTP_V_VALDOM].
+!
+! RETURNS:  	1 or 0
+!
+! PROTOTYPE:
+!
+!   auth_cram_enabled
+!
+! IMPLICIT INPUTS:  None.
+!
+! IMPLICIT OUTPUTS: None.
+!
+! COMPLETION CODES: 1, 0.
+!
+! SIDE EFFECTS:
+!
+!   None.
+!--
+    .SMTP_INFO [SMTP_V_AUTHCRAM]
+
+END; ! auth_cram_enabled
+
+%SBTTL 'auth_plain_enabled'
+GLOBAL ROUTINE auth_plain_enabled = 
+BEGIN
+!++
+! FUNCTIONAL DESCRIPTION:
+!
+!   Returns value of SMTP_INFO [SMTP_V_VALDOM].
+!
+! RETURNS:  	1 or 0
+!
+! PROTOTYPE:
+!
+!   auth_plain_enabled
+!
+! IMPLICIT INPUTS:  None.
+!
+! IMPLICIT OUTPUTS: None.
+!
+! COMPLETION CODES: 1, 0.
+!
+! SIDE EFFECTS:
+!
+!   None.
+!--
+
+    .SMTP_INFO [SMTP_V_AUTHPLAIN]
+
+END; ! auth_cram_enabled
+
+%SBTTL 'VERIFY_RESET_CHECK'
+GLOBAL ROUTINE VERIFY_RESET_CHECK (shutting_down) = 
+BEGIN
+!++
+! FUNCTIONAL DESCRIPTION:
+!
+!   Checks to see if configuration needs to be reloaded.
+!
+! RETURNS:  	cond_value
+!
+! PROTOTYPE:
+!
+!   VERIFY_RESET_CHECK
+!
+! IMPLICIT INPUTS:  None.
+!
+! IMPLICIT OUTPUTS: None.
+!
+! COMPLETION CODES: See code.
+!
+! SIDE EFFECTS:
+!
+!   None.
+!--
+    LOCAL
+    	force_flush,
+    	STATUS;
+
+    dbgprt (1, 'in VERIFY_RESET_CHECK...');
+    dbgprt (1, '    shutting_down=!UL', .shutting_down);
+    dbgprt (1, '    reset_mask=!XL', .reset_mask);
+    dbgprt (1, '    rejection count=!UL', .did_espam);
+
+    IF .CALLER_COUNT EQL 0 THEN
+    BEGIN
+    	force_flush = .shutting_down;
+    	IF .RESET_MASK NEQ 0 THEN
+    	BEGIN
+    	    STATUS = VERIFY_INIT (1);
+    	    IF NOT .STATUS THEN RETURN .STATUS;
+    	    RESET_MASK = 0;
+    	    force_flush = 1;
+    	END;
+
+        IF NOT .force_flush AND .did_espam NEQ 0 THEN
+        BEGIN
+            LOCAL
+                now     : VECTOR [2,LONG],
+                delta   : VECTOR [2,LONG],
+                junk    : VECTOR [2,LONG];
+            $GETTIM (TIMADR=now);
+            IF LIB$SUB_TIMES (now, spamlastupd, delta) EQL LIB$_NORMAL THEN
+                force_flush = LIB$SUB_TIMES (delta, spamupdintvl, junk) EQL LIB$_NORMAL;
+        END;
+!+
+!  If we've referenced at least 10 EXTSPAM entries, let's flush
+!  out the reference info to the database and reload it in case
+!  it has been updated.  Also flush whenever we've received a
+!  RESET or SHUTDOWN.
+!-
+    	IF .force_flush AND .DID_ESPAM NEQ 0 THEN
+    	BEGIN
+    	    LOCAL e : REF EXTSPAMDEF;
+    	    dbgprt (1, '    ...updating rejection database !AS (rdt=!%D)', espamfile, espamrdt);
+    	    STATUS = SAVE_ESPAMDB (ESPAMFILE, ESPAMRDT, 0, 1);
+    	    dbgprt (1, '    ...SAVE_ESPAMDB return status was !XL', .status);
+    	    IF .status THEN
+    	    BEGIN
+
+! If we have any EXTSPAM records, zero out the reference count.  When we do the
+! update, our counts will be added to the existing counts in the on-disk database.
+
+    	    	e = .ESPAMQUE [QUE_L_HEAD];
+    	    	WHILE .e NEQA ESPAMQUE DO
+    	    	BEGIN
+    	    	    e [EXTSPAM_L_REFCNT] = 0;
+    	    	    e = .e [EXTSPAM_L_FLINK];
+    	    	END;
+    	    	DID_ESPAM = 0;
+                $GETTIM (TIMADR=spamlastupd);
+    	    END;
+    	END;
+    END;
+
+    SS$_NORMAL
+
+END; ! VERIFY_RESET_CHECK
+
+%SBTTL 'VERIFY_BEGIN'
+GLOBAL ROUTINE VERIFY_BEGIN (CALLER) = 
+BEGIN
+!++
+! FUNCTIONAL DESCRIPTION:
+!
+!   description
+!
+! RETURNS:  	cond_value, longword (unsigned), write only, by value
+!
+! PROTOTYPE:
+!
+!   x
+!
+! IMPLICIT INPUTS:  None.
+!
+! IMPLICIT OUTPUTS: None.
+!
+! COMPLETION CODES:
+!
+!   SS$_NORMAL:	    	normal successful completion.
+!
+! SIDE EFFECTS:
+!
+!   None.
+!--
+
+    LOCAL STATUS;
+
+    IF .spamdbg AND .dunit NEQA 0 THEN
+    	MX_FILE_FLUSH (.dunit);
+
+    STATUS = VERIFY_RESET_CHECK (0);
+    IF NOT .STATUS THEN RETURN .STATUS;
+
+    CALLER_COUNT = .CALLER_COUNT + 1;
+
+    SS$_NORMAL
+
+END; ! VERIFY_BEGIN
+
+%SBTTL 'VERIFY_END'
+GLOBAL ROUTINE VERIFY_END (CALLER) = 
+BEGIN
+!++
+! FUNCTIONAL DESCRIPTION:
+!
+!   description
+!
+! RETURNS:  	cond_value, longword (unsigned), write only, by value
+!
+! PROTOTYPE:
+!
+!   x
+!
+! IMPLICIT INPUTS:  None.
+!
+! IMPLICIT OUTPUTS: None.
+!
+! COMPLETION CODES:
+!
+!   SS$_NORMAL:	    	normal successful completion.
+!
+! SIDE EFFECTS:
+!
+!   None.
+!--
+
+    IF .CALLER_COUNT GTR 0 THEN
+    	CALLER_COUNT = .CALLER_COUNT - 1;
+
+    IF .spamdbg AND .dunit NEQA 0 THEN
+    	MX_FILE_FLUSH (.dunit);
+
+    SS$_NORMAL
+
+END; ! VERIFY_END
+
+%SBTTL 'VERIFY_ADDRESS'
+GLOBAL ROUTINE VERIFY_ADDRESS (LEN, PTR, OUTSTR_A, IS_LCL_A) = 
+BEGIN
+!++
+! FUNCTIONAL DESCRIPTION:
+!
+!   Verifies an address.  Returns an SMTP status code.
+!
+! RETURNS:  	cond_value, longword (unsigned), write only, by value
+!
+! PROTOTYPE:
+!
+!   x
+!
+! IMPLICIT INPUTS:  None.
+!
+! IMPLICIT OUTPUTS: None.
+!
+! COMPLETION CODES:
+!
+!   SS$_NORMAL:	    	normal successful completion.
+!
+! SIDE EFFECTS:
+!
+!   None.
+!--
+    BUILTIN
+    	ACTUALCOUNT;
+
+    BIND
+    	OUTSTR	= .OUTSTR_A 	: BLOCK [,BYTE],
+    	IS_LOCAL = .IS_LCL_A;
+
+    LOCAL
+    	STR 	: BLOCK [DSC$K_S_BLN,BYTE],
+    	RCP 	: REF RCPDEF,
+    	RCP2	: REF RCPDEF,
+    	TXT 	: REF TXTDEF,
+    	RTEQ	: QUEDEF,
+    	RCPQ	: QUEDEF,
+    	PATHID,
+    	DID_LOCAL_CHECK,
+    	SKIP_PARSE,
+    	STATUS;
+
+    IF .SMTP_INFO [SMTP_V_NOVRFY] AND ACTUALCOUNT () LSS 4 THEN
+    BEGIN
+    	STR$COPY_DX (OUTSTR, %ASCID'2.1.0 VRFY command disabled by system administrator');
+    	RETURN 252;
+    END;
+
+    IF .SMTP_INFO [SMTP_V_NORELAY] THEN
+    BEGIN
+    	dbgprt (2, 'NORELAY set -- will do relay check');
+    	DID_LOCAL_CHECK = 0;
+    	IF ACTUALCOUNT () GEQ 4 AND .IS_LCL_A NEQA 0 THEN IS_LOCAL = 0
+    	ELSE DID_LOCAL_CHECK = 1;
+    END
+    ELSE
+    BEGIN
+    	dbgprt (2, 'NORELAY not set -- will skip relay check');
+    	DID_LOCAL_CHECK = 1;
+    	IF ACTUALCOUNT () GEQ 4 AND .IS_LCL_A NEQA 0 THEN IS_LOCAL = 1;
+    END;
+
+! Strip blanks
+
+    WHILE .LEN GTR 0 DO
+    BEGIN
+    	IF CH$RCHAR (.PTR) EQL %C' ' OR CH$RCHAR (.PTR) EQL %CHAR (9) THEN
+    	BEGIN
+    	    PTR = CH$PLUS (.PTR, 1);
+    	    LEN = .LEN - 1;
+    	END
+    	ELSE EXITLOOP;
+    END;
+
+    WHILE .LEN GTR 0 DO
+    BEGIN
+    	IF CH$RCHAR (CH$PLUS (.PTR, .LEN-1)) EQL %C' ' OR
+    	   CH$RCHAR (CH$PLUS (.PTR, .LEN-1)) EQL %CHAR (9) THEN
+    	    LEN = .LEN - 1
+    	ELSE
+    	    EXITLOOP;
+    END;
+    
+    IF .LEN EQL 0 THEN
+    BEGIN
+    	STR$COPY_DX (OUTSTR, %ASCID'5.1.3 Syntax error in address');
+    	RETURN SMTP__MBX_SYNTAX_ERROR;
+    END;
+
+    SKIP_PARSE = 0;
+
+    IF .LEN LSS 2 OR CH$RCHAR (.PTR) NEQ %C'<' OR CH$RCHAR (CH$PLUS (.PTR, .LEN-1)) NEQ %C'>' THEN
+    BEGIN
+    	LOCAL SDSC : BLOCK [DSC$K_S_BLN,BYTE];
+    	IF CH$FAIL (CH$FIND_CH (.LEN, .PTR, %C'@')) THEN
+    	BEGIN
+    	    SKIP_PARSE = 1;
+    	    INIT_SDESC (STR, .LEN, .PTR);
+    	    dbgprt (2, 'will not try to parse: !AD', .len, .ptr);
+    	END
+    	ELSE
+    	BEGIN
+    	    $INIT_DYNDESC (STR);
+    	    INIT_SDESC (SDSC, .LEN, .PTR);
+    	    STR$CONCAT (STR, %ASCID'<', SDSC, %ASCID'>');
+    	    dbgprt (2, 'parse will be attempted on !AS', str);
+    	END;
+    END
+    ELSE
+    BEGIN
+    	INIT_SDESC (STR, .LEN, .PTR);
+    	dbgprt (2, 'will parse !AD', .len, .ptr);
+    END;
+
+    INIT_QUEUE (RTEQ);
+    INIT_QUEUE (RCPQ);
+    RCP = RCP2 = 0;
+
+    STATUS = LIB$GET_VM (%REF (RCP_S_RCPDEF), RCP);
+    IF .STATUS THEN
+    BEGIN
+    	INIT_DYNDESC (RCP [RCP_Q_RWADR], RCP [RCP_Q_ORGADR],
+    	    	      RCP [RCP_Q_ERRMSG], RCP [RCP_Q_NEXTHOP]);
+    	STR$COPY_DX (RCP [RCP_Q_ORGADR], STR);
+    	IF .STR [DSC$B_CLASS] EQL DSC$K_CLASS_S THEN $INIT_DYNDESC (STR);
+    	IF .SKIP_PARSE THEN
+    	BEGIN
+    	    STR$COPY_R (STR, LEN, .PTR);
+    	    STATUS = SS$_NORMAL
+    	END
+    	ELSE
+    	    STATUS = PARSE821 (RCP [RCP_Q_ORGADR], RTEQ, STR, RCP [RCP_Q_NEXTHOP]);
+    END
+    ELSE
+    BEGIN
+    	STR$COPY_DX (OUTSTR, %ASCID'2.1.0 unable to allocate storage for address processing');
+    	IF .STR [DSC$B_CLASS] EQL DSC$K_CLASS_D THEN FREE_STRINGS (STR);
+    	IF NOT .DID_LOCAL_CHECK THEN IS_LOCAL = 1;
+    	RETURN 252;
+    END;
+
+! check status from parse 
+
+    IF .STATUS THEN
+    BEGIN
+    	IF NOT .SKIP_PARSE THEN
+    	BEGIN
+    	    !
+    	    !	Check for local domain, pre-REWRITE
+    	    !
+    	    IF NOT .DID_LOCAL_CHECK THEN
+    	    BEGIN
+    	    	IS_LOCAL = IS_LOCAL_DOMAIN (RCP [RCP_Q_NEXTHOP]);
+    	    	IF .IS_LOCAL THEN DID_LOCAL_CHECK = 1;
+    	    END;
+    	    !
+    	    !	Now complete the rewrite and check again
+    	    !
+    	    WHILE NOT REMQUE (.RTEQ [QUE_L_HEAD], TXT) DO
+                FREETXT (TXT);
+    	    FORMAT821 (RTEQ, STR, RCP [RCP_Q_NEXTHOP], RCP [RCP_Q_ORGADR]);
+    	    REWRITE (RCP [RCP_Q_ORGADR], RCP [RCP_Q_RWADR]);
+    	    STATUS = PARSE821 (RCP [RCP_Q_RWADR], RTEQ, STR, RCP [RCP_Q_NEXTHOP]);
+    	    dbgprt (2, 'rewrote address to: !AS, next hop !AS', str, rcp [rcp_q_nexthop]);
+    	END;
+    END
+    ELSE
+    BEGIN
+    	STR$COPY_DX (OUTSTR, %ASCID'5.1.3 syntax error in address');
+    	FREE_STRINGS (STR, RCP [RCP_Q_ORGADR], RCP [RCP_Q_RWADR], RCP [RCP_Q_NEXTHOP]);
+    	LIB$FREE_VM (%REF (RCP_S_RCPDEF), RCP);
+    	IF NOT .DID_LOCAL_CHECK THEN IS_LOCAL = 1;
+    	RETURN SMTP__MBX_SYNTAX_ERROR;
+    END;
+
+    IF .STATUS THEN
+    BEGIN
+    	IF .RTEQ [QUE_L_HEAD] NEQA RTEQ THEN
+    	BEGIN
+    	    REMQUE (.RTEQ [QUE_L_HEAD], TXT);
+    	    STR$COPY_R (RCP [RCP_Q_NEXTHOP], TXT [TXT_W_LEN], TXT [TXT_T_TEXT]);
+    	    FREETXT (TXT);
+    	    WHILE NOT REMQUE (.RTEQ [QUE_L_HEAD], TXT) DO FREETXT (TXT);
+    	END;
+    	IF .SKIP_PARSE THEN
+    	BEGIN
+    	    STATUS = SS$_NORMAL;
+    	    PATHID = MX_K_PATH_LOCAL;
+    	END
+    	ELSE
+    	BEGIN
+    	    STATUS = FINDPATH (RCP [RCP_Q_NEXTHOP], PATHID);
+    	    dbgprt (2, 'FINDPATH status was !XL, pathid !UL', .status, .pathid);
+    	END;
+    END
+    ELSE
+    BEGIN
+    	STR$COPY_DX (OUTSTR, %ASCID'5.1.1 address rewrite failed to produce valid address');
+    	FREE_STRINGS (STR, RCP [RCP_Q_ORGADR], RCP [RCP_Q_RWADR], RCP [RCP_Q_NEXTHOP]);
+    	WHILE NOT REMQUE (.RTEQ [QUE_L_HEAD], TXT) DO FREETXT (TXT);
+    	LIB$FREE_VM (%REF (RCP_S_RCPDEF), RCP);    	
+    	IF NOT .DID_LOCAL_CHECK THEN IS_LOCAL = 1;
+    	RETURN SMTP__MBX_SYNTAX_ERROR;
+    END;
+
+    IF .status AND .smtp_info [SMTP_V_NOPCTHACK] THEN
+    BEGIN
+        IF NOT CH$FAIL (CH$FIND_CH (.str [DSC$W_LENGTH], .str [DSC$A_POINTER], %C'%')) THEN
+        BEGIN
+            dbgprt (1, 'Found percent-hack in !AS', str);
+            status = SMTP__MBX_UNAVAILABLE;
+        END;
+    END;
+
+    IF NOT .STATUS THEN PATHID = 0;
+    SELECTONE (.PATHID) OF
+    SET
+    	[0] :
+    	BEGIN
+    	    STR$COPY_DX (OUTSTR, %ASCID'5.1.2 No delivery path for that address');
+    	    IF NOT .DID_LOCAL_CHECK THEN IS_LOCAL = 1;
+    	    STATUS = SMTP__MBX_UNAVAILABLE;
+    	END;
+
+    	[MX_K_PATH_LOCAL] :
+    	BEGIN
+    	    IF NOT .DID_LOCAL_CHECK THEN IS_LOCAL = 1;
+    	    STATUS = 0;
+    	    IF FINDALIAS (STR, RCPQ) THEN STATUS = SMTP__ACTION_OKAY;
+    	    IF .STATUS EQL 0 THEN IF MLF_REQUEST (STR, RCP2) THEN STATUS = SMTP__ACTION_OKAY;
+    	    IF .STATUS EQL 0 THEN IF MX_LOCAL_USER (MAICTX, STR) THEN STATUS = SMTP__ACTION_OKAY;
+    	    IF .STATUS EQL 0 THEN IF $TRNLNM (TABNAM=%ASCID'LNM$FILE_DEV', LOGNAM=%ASCID'MX_LOCAL_FORWARDER',
+    	    	    	    	    	      ACMODE=%REF (PSL$C_EXEC)) THEN STATUS = SMTP__WILL_FORWARD;
+    	    IF .STATUS EQL 0 THEN
+    	    BEGIN
+    	    	STATUS = SMTP__MBX_UNAVAILABLE;
+    	    	STR$CONCAT (OUTSTR, %ASCID'5.1.1 No such local user: ', STR);
+    	    END
+    	    ELSE STR$CONCAT (OUTSTR, %ASCID'2.1.5 <', STR, %ASCID'@', MAILNAME, %ASCID'>');
+    	END;
+
+    	[OTHERWISE] :
+    	BEGIN
+    	    STATUS = SMTP__WILL_FORWARD;
+    	    IF NOT .DID_LOCAL_CHECK THEN
+    	    	IF .PATHID EQL MX_K_PATH_SMTP THEN
+    	    	    IS_LOCAL = IS_LOCAL_DOMAIN (RCP [RCP_Q_NEXTHOP])
+    	    	ELSE
+    	    	    IS_LOCAL = 1;
+    	    STR$CONCAT (OUTSTR, %ASCID'2.1.5 Will forward to ', RCP [RCP_Q_RWADR]);
+    	END;
+
+    TES;
+
+    WHILE NOT REMQUE (.RTEQ [QUE_L_HEAD], TXT) DO FREETXT (TXT);
+    IF .RCP2 NEQA 0 THEN INSQUE (.RCP2, .RCPQ [QUE_L_TAIL]);
+    IF .RCP NEQA 0 THEN INSQUE (.RCP, .RCPQ [QUE_L_TAIL]);
+    IF .STR [DSC$B_CLASS] EQL DSC$K_CLASS_D THEN FREE_STRINGS (STR);
+    WHILE NOT REMQUE (.RCPQ [QUE_L_HEAD], RCP) DO
+    BEGIN
+    	FREE_STRINGS (RCP [RCP_Q_ORGADR], RCP [RCP_Q_RWADR], RCP [RCP_Q_NEXTHOP], RCP [RCP_Q_ERRMSG]);
+    	LIB$FREE_VM (%REF (RCP_S_RCPDEF), RCP);
+    END;
+
+    dbgprt (1, 'VERIFY_ADDRESS final status=!UL, outstr="!AS"', .status, outstr);
+    
+    .STATUS
+
+END; ! VERIFY_ADDRESS
+
+%SBTTL 'IS_LOCAL_ADDRESS'
+GLOBAL ROUTINE IS_LOCAL_ADDRESS (addr_a, is_relay_a) = 
+BEGIN
+!++
+! FUNCTIONAL DESCRIPTION:
+!
+!   description
+!
+! RETURNS:  	cond_value, longword (unsigned), write only, by value
+!
+! PROTOTYPE:
+!
+!   x
+!
+! IMPLICIT INPUTS:  None.
+!
+! IMPLICIT OUTPUTS: None.
+!
+! COMPLETION CODES:
+!
+!   SS$_NORMAL:	    	normal successful completion.
+!
+! SIDE EFFECTS:
+!
+!   None.
+!--
+    BIND
+    	addr	    = .addr_a       : LONG,
+    	is_relay    = .is_relay_a   : LONG;
+
+    LOCAL
+    	r   : REF RELAYDEF,
+    	retval;
+
+    IF .relayque [QUE_L_HEAD] EQLA relayque THEN
+    BEGIN
+    	is_relay = 0;
+    	RETURN 1;
+    END;
+
+    r = .relayque [QUE_L_HEAD];
+    WHILE .r NEQA relayque [QUE_L_HEAD] DO
+    BEGIN
+    	IF (.addr AND .r [RELAY_L_NETMASK]) EQLU .r [RELAY_L_ADDRESS] THEN
+    	BEGIN
+    	    is_relay = (IF .r [RELAY_V_RELAY] THEN 1 ELSE 0);
+    	    retval = (IF .r [RELAY_V_REJECT] THEN 0 ELSE 1);
+    	    dbgprt (1, 'Source address matched an inside network, is_local_address=!UL (relay_allowed=!UL)',
+    	    	    	.retval, .is_relay);
+    	    RETURN .retval;
+    	END;
+    	r = .r [RELAY_L_FLINK];
+    END;
+
+    is_relay = 0;
+    retval = 0;
+
+    IF .lclchk_check NEQA 0 THEN
+    BEGIN
+    	dbgprt (1, 'Source address did not match an inside network, checking SITE callout');
+    	retval =  (.lclchk_check) (lclchk_ctx, .addr_a, .is_relay_a);
+    	dbgprt (1, 'Local network check SITE callout returned is_local_address=!UL (relay_allowed=!UL)',
+    	    	    	.retval, .is_relay);
+    END
+    ELSE
+    BEGIN
+    	dbgprt (1, 'Source address did not match an inside network');
+    END;
+
+    .retval
+
+END; ! IS_LOCAL_ADDRESS
+
+%SBTTL 'IS_SPAM'
+GLOBAL ROUTINE IS_SPAM (ADDR_A, LCLP_A, DOMP_A, id_a) = 
+BEGIN
+!++
+! FUNCTIONAL DESCRIPTION:
+!
+!   Compares IP address and MAIL FROM address against
+!   the spam-rejection list.
+!
+! RETURNS:  	cond_value, longword (unsigned), write only, by value
+!
+! PROTOTYPE:
+!
+!   x
+!
+! IMPLICIT INPUTS:  None.
+!
+! IMPLICIT OUTPUTS: None.
+!
+! COMPLETION CODES:
+!
+!   SS$_NORMAL:	    	normal successful completion.
+!
+! SIDE EFFECTS:
+!
+!   None.
+!--
+
+    LOCAL
+    	SDSC	: BLOCK [DSC$K_S_BLN,BYTE],
+    	ADSC	: BLOCK [DSC$K_S_BLN,BYTE],
+    	STR 	: BLOCK [DSC$K_S_BLN,BYTE],
+    	ABUF	: VECTOR [256,BYTE],
+    	MATCH,
+    	STATUS;
+
+    IF .CALLER_COUNT EQL 0 AND .RESET_MASK NEQ 0 THEN
+    BEGIN
+    	STATUS = VERIFY_INIT (1);
+    	IF .STATUS THEN RESET_MASK = 0;
+    END;
+
+    IF .ESPAMQUE [QUE_L_HEAD] EQLA ESPAMQUE THEN
+    BEGIN
+    	dbgprt (1, 'IS_SPAM: no rejection records, returning 0');
+    	RETURN 0;
+    END;
+
+    INIT_DYNDESC (STR);
+
+    INIT_SDESC (ADSC, %ALLOCATION (ABUF), ABUF);
+    STATUS = NETLIB_ADDRTOSTR (.ADDR_A, ADSC, ADSC [DSC$W_LENGTH]);
+    IF NOT .STATUS THEN ADSC [DSC$W_LENGTH] = 0;
+
+    MATCH = 0;
+
+    dbgprt (2, 'IS_SPAM: candidate is user=!AS, dom=!AS, addr=!AS', .lclp_a, .domp_a, adsc);
+
+    IF .ESPAMQUE [QUE_L_HEAD] NEQA ESPAMQUE THEN
+    BEGIN
+    	BIND
+    	    lclp = .lclp_a  : BLOCK [,BYTE],
+    	    domp = .domp_a  : BLOCK [,BYTE];
+    	LOCAL s;
+    	IF .lclp [DSC$W_LENGTH] EQL 0 AND .domp [DSC$W_LENGTH] EQL 0 THEN
+    	    STR$COPY_DX (str, %ASCID'<>')
+    	ELSE
+    	    STR$CONCAT (str, %ASCID'<', .lclp_a, %ASCID'@', .domp_a, %ASCID'>');
+    	s = espam_match (.addr_a, str, 0, 0, 0, .id_a);
+    	MATCH = .s NEQ SMTP__ACTION_OKAY AND .s NEQ SMTP__WILL_FORWARD;
+    END;
+
+    FREE_STRINGS (STR);
+
+    .MATCH
+
+END; ! IS_SPAM
+
+%SBTTL 'IS_SPAM_TO'
+GLOBAL ROUTINE IS_SPAM_TO (ADDR_A, SNDR_A, RCPT_A, OUT_A, accept_a, id_a) = 
+BEGIN
+!++
+! FUNCTIONAL DESCRIPTION:
+!
+!   Compares IP address, MAIL FROM, and RCPT TO against
+!   the spam-rejection list.
+!
+! RETURNS:  	cond_value, longword (unsigned), write only, by value
+!
+! PROTOTYPE:
+!
+!   x
+!
+! IMPLICIT INPUTS:  None.
+!
+! IMPLICIT OUTPUTS: None.
+!
+! COMPLETION CODES:
+!
+!   SS$_NORMAL:	    	normal successful completion.
+!
+! SIDE EFFECTS:
+!
+!   None.
+!--
+
+    LOCAL
+    	SDSC	: BLOCK [DSC$K_S_BLN,BYTE],
+    	ADSC	: BLOCK [DSC$K_S_BLN,BYTE],
+    	STR 	: BLOCK [DSC$K_S_BLN,BYTE],
+    	ABUF	: VECTOR [256,BYTE],
+    	MATCH,
+    	STATUS;
+
+    IF .CALLER_COUNT EQL 0 AND .RESET_MASK NEQ 0 THEN
+    BEGIN
+    	STATUS = VERIFY_INIT (1);
+    	IF .STATUS THEN RESET_MASK = 0;
+    END;
+
+    espam_match (.addr_a, .sndr_a, .rcpt_a, .out_a, .accept_a, .id_a)
+
+END; ! IS_SPAM_TO
+
+%SBTTL 'espam_match'
+ROUTINE espam_match (addr_a, sndr_a, rcpt_a, out_a, accept_a, id_a) = 
+BEGIN
+!++
+! FUNCTIONAL DESCRIPTION:
+!
+!   Checks to see if an address/sender/recipient
+!   combination matches a record in the extended
+!   spam queue.
+!
+! RETURNS:  	SMTP status code.
+!
+! PROTOTYPE:
+!
+!   ESPAM_MATCH  addr, sndr, rcpt, out
+!
+! IMPLICIT INPUTS:  None.
+!
+! IMPLICIT OUTPUTS: None.
+!
+! COMPLETION CODES:
+!
+!   SMTP__ACTION_OKAY:	not spam
+!   
+!
+! SIDE EFFECTS:
+!
+!   None.
+!--
+
+    LOCAL
+    	e   	: REF EXTSPAMDEF,
+    	adsc	: BLOCK [DSC$K_S_BLN,BYTE],
+    	abuf	: VECTOR [256,BYTE],
+    	status;
+
+    IF .accept_a NEQA 0 THEN
+        .accept_a = 0;
+
+    IF .espamque [QUE_L_HEAD] EQLA espamque THEN
+    BEGIN
+        dbgprt (1, 'ESPAM_MATCH: nothing to match, returning OK');
+    	RETURN SMTP__ACTION_OKAY;
+    END;
+
+    INIT_SDESC (adsc, %ALLOCATION (abuf), abuf);
+    status = NETLIB_ADDRTOSTR (.addr_a, adsc, adsc [DSC$W_LENGTH]);
+    IF NOT .status THEN adsc [DSC$W_LENGTH] = 0;
+
+    dbgprt (2, 'ESPAM_MATCH: addr=!AS, sender=!AS, rcpt=!AS',
+    	    adsc, .sndr_a, (IF .rcpt_a EQLA 0 THEN %ASCID'{none}' ELSE .rcpt_a));
+
+    e = .espamque [QUE_L_HEAD];
+    WHILE .e NEQA espamque DO
+    BEGIN
+    	BIND
+    	    ipm = e [EXTSPAM_A_IPMATCH] : REF TXTDEF,
+    	    frm	= e [EXTSPAM_A_FRMATCH] : REF TXTDEF,
+            frr = e [EXTSPAM_A_FRREGEX] : REF REGEXDEF,
+    	    tom = e [EXTSPAM_A_TOMATCH] : REF TXTDEF,
+            tor = e [EXTSPAM_A_TOREGEX] : REF REGEXDEF;
+    	LOCAL
+            match;
+
+        IF .e [EXTSPAM_V_REGEX] THEN
+        BEGIN
+            LOCAL
+                sdsc    : BLOCK [DSC$K_S_BLN,BYTE];
+
+            IF .frm NEQA 0 AND .frr EQLA 0 THEN
+            BEGIN
+                status = LIB$GET_VM (%REF (REGEX_S_REGEXDEF), frr);
+                IF NOT .status THEN SIGNAL_STOP (.status);
+                INIT_SDESC (sdsc, .frm [TXT_W_LEN], frm [TXT_T_TEXT]);
+                IF MX_REGCOMP (.frr, sdsc, REG_M_EXTENDED OR REG_M_ICASE OR REG_M_NOSUB) NEQ 0 THEN
+                BEGIN
+                    LIB$FREE_VM (%REF (REGEX_S_REGEXDEF), frr);
+                    frr = 0;
+                    e [EXTSPAM_V_REGEX] = 0;
+                END;
+            END;
+
+            IF .tom NEQA 0 AND .tor EQLA 0 THEN
+            BEGIN
+                status = LIB$GET_VM (%REF (REGEX_S_REGEXDEF), tor);
+                IF NOT .status THEN SIGNAL_STOP (.status);
+                INIT_SDESC (sdsc, .tom [TXT_W_LEN], tom [TXT_T_TEXT]);
+                IF MX_REGCOMP (.tor, sdsc, REG_M_EXTENDED OR REG_M_ICASE OR REG_M_NOSUB) NEQ 0 THEN
+                BEGIN
+                    LIB$FREE_VM (%REF (REGEX_S_REGEXDEF), tor);
+                    tor = 0;
+                    e [EXTSPAM_V_REGEX] = 0;
+                END;
+            END;
+        END;
+
+    	match = .e [EXTSPAM_A_HDMATCH] EQLA 0;
+    	IF .match THEN
+    	BEGIN
+    	    match = (IF .adsc [DSC$W_LENGTH] EQL 0 THEN 1 ELSE
+    	    	     IF .ipm EQLA 0 THEN 1 ELSE
+    	    	     match_wild (adsc, .ipm [TXT_W_LEN], ipm [TXT_T_TEXT]));
+    	    IF .ipm EQLA 0 THEN
+    	    	dbgprt (3, '      Match due to no IP address in rejection rule')
+    	    ELSE
+    	    	dbgprt (3, '      IP address check: !AS against !AD, match=!UL',
+    	    	    	    	adsc, .ipm [TXT_W_LEN], ipm [TXT_T_TEXT], .match);
+    	END;
+    	IF .match THEN
+    	BEGIN
+    	    match = (IF .frm EQLA 0 THEN 1 ELSE
+                        IF .e [EXTSPAM_V_REGEX] THEN match_regex (.sndr_a, .frr)
+    	    	    	ELSE match_wild (.sndr_a, .frm [TXT_W_LEN], frm [TXT_T_TEXT]));
+    	    dbgprt (3, '      Sender check: !AS against !AD, match=!UL',
+    	    	    	.sndr_a, .frm [TXT_W_LEN], frm [TXT_T_TEXT], .match);
+    	END;
+    	IF .match THEN
+    	    IF .rcpt_a NEQA 0 THEN
+    	    BEGIN
+    	    	match = (IF .tom EQLA 0 THEN 1 ELSE
+                            IF .e [EXTSPAM_V_REGEX] THEN match_regex (.rcpt_a, .tor)
+    	    	    	    ELSE match_wild (.rcpt_a, .tom [TXT_W_LEN], tom [TXT_T_TEXT]));
+                IF .tom EQLA 0 THEN
+                    dbgprt (3, '      Match due to no recipient in rejection rule')
+                ELSE
+    	    	    dbgprt (3, '      Recipient check: !AS against !AD, match=!UL',
+    	    	    	    .rcpt_a, .tom [TXT_W_LEN], tom [TXT_T_TEXT]);
+    	    END
+    	    ELSE
+    	    BEGIN
+    	    	match = .tom EQLA 0;
+    	    	IF .match THEN dbgprt (3, '      Null recipient matched null to-pattern')
+    	    	ELSE dbgprt (3, '      Non-null to-pattern, null recipient; no match');
+    	    END;
+
+    	IF .match THEN EXITLOOP;
+
+    	e = .e [EXTSPAM_L_FLINK];
+
+    END;
+
+    dbgprt (3, '      -- End of match loop, match=!UL', (.e NEQA espamque));
+
+    IF .e EQLA ESPAMQUE THEN RETURN SMTP__ACTION_OKAY;
+
+    IF .id_a NEQA 0 THEN
+        .id_a = .e [EXTSPAM_L_RULEID];
+
+    BEGIN
+    	BIND
+    	    rwa = e [EXTSPAM_A_RWADDR]	: REF TXTDEF;
+
+    	DID_ESPAM = .DID_ESPAM + 1;
+    	e [EXTSPAM_V_DIRTY] = 1;
+    	e [EXTSPAM_L_REFCNT] = .e [EXTSPAM_L_REFCNT] + 1;
+    	$GETTIM (TIMADR=e [EXTSPAM_Q_DTREF]);
+
+    	dbgprt (2, '    Match occurred, count now !UL.  Accept=!UL, rewrite=!AD',
+    	    	.did_espam, .e [extspam_v_accept],
+    	    	(IF .rwa EQLA 0 THEN 0 ELSE .rwa [TXT_W_LEN]),
+    	    	(IF .rwa EQLA 0 THEN UPLIT ('') ELSE rwa [TXT_T_TEXT]));
+
+    	IF .e [EXTSPAM_V_ACCEPT] THEN
+    	BEGIN
+    	    IF .accept_a NEQA 0 THEN
+                .accept_a = 1;
+    	    IF .rwa EQLA 0 THEN
+            BEGIN
+                dbgprt (1, 'ESPAM_MATCH: forced accept');
+    	    	RETURN SMTP__ACTION_OKAY;
+            END;
+    	    IF .out_a NEQA 0 THEN STR$COPY_R (.out_a, rwa [TXT_W_LEN], rwa [TXT_T_TEXT]);
+            dbgprt (1, 'ESPAM_MATCH: accept with rewrite to !AD', .rwa [TXT_W_LEN], rwa [TXT_T_TEXT]);
+    	    RETURN SMTP__WILL_FORWARD;
+    	END;
+
+    	IF .out_a NEQA 0 THEN
+    	    IF .rwa EQLA 0 THEN
+    	    	STR$COPY_DX (.out_a, %ASCID'5.7.1 Message rejected due to administrative policy.')
+    	    ELSE
+    	    BEGIN
+    	    	STR$COPY_R (.out_a, rwa [TXT_W_LEN], rwa [TXT_T_TEXT]);
+    	    	STR$PREFIX (.out_a, %ASCID'5.7.1 ');
+    	    END;
+
+    	status = (IF .rcpt_a EQLA 0 THEN SMTP__MBX_SYNTAX_ERROR
+    	    	  ELSE SMTP__MBX_UNAVAILABLE);
+
+    END;
+
+    dbgprt (1, 'ESPAM_MATCH:  final status=!UL', .status);
+
+    .status
+
+END; ! espam_match
+
+%SBTTL 'IS_SPAM_HEADER'
+GLOBAL ROUTINE IS_SPAM_HEADER (hdrq_a, out_a, rsn_a, id_a) = 
+BEGIN
+!++
+! FUNCTIONAL DESCRIPTION:
+!
+!   Checks the queue of headers against the EXTSPAM header records.
+!
+! RETURNS:  	cond_value, longword (unsigned), write only, by value
+!
+! PROTOTYPE:
+!
+!   IS_SPAM_HEADER  hdrq
+!
+! IMPLICIT INPUTS:  None.
+!
+! IMPLICIT OUTPUTS: None.
+!
+! COMPLETION CODES:
+!
+!   SS$_NORMAL:	    	normal successful completion.
+!
+! SIDE EFFECTS:
+!
+!   None.
+!--
+    BIND
+    	hdrq	= .hdrq_a   : QUEDEF,
+        rsn     = .rsn_a    : BLOCK [,BYTE];
+
+    LOCAL
+    	e   	: REF EXTSPAMDEF,
+    	h   	: REF TXTDEF,
+    	hdsc	: BLOCK [DSC$K_S_BLN,BYTE],
+	found1,
+	match	: REF EXTSPAMDEF;
+
+
+    dbgprt (1, 'in IS_SPAM_HEADER');
+
+    found1 = match = 0;
+
+    h = .hdrq [QUE_L_HEAD];
+    WHILE .h NEQA hdrq DO
+    BEGIN
+    	e = .espamque [QUE_L_HEAD];
+    	WHILE .e NEQA espamque DO
+    	BEGIN
+    	    BIND
+    	    	hdm = e [EXTSPAM_A_HDMATCH] : REF TXTDEF,
+                hdr = e [EXTSPAM_A_HDREGEX] : REF REGEXDEF;
+
+            IF .e [EXTSPAM_V_REGEX] THEN
+            BEGIN
+                LOCAL
+                    sdsc    : BLOCK [DSC$K_S_BLN,BYTE];
+
+                IF .hdm NEQA 0 AND .hdr EQLA 0 THEN
+                BEGIN
+                    LOCAL status;
+                    status = LIB$GET_VM (%REF (REGEX_S_REGEXDEF), hdr);
+                    IF NOT .status THEN SIGNAL_STOP (.status);
+                    INIT_SDESC (sdsc, .hdm [TXT_W_LEN], hdm [TXT_T_TEXT]);
+                    IF MX_REGCOMP (.hdr, sdsc, REG_M_EXTENDED OR REG_M_ICASE OR REG_M_NOSUB) NEQ 0 THEN
+                    BEGIN
+                        LIB$FREE_VM (%REF (REGEX_S_REGEXDEF), hdr);
+                        hdr = 0;
+                        e [EXTSPAM_V_REGEX] = 0;
+                    END;
+                END;
+            END;
+
+    	    IF .hdm NEQA 0 THEN
+    	    BEGIN
+    	    	found1 = 1;
+    	    	dbgprt (2, '    candidate hdr code=!UL, matching against !UL',
+    	    	    	    .h [TXT_W_CODE], .hdm [TXT_W_CODE]);
+    	    	IF .h [TXT_W_CODE] EQL .hdm [TXT_W_CODE] THEN
+    	    	BEGIN
+    	    	    INIT_SDESC (hdsc, .h [TXT_W_LEN], h [TXT_T_TEXT]);
+    	    	    dbgprt (3, '      -- code matched, trying text match');
+    	    	    dbgprt (3, '      -- candidate: !AS', hdsc);
+    	    	    dbgprt (3, '      -- !AS:   !AD', 
+                            (IF .e [EXTSPAM_V_REGEX] THEN %ASCID'regexp' ELSE %ASCID'pattern'),
+                            .hdm [txt_w_len], hdm [txt_t_text]);
+    	    	    IF (IF .e [EXTSPAM_V_REGEX] THEN match_regex (hdsc, .hdr)
+                        ELSE match_wild (hdsc, .hdm [TXT_W_LEN], hdm [TXT_T_TEXT])) THEN
+    	    	    BEGIN
+    	    	    	dbgprt (3, '      -- header matched.');
+			IF .match EQLA 0 THEN
+			    match = .e;
+			IF .e [EXTSPAM_V_ACCEPT] THEN
+			BEGIN
+			    match = .e;
+			    EXITLOOP;
+			END;
+    	    	    END;
+    	    	END
+    	    	ELSE IF .hdm [TXT_W_CODE] EQL MX_K_HDR_OTHER THEN
+    	    	BEGIN
+    	    	    LOCAL tmpq : QUEDEF, status;
+    	    	    INIT_QUEUE (tmpq);
+		    !
+		    !  Special case: if it's an MX warning, don't try to
+		    !  format it, because FORMAT_HDR returns SS$_NORMAL but
+		    !  with an empty queue.
+		    !
+		    status = (IF (.h [TXT_W_CODE] EQLU MX_K_HDR_X_WARNING)
+			      THEN SS$_BADPARAM
+			      ELSE FORMAT_HDR (.h, tmpq, 0, 1));
+    	    	    IF .status THEN
+    	    	    BEGIN
+    	    	    	LOCAL h2 : REF TXTDEF;
+    	    	    	dbgprt (3, '      -- pattern hdr code was OTHER, trying match anyway');
+    	    	    	REMQUE (.tmpq [QUE_L_HEAD], h2);
+    	    	    	INIT_SDESC (hdsc, .h2 [TXT_W_LEN], h2 [TXT_T_TEXT]);
+    	    	    	dbgprt (3, '      -- candidate: !AS', hdsc);
+    	    	    	dbgprt (3, '      -- !AS:   !AD',
+                                (IF .e [EXTSPAM_V_REGEX] THEN %ASCID'regexp' ELSE %ASCID'pattern'),
+                                .hdm [TXT_W_LEN], hdm [TXT_T_TEXT]);
+    	    	    	IF (IF .e [EXTSPAM_V_REGEX] THEN match_regex (hdsc, .hdr)
+                            ELSE match_wild (hdsc, .hdm [TXT_W_LEN], hdm [TXT_T_TEXT])) THEN
+    	    	    	BEGIN
+    	    	    	    FREETXT (h2);
+    	    	    	    WHILE NOT REMQUE (.tmpq [QUE_L_HEAD], h2) DO FREETXT (h2);
+    	    	    	    dbgprt (3, '      -- header matched.');
+			    IF .match EQLA 0 THEN
+				match = .e;
+			    IF .e [EXTSPAM_V_ACCEPT] THEN
+			    BEGIN
+			        match = .e;
+			        EXITLOOP;
+		  	    END;
+    	    	    	END;
+    	    	    	FREETXT (h2);
+    	    	    	WHILE NOT REMQUE (.tmpq [QUE_L_HEAD], h2) DO FREETXT (h2);
+    	    	    END;
+    	    	END;
+    	    END;
+    	    e = .e [EXTSPAM_L_FLINK];
+    	END;
+
+    	IF NOT .found1 THEN
+    	BEGIN
+    	    dbgprt (1, 'IS_SPAM_HEADER exiting -- no HDMATCH records');
+    	    RETURN 0;  ! there are no HDMATCH records
+    	END
+	ELSE IF .match NEQA 0 THEN
+	BEGIN
+	    IF .match [EXTSPAM_V_ACCEPT] THEN
+		EXITLOOP;
+	END;
+
+    	h = .h [TXT_L_FLINK];
+    END;
+
+    IF .match NEQA 0 THEN
+    BEGIN
+    	BIND
+    	    hdm = match [EXTSPAM_A_HDMATCH] : REF TXTDEF,
+    	    rwa = match [EXTSPAM_A_RWADDR] : REF TXTDEF;
+    	DID_ESPAM = .DID_ESPAM + 1;
+    	dbgprt (1, '    -- match occurred, count now !UL', .did_espam);
+        IF .id_a NEQA 0 THEN
+            .id_a = .match [EXTSPAM_L_RULEID];
+    	match [EXTSPAM_V_DIRTY] = 1;
+    	match [EXTSPAM_L_REFCNT] = .match [EXTSPAM_L_REFCNT] + 1;
+    	$GETTIM (TIMADR=match [EXTSPAM_Q_DTREF]);
+	IF .match [EXTSPAM_V_ACCEPT] THEN
+	BEGIN
+	    dbgprt (1, '    -- message accepted');
+	    IF .rwa EQLA 0 THEN
+		RETURN 0;
+	END;
+    	IF .rwa NEQA 0 THEN
+    	    STR$COPY_R (.out_a, rwa [TXT_W_LEN], rwa [TXT_T_TEXT]);
+        IF .hdm [TXT_W_CODE] EQLU MX_K_HDR_OTHER THEN
+            LIB$SYS_FAO (%ASCID'RFC822 header rule [!AD]', 0, rsn, .hdm [TXT_W_LEN], hdm [TXT_T_TEXT])
+        ELSE IF .hdm [TXT_W_CODE] EQLU MX_K_HDR_X_WARNING THEN
+            LIB$SYS_FAO (%ASCID'RFC822 header rule [X-MX-Warning: !AD]', 0, rsn,
+                            .hdm [TXT_W_LEN], hdm [TXT_T_TEXT])
+        ELSE
+        BEGIN
+            LOCAL
+            	tmpq    : QUEDEF,
+                t       : REF TXTDEF,
+                status;
+            INIT_QUEUE (tmpq);
+            status = FORMAT_HDR (.hdm, tmpq, 0, 1);
+            IF .status AND NOT REMQUE (.tmpq [QUE_L_HEAD], t) THEN
+            BEGIN
+                LIB$SYS_FAO (%ASCID'RFC822 header rule [!AD]', 0, rsn,
+                             .t [TXT_W_LEN], t [TXT_T_TEXT]);
+                FREETXT (t);
+            END
+            ELSE
+                STR$COPY_DX (rsn, %ASCID'RFC822 header (rule could not be formatted)');
+	END;
+
+    	RETURN 1;
+    END;
+
+    dbgprt (1, 'IS_SPAM_HEADER exiting - no match');
+    
+    0
+
+END; ! IS_SPAM_HEADER
+
+%SBTTL 'IS_SPAM_HEADER_COMBINATION'
+GLOBAL ROUTINE IS_SPAM_HEADER_COMBINATION (envl_a, hdrq_a, reason_a, sender_local, inspt_a) = 
+BEGIN
+!++
+! FUNCTIONAL DESCRIPTION:
+!
+!   Performs a series of heuristic checks based on combinations
+!   of various header characteristcis.
+!
+! RETURNS:  	longword_unsigned
+!
+! PROTOTYPE:
+!
+!   IS_SPAM_HEADER_COMBINATION  envl, hdrque, reason
+!
+!   envl:   	ENVLDEF
+!   hdrque: 	QUEDEF
+!   reason: 	REF descriptor
+!
+! IMPLICIT INPUTS:  None.
+!
+! IMPLICIT OUTPUTS: None.
+!
+! COMPLETION CODES:  1=reject (is spam), 0=keep (may be spam),
+!                    2=forwarded (is spam)
+!
+! SIDE EFFECTS:
+!
+!   Recipient list and header list may be modified.
+!
+!--
+    BIND
+    	envl	=   .envl_a 	: ENVLDEF,
+    	hdrq	=   .hdrq_a 	: QUEDEF,
+    	reason	=   .reason_a	: REF BLOCK [,BYTE],
+        inspt   =   .inspt_a    : TXTDEF;
+    BIND_ENVL_FIELDS (envl);
+
+    LOCAL
+    	sndr	    : BLOCK [DSC$K_S_BLN,BYTE],
+    	fromhdr	    : REF TXTDEF,
+    	tohdr	    : REF TXTDEF,
+    	msgidhdr    : REF TXTDEF,
+    	atohdr	    : REF TXTDEF,
+    	uidlhdr	    : REF TXTDEF,
+    	cchdr	    : REF TXTDEF,
+    	bcchdr	    : REF TXTDEF,
+    	rtohdr	    : REF TXTDEF,
+    	rcchdr	    : REF TXTDEF,
+    	rbcchdr	    : REF TXTDEF,
+    	rfrhdr	    : REF TXTDEF,
+    	origiphdr   : REF TXTDEF,
+    	commhdr	    : REF TXTDEF,
+    	prechdr	    : REF TXTDEF,
+    	hdr 	    : REF TXTDEF,
+    	rcpt	    : REF RCPTDEF,
+    	fromstr     : BLOCK [DSC$K_S_BLN,BYTE],
+    	dsc 	    : BLOCK [DSC$K_S_BLN,BYTE],
+    	tostr	    : BLOCK [DSC$K_S_BLN,BYTE],
+        from_invalid,
+        to_invalid,
+    	single_to_address,
+    	confidence,
+    	status,
+    	rbuf	    : VECTOR [256,BYTE];
+
+    IF (INCR i FROM 0 TO HEUR_K_COUNT-1 DO IF .heurtbl [.i,HEUR_V_ENABLED] THEN EXITLOOP .i) LSS 0 THEN
+    BEGIN
+    	dbgprt (1, 'Skipping heuristic filter checks - none enabled.');
+    	RETURN 0;
+    END;
+
+    dbgprt (1, 'Starting heuristic filter checks.');
+
+    confidence = 0;
+    INIT_SDESC (dsc, .fromadr [TXT_W_LEN], fromadr [TXT_T_TEXT]);
+    INIT_DYNDESC (sndr);
+    IF .fromadr [TXT_W_LEN] EQL 2 AND CH$EQL (2, fromadr [TXT_T_TEXT], 2, UPLIT ('<>')) THEN
+    	LIB$SCOPY_DXDX (dsc, sndr)
+    ELSE
+    BEGIN
+    	LOCAL
+    	    lcl	    : BLOCK [DSC$K_S_BLN,BYTE],
+    	    dom	    : BLOCK [DSC$K_S_BLN,BYTE];
+    	INIT_DYNDESC (lcl, dom);
+    	PARSE821 (dsc, 0, lcl, dom);
+    	STR$CONCAT (sndr, lcl, %ASCID'@', dom);
+    	FREE_STRINGS (lcl, dom);
+    END;
+
+    dbgprt (2, '  Sender (MAIL FROM) address is !AS', sndr);
+
+    fromhdr = tohdr = msgidhdr = atohdr = uidlhdr = cchdr = rtohdr = rcchdr = rfrhdr = origiphdr = 0;
+    commhdr = prechdr = bcchdr = rbcchdr = 0;
+
+    hdr = .hdrq [QUE_L_HEAD];
+    WHILE .hdr NEQA hdrq DO
+    BEGIN
+    	CASE .hdr [TXT_W_CODE] FROM MX_K_HDR_FIRSTCODE TO MX_K_HDR_LASTCODE OF
+    	SET
+    	    [MX_K_HDR_FROM] 	    : fromhdr = .hdr;
+    	    [MX_K_HDR_TO]   	    : tohdr = .hdr;
+    	    [MX_K_HDR_CC]   	    : cchdr = .hdr;
+    	    [MX_K_HDR_BCC]   	    : bcchdr = .hdr;
+    	    [MX_K_HDR_R_FROM]	    : rfrhdr = .hdr;
+    	    [MX_K_HDR_R_TO]	    : rtohdr = .hdr;
+    	    [MX_K_HDR_R_CC]	    : rcchdr = .hdr;
+    	    [MX_K_HDR_R_BCC]	    : rbcchdr = .hdr;
+    	    [MX_K_HDR_MESSAGE_ID]   : msgidhdr = .hdr;
+    	    [MX_K_HDR_PRECEDENCE]   : prechdr = .hdr;
+    	    [MX_K_HDR_OTHER]	    :
+    	    BEGIN
+    	    	IF header_match (.hdr, %ASCID'Apparently-To:') THEN
+    	    	    atohdr = .hdr
+    	    	ELSE IF header_match (.hdr, %ASCID'X-UIDL:') THEN
+    	    	    uidlhdr = .hdr
+    	    	ELSE IF header_match (.hdr, %ASCID'X-Originating-IP:') THEN
+    	    	    origiphdr = .hdr
+    	    	ELSE IF header_match (.hdr, %ASCID'Comments:') THEN
+    	    	    commhdr = .hdr;
+    	    END;
+    	    [INRANGE,OUTRANGE]	    : ;
+    	TES;
+    	hdr = .hdr [TXT_L_FLINK];
+    END;
+
+    INIT_DYNDESC (fromstr, tostr);
+
+    IF .fromhdr EQLA 0 THEN
+    	fromhdr = .rfrhdr
+    ELSE IF .fromhdr [TXT_W_LEN] EQL 0 THEN
+    	fromhdr = .rfrhdr;
+
+    from_invalid = 0;
+
+    IF .fromhdr NEQA 0 THEN IF .fromhdr [TXT_W_LEN] NEQ 0 THEN
+    BEGIN
+    	LOCAL
+    	    tmpq    : QUEDEF,
+    	    lclpart : BLOCK [DSC$K_S_BLN,BYTE],
+    	    dompart : BLOCK [DSC$K_S_BLN,BYTE];
+
+    	INIT_QUEUE (tmpq);
+    	INIT_SDESC (dsc, .fromhdr [TXT_W_LEN], fromhdr [TXT_T_TEXT]);
+
+    	INIT_DYNDESC (lclpart, dompart);
+    	IF PARSE_ADDRLIST (dsc, tmpq, 0) THEN
+    	BEGIN
+    	    LOCAL txt : REF TXTDEF;
+    	    txt = .tmpq [QUE_L_HEAD];
+    	    IF .txt NEQA tmpq THEN
+    	    BEGIN
+    	    	INIT_SDESC (dsc, .txt [TXT_W_LEN], txt [TXT_T_TEXT]);
+    	    	IF PARSE_MBOX (dsc, lclpart, dompart) THEN
+    	    	    STR$CONCAT (fromstr, lclpart, %ASCID'@', dompart);
+    	    END;
+    	    WHILE NOT REMQUE (.tmpq [QUE_L_HEAD], txt) DO FREETXT (txt);
+    	END
+        ELSE
+            from_invalid = 1;
+    	FREE_STRINGS (lclpart, dompart);
+    	dbgprt (2, '  RFC822 From address: !AS', fromstr);
+    END
+    ELSE dbgprt (2, '  No RFC822 From header or Resent-From header found.');
+
+    IF .confidence LEQU .gheur_info [GHEUR_L_CL_REJECT] AND .heurtbl [HEUR_K_NULL_FROM,HEUR_V_ENABLED]
+    	AND NOT is_excluded (HEUR_K_NULL_FROM, sndr, fromstr) THEN
+    BEGIN
+    	IF .fromhdr EQLA 0 THEN
+    	BEGIN
+    	    confidence = MAXU (.confidence, .heurtbl [HEUR_K_NULL_FROM,HEUR_L_CONFIDENCE]);
+    	    reason = %ASCID'missing From: header';
+    	    dbgprt (2, '  NULL_FROM check matched, confidence level now !UL', .confidence);
+    	END
+    	ELSE IF .fromhdr [TXT_W_LEN] EQL 0 THEN  ! note headers are blank-trimmed by caller
+    	BEGIN
+    	    confidence = MAXU (.confidence, .heurtbl [HEUR_K_NULL_FROM,HEUR_L_CONFIDENCE]);
+    	    reason = %ASCID'null From: header';
+    	    dbgprt (2, '  NULL_FROM check matched, confidence level now !UL', .confidence);
+    	END;
+    END;
+
+    IF .confidence LEQU .gheur_info [GHEUR_L_CL_REJECT] AND .heurtbl [HEUR_K_INVALID_FROM,HEUR_V_ENABLED]
+        AND NOT is_excluded (HEUR_K_INVALID_FROM, sndr, fromstr) AND .from_invalid THEN
+    BEGIN
+        confidence = MAXU (.confidence, .heurtbl [HEUR_K_INVALID_FROM,HEUR_L_CONFIDENCE]);
+        reason = %ASCID'invalid From: header';
+        dbgprt (2, '  INVALID_FROM check matched, confidence level now !UL', .confidence);
+    END;
+
+    to_invalid = 0;
+    single_to_address = 1;
+    IF .tohdr NEQA 0 THEN IF .tohdr [TXT_W_LEN] NEQ 0 THEN
+    BEGIN
+    	LOCAL
+    	    tmpq    : QUEDEF,
+    	    lclpart : BLOCK [DSC$K_S_BLN,BYTE],
+    	    dompart : BLOCK [DSC$K_S_BLN,BYTE];
+
+    	INIT_QUEUE (tmpq);
+    	INIT_SDESC (dsc, .tohdr [TXT_W_LEN], tohdr [TXT_T_TEXT]);
+
+    	INIT_DYNDESC (lclpart, dompart);
+    	IF PARSE_ADDRLIST (dsc, tmpq, 0) THEN
+    	BEGIN
+    	    LOCAL txt : REF TXTDEF;
+    	    IF NOT REMQUE_HEAD (tmpq, txt) THEN
+    	    BEGIN
+    	    	INIT_SDESC (dsc, .txt [TXT_W_LEN], txt [TXT_T_TEXT]);
+    	    	IF PARSE_MBOX (dsc, lclpart, dompart) THEN
+    	    	    STR$CONCAT (tostr, lclpart, %ASCID'@', dompart);
+    	    	FREETXT (txt);
+    	    	IF NOT QUEUE_EMPTY (tmpq) THEN single_to_address = 0;
+    	    END;
+    	    WHILE NOT REMQUE (.tmpq [QUE_L_HEAD], txt) DO FREETXT (txt);
+    	END
+        ELSE
+            to_invalid = 1;
+    	FREE_STRINGS (lclpart, dompart);
+    	dbgprt (2, '  RFC822 To address: !AS', tostr);
+    END;
+
+    IF .confidence LEQU .gheur_info [GHEUR_L_CL_REJECT] AND .heurtbl [HEUR_K_INVALID_TO,HEUR_V_ENABLED]
+        AND NOT is_excluded (HEUR_K_INVALID_TO, sndr, fromstr) AND .to_invalid THEN
+    BEGIN
+        confidence = MAXU (.confidence, .heurtbl [HEUR_K_INVALID_TO,HEUR_L_CONFIDENCE]);
+        reason = %ASCID'invalid To: header';
+        dbgprt (2, '  INVALID_TO check matched, confidence level now !UL', .confidence);
+    END;
+
+    IF .confidence LEQU .gheur_info [GHEUR_L_CL_REJECT] AND .heurtbl [HEUR_K_NULL_TO,HEUR_V_ENABLED]
+    	AND NOT is_excluded (HEUR_K_NULL_TO, sndr, fromstr) AND .tostr [DSC$W_LENGTH] EQL 0 THEN
+    BEGIN
+    	hdr =   (IF .tohdr   NEQA 0 THEN .tohdr
+    	    ELSE IF .rtohdr  NEQA 0 THEN .rtohdr
+    	    ELSE IF .atohdr  NEQA 0 THEN .atohdr
+    	    ELSE IF .cchdr   NEQA 0 THEN .cchdr
+    	    ELSE IF .rcchdr  NEQA 0 THEN .rcchdr
+    	    ELSE IF .bcchdr  NEQA 0 THEN .bcchdr
+    	    ELSE IF .rbcchdr NEQA 0 THEN .rbcchdr
+    	    ELSE 0);
+    	IF .hdr EQLA 0 THEN
+    	BEGIN
+    	    confidence = MAXU (.confidence, .heurtbl [HEUR_K_NULL_TO,HEUR_L_CONFIDENCE]);
+    	    reason = %ASCID'missing To: header';
+    	    dbgprt (2, '  NULL_TO check matched, confidence level now !UL', .confidence);
+    	END
+    	ELSE IF .hdr [TXT_W_LEN] EQL 0 THEN
+    	BEGIN
+    	    confidence = MAXU (.confidence, .heurtbl [HEUR_K_NULL_TO,HEUR_L_CONFIDENCE]);
+    	    reason = %ASCID'null To: header';
+    	    dbgprt (2, '  NULL_TO check matched, confidence level now !UL', .confidence);
+    	END;
+    END;
+
+    IF .confidence LEQU .gheur_info [GHEUR_L_CL_REJECT] AND .heurtbl [HEUR_K_NULL_MSGID,HEUR_V_ENABLED]
+    	AND .msgidhdr NEQA 0
+    	AND NOT is_excluded (HEUR_K_NULL_MSGID, sndr, fromstr)
+    	AND CH$EQL (.msgidhdr [TXT_W_LEN], msgidhdr [TXT_T_TEXT], 2, UPLIT ('<>')) THEN
+    BEGIN
+    	confidence = MAXU (.confidence, .heurtbl [HEUR_K_NULL_MSGID,HEUR_L_CONFIDENCE]);
+    	reason = %ASCID'Null Message-ID: header';
+    	dbgprt (2, '  NULL_MSGID check matched, confidence level now !UL', .confidence);
+    END;
+    	
+    IF .confidence LEQU .gheur_info [GHEUR_L_CL_REJECT] AND .heurtbl [HEUR_K_PRECEDENCE_BULK,HEUR_V_ENABLED]
+    	AND .prechdr NEQA 0
+    	AND NOT is_excluded (HEUR_K_PRECEDENCE_BULK, sndr, fromstr) THEN
+    BEGIN
+    	INIT_SDESC (dsc, .prechdr [TXT_W_LEN], prechdr [TXT_T_TEXT]);
+    	IF STR$CASE_BLIND_COMPARE (dsc, %ASCID'bulk') EQL 0 THEN
+    	BEGIN
+    	    confidence = MAXU (.confidence, .heurtbl [HEUR_K_PRECEDENCE_BULK,HEUR_L_CONFIDENCE]);
+    	    reason = %ASCID'Message contains Precedence: bulk header';
+    	    dbgprt (2, '  PRECEDENCE_BULK check matched, confidence level now !UL', .confidence);
+    	END;
+    END;
+
+    IF .confidence LEQU .gheur_info [GHEUR_L_CL_REJECT] AND .heurtbl [HEUR_K_X_UIDL,HEUR_V_ENABLED]
+    	AND .uidlhdr NEQA 0
+    	AND NOT is_excluded (HEUR_K_X_UIDL, sndr, fromstr) THEN
+    BEGIN
+    	confidence = MAXU (.confidence, .heurtbl [HEUR_K_X_UIDL,HEUR_L_CONFIDENCE]);
+    	reason = %ASCID'Message contains X-UIDL: header';
+    	dbgprt (2, '  X_UIDL check matched, confidence level now !UL', .confidence);
+    END;
+
+    IF .confidence LEQU .gheur_info [GHEUR_L_CL_REJECT] AND .heurtbl [HEUR_K_UIDL_AUTH_SENDER,HEUR_V_ENABLED]
+    	AND .uidlhdr NEQA 0 AND .commhdr NEQA 0
+    	AND NOT is_excluded (HEUR_K_UIDL_AUTH_SENDER, sndr, fromstr) THEN
+    BEGIN
+    	BIND
+    	    comments = %ASCID'Comments:'    	   : BLOCK [,BYTE],
+    	    authsnd = %ASCID'Authenticated sender' : BLOCK [,BYTE];
+    	LOCAL cp, len;
+
+    	cp = CH$PLUS (commhdr [TXT_T_TEXT], .comments [DSC$W_LENGTH]);
+    	len = .commhdr [TXT_W_LEN] - .comments [DSC$W_LENGTH];
+    	WHILE .len GTRU 0 AND (CH$RCHAR (.cp) EQL %C' ' OR CH$RCHAR (.cp) EQL %CHAR (9)) DO
+    	BEGIN
+    	    cp = CH$PLUS (.cp, 1);
+    	    len = .len - 1;
+    	END;
+    	IF .len GTRU .authsnd [DSC$W_LENGTH] THEN
+    	BEGIN
+    	    INIT_SDESC (dsc, .authsnd [DSC$W_LENGTH], .cp);
+    	    IF STR$CASE_BLIND_COMPARE (authsnd, dsc) EQL 0 THEN
+    	    BEGIN
+    	    	confidence = MAXU (.confidence, .heurtbl [HEUR_K_UIDL_AUTH_SENDER,HEUR_L_CONFIDENCE]);
+    	    	reason = %ASCID'Message contains X-UIDL: header AND "Authenticated sender" header';
+    	    	dbgprt (2, '  AUTH_SENDER check matched, confidence level now !UL', .confidence);
+    	    END;
+    	END;
+    END;
+
+    IF .confidence LEQU .gheur_info [GHEUR_L_CL_REJECT] AND .heurtbl [HEUR_K_FROM_TO_SENDER_SAME,HEUR_V_ENABLED]
+    	AND NOT .sender_local AND NOT is_excluded (HEUR_K_FROM_TO_SENDER_SAME, sndr, fromstr) AND .single_to_address AND
+    	.cchdr EQLA 0 AND .bcchdr EQLA 0 AND (.fromhdr NEQA 0 AND .tohdr NEQA 0 AND .sndr [DSC$W_LENGTH] NEQ 0) THEN
+    BEGIN
+    	IF .sndr [DSC$W_LENGTH] EQL .fromstr [DSC$W_LENGTH] AND
+    	   .sndr [DSC$W_LENGTH] EQL .tostr [DSC$W_LENGTH] AND
+    	   CH$EQL (.sndr [DSC$W_LENGTH], .sndr [DSC$A_POINTER], .fromstr [DSC$W_LENGTH], .fromstr [DSC$A_POINTER]) AND
+    	   CH$EQL (.sndr [DSC$W_LENGTH], .sndr [DSC$A_POINTER], .tostr [DSC$W_LENGTH], .tostr [DSC$A_POINTER]) THEN
+    	BEGIN
+    	    confidence = MAXU (.confidence, .heurtbl [HEUR_K_FROM_TO_SENDER_SAME,HEUR_L_CONFIDENCE]);
+    	    reason = %ASCID'From:, To:, and MAIL FROM: addresses all identical';
+    	    dbgprt (2, '  FROM_TO_SENDER_SAME check matched, confidence level now !UL', .confidence);
+    	END;
+    END;
+
+    IF .confidence LEQU .gheur_info [GHEUR_L_CL_REJECT] AND .heurtbl [HEUR_K_MSGID_HAS_TO,HEUR_V_ENABLED]
+    	AND NOT is_excluded (HEUR_K_MSGID_HAS_TO, sndr, fromstr) AND
+    	(.tohdr NEQA 0 AND .msgidhdr NEQA 0) THEN
+    BEGIN
+    	IF .tohdr [TXT_W_LEN] GTRU 0 AND
+    	    NOT CH$FAIL (CH$FIND_SUB (.msgidhdr [TXT_W_LEN], msgidhdr [TXT_T_TEXT], .tohdr [TXT_W_LEN], tohdr [TXT_T_TEXT])) THEN
+    	BEGIN
+    	    confidence = MAXU (.confidence, .heurtbl [HEUR_K_MSGID_HAS_TO,HEUR_L_CONFIDENCE]);
+    	    reason = %ASCID'Message-ID: header contains To: address';
+    	    dbgprt (2, '  MSGID_HAS_TO check matched, confidence level now !UL', .confidence);
+    	END;
+    END;
+
+    IF .confidence LEQU .gheur_info [GHEUR_L_CL_REJECT] AND .heurtbl [HEUR_K_MSGID_HAS_FROM,HEUR_V_ENABLED]
+    	AND NOT is_excluded (HEUR_K_MSGID_HAS_FROM, sndr, fromstr) AND
+    	(.fromstr [DSC$W_LENGTH] NEQ 0 AND .msgidhdr NEQA 0) THEN
+    BEGIN
+    	IF NOT CH$FAIL (CH$FIND_SUB (.msgidhdr [TXT_W_LEN], msgidhdr [TXT_T_TEXT],
+    	    	    	    	    	.fromstr [DSC$W_LENGTH], .fromstr [DSC$A_POINTER])) THEN
+    	BEGIN
+    	    confidence = MAXU (.confidence, .heurtbl [HEUR_K_MSGID_HAS_FROM,HEUR_L_CONFIDENCE]);
+    	    reason = %ASCID'Message-ID: header contains From: address';
+    	    dbgprt (2, '  MSGID_HAS_FROM check matched, confidence level now !UL', .confidence);
+    	END;
+    END;
+
+    IF .confidence LEQU .gheur_info [GHEUR_L_CL_REJECT] AND .heurtbl [HEUR_K_FROM_USER_MSGID_HOST,HEUR_V_ENABLED]
+	AND NOT is_excluded (HEUR_K_FROM_USER_MSGID_HOST, sndr, fromstr) AND
+	(.fromstr [DSC$W_LENGTH] NEQ 0 AND .msgidhdr NEQA 0) THEN
+    BEGIN
+        LOCAL
+            lclpart     : BLOCK [DSC$K_S_BLN,BYTE],
+            dompart     : BLOCK [DSC$K_S_BLN,BYTE],
+	    msgid	: BLOCK [DSC$K_S_BLN,BYTE];
+
+	INIT_DYNDESC (lclpart, dompart);
+        INIT_SDESC (msgid, .msgidhdr [TXT_W_LEN], msgidhdr [TXT_T_TEXT]);
+        PARSE821 (msgid, 0, 0, dompart);
+        PARSE821 (fromstr, 0, lclpart, 0);
+
+	IF CH$EQL (.dompart [DSC$W_LENGTH], .dompart [DSC$A_POINTER], .lclpart [DSC$W_LENGTH], .lclpart [DSC$A_POINTER]) THEN
+	BEGIN
+	    confidence = MAXU (.confidence, .heurtbl [HEUR_K_FROM_USER_MSGID_HOST,HEUR_L_CONFIDENCE]);
+	    reason = %ASCID'Domain in Message-ID: matches user in From:';
+	    dbgprt (2, '  FROM_USER_MSGID_HOST check matched, confidence level now !UL', .confidence);
+	END;
+
+	FREE_STRINGS (dompart, lclpart);
+    END;
+
+    IF .confidence LEQU .gheur_info [GHEUR_L_CL_REJECT] AND .heurtbl [HEUR_K_FROM_BAD_LOCAL_USER,HEUR_V_ENABLED]
+	AND NOT is_excluded (HEUR_K_FROM_BAD_LOCAL_USER, sndr, fromstr) AND (.fromstr [DSC$W_LENGTH] NEQ 0) THEN
+    BEGIN
+	LOCAL
+	    lclpart	: BLOCK[DSC$K_S_BLN,BYTE],
+	    dompart	: BLOCK[DSC$K_S_BLN,BYTE],
+	    is_lcl	: initial(0),
+	    maictx	: initial(0);
+
+	INIT_DYNDESC(lclpart, dompart);
+	PARSE821(fromstr, 0, lclpart, dompart);
+
+	IF IS_LOCAL_DOMAIN(dompart, 1, 1) THEN
+	BEGIN
+	    is_lcl = MX_LOCAL_USER(maictx, lclpart) AND 1;
+	    IF NOT .is_lcl THEN
+		is_lcl = FINDALIAS(lclpart, aliases);
+
+	    MX_LOCAL_USER_FINISH(maictx);
+
+	    IF NOT .is_lcl THEN
+	    BEGIN
+		confidence = MAXU (.confidence, .heurtbl [HEUR_K_FROM_BAD_LOCAL_USER,HEUR_L_CONFIDENCE]);
+		reason = %ASCID'User in From: is alleged to be local, but isn''t really';
+		dbgprt (2, '  FROM_BAD_LOCAL_USER check matched, confidence level now !UL', .confidence);
+	    END;
+	END;
+
+	FREE_STRINGS(lclpart, dompart);
+    END;
+
+    IF .confidence LEQU .gheur_info [GHEUR_L_CL_REJECT] AND .heurtbl [HEUR_K_INVALID_AOL_ADDRESS,HEUR_V_ENABLED]
+    	AND NOT is_excluded (HEUR_K_INVALID_AOL_ADDRESS, sndr, fromstr) THEN
+    BEGIN
+    	LOCAL accept;
+    	accept = 1;
+    	IF .fromhdr NEQA 0 THEN
+    	BEGIN
+    	    accept = validate_aol_address (.fromstr [DSC$W_LENGTH], .fromstr [DSC$A_POINTER]);
+    	    IF NOT .accept THEN reason = %ASCID'Invalid AOL address in From: header';
+    	END;
+    	IF .accept AND .tohdr NEQA 0 THEN
+    	BEGIN
+    	    accept = validate_aol_address (.tohdr [TXT_W_LEN], tohdr [TXT_T_TEXT]);
+    	    IF NOT .accept THEN reason = %ASCID'Invalid AOL address in To: header';
+    	END;
+    	IF NOT .accept THEN
+    	BEGIN
+    	    confidence = MAXU (.confidence, .heurtbl [HEUR_K_INVALID_AOL_ADDRESS,HEUR_L_CONFIDENCE]);
+    	    dbgprt (2, '  INVALID_AOL_ADDRESS check matched, confidence level now !UL (!AS)', .confidence, .reason);
+    	END;
+    END;
+
+    IF .confidence LEQU .gheur_info [GHEUR_L_CL_REJECT] AND .heurtbl [HEUR_K_NUMERIC_ADDRESS,HEUR_V_ENABLED]
+    	AND NOT is_excluded (HEUR_K_NUMERIC_ADDRESS, sndr, fromstr) THEN
+    BEGIN
+    	LOCAL accept;
+    	accept = validate_local_part (.sndr [DSC$W_LENGTH], .sndr [DSC$A_POINTER]);
+    	IF NOT .accept THEN reason = %ASCID'Numeric local-part in MAIL FROM: address';
+    	IF .accept AND .fromstr [DSC$W_LENGTH] NEQ 0 THEN
+    	BEGIN
+    	    accept = validate_local_part (.fromstr [DSC$W_LENGTH], .fromstr [DSC$A_POINTER]);
+    	    IF NOT .accept THEN reason = %ASCID'Numeric local-part in From: address';
+    	END;
+    	IF .accept AND .tohdr NEQA 0 THEN
+    	BEGIN
+    	    accept = validate_local_part (.tohdr [TXT_W_LEN], tohdr [TXT_T_TEXT]);
+    	    IF NOT .accept THEN reason = %ASCID'Numeric local-part in To: address';
+    	END;
+    	IF NOT .accept THEN
+    	BEGIN
+    	    confidence = MAXU (.confidence, .heurtbl [HEUR_K_NUMERIC_ADDRESS,HEUR_L_CONFIDENCE]);
+    	    dbgprt (2, '  NUMERIC_ADDRESS check matched, confidence level now !UL', .confidence);
+    	END;
+    END;
+
+    IF .confidence LEQU .gheur_info [GHEUR_L_CL_REJECT] AND .heurtbl [HEUR_K_INVALID_HOTMAIL_ADDRESS,HEUR_V_ENABLED]
+    	AND NOT is_excluded (HEUR_K_INVALID_HOTMAIL_ADDRESS, sndr, fromstr) THEN
+    BEGIN
+    	LOCAL accept;
+    	accept = 1;
+    	IF .fromhdr NEQA 0 THEN
+    	BEGIN
+    	    accept = validate_hotmail_address (.fromstr [DSC$W_LENGTH], .fromstr [DSC$A_POINTER]);
+    	    IF .accept EQL 0 THEN reason = %ASCID'Invalid HOTMAIL address in From: header'
+    	    ELSE accept = 1;  ! temporary - see below
+!++
+!   mdm: Temporarily remove this check -- make this a separate heuristic with a lower
+!   	 confidence value, to deal with Postcard-type web sites.
+!
+!    	    ELSE IF .accept EQL 2 AND validate_hotmail_address (.sndr [DSC$W_LENGTH], .sndr [DSC$A_POINTER]) EQL 2
+!    	    	    	AND .origiphdr EQLA 0 THEN
+!    	    BEGIN
+!    	    	accept = 0;
+!    	    	reason = %ASCID'Message from HOTMAIL.COM missing X-Originating-IP: header';
+!    	    END;
+!--
+    	END;
+    	IF .accept NEQ 0 AND .tohdr NEQA 0 THEN
+    	BEGIN
+    	    accept = validate_hotmail_address (.tohdr [TXT_W_LEN], tohdr [TXT_T_TEXT]);
+    	    IF NOT .accept THEN reason = %ASCID'Invalid HOTMAIL address in To: header';
+    	END;
+    	IF .accept EQL 0 THEN
+    	BEGIN
+    	    confidence = MAXU (.confidence, .heurtbl [HEUR_K_INVALID_HOTMAIL_ADDRESS,HEUR_L_CONFIDENCE]);
+    	    dbgprt (2, '  INVALID_HOTMAIL_ADDRESS check matched, confidence level now !UL (!AS)', .confidence, .reason);
+    	END;
+    END;
+
+    IF .confidence LEQU .gheur_info [GHEUR_L_CL_REJECT]
+    	AND (.heurtbl [HEUR_K_RECEIVED_AFTER_FROM,HEUR_V_ENABLED] OR .heurtbl [HEUR_K_RECEIVED_ALL_ZEROS,HEUR_V_ENABLED])
+    	AND .fromhdr NEQA 0
+    	AND NOT is_excluded (HEUR_K_RECEIVED_AFTER_FROM, sndr, fromstr) THEN
+    BEGIN
+    	hdr = .fromhdr [TXT_L_FLINK];
+    	WHILE .hdr NEQA hdrq DO
+    	BEGIN
+    	    IF .hdr [TXT_W_CODE] EQL MX_K_HDR_RECEIVED THEN EXITLOOP;
+    	    hdr = .hdr [TXT_L_FLINK];
+    	END;
+    	IF .hdr NEQA hdrq THEN
+    	BEGIN
+    	    LOCAL accept;
+    	    accept = 1;
+    	    IF .heurtbl [HEUR_K_RECEIVED_ALL_ZEROS,HEUR_V_ENABLED] THEN
+    	    BEGIN
+    	    	IF NOT CH$FAIL (CH$FIND_SUB (.hdr [TXT_W_LEN], hdr [TXT_T_TEXT], 15, UPLIT ('000.000.000.000'))) THEN
+    	    	BEGIN
+    	    	    confidence = MAXU (.confidence, .heurtbl [HEUR_K_RECEIVED_ALL_ZEROS,HEUR_L_CONFIDENCE]);
+    	    	    reason = %ASCID'Received: header containing all-zeros IP address found after From: header';
+    	    	    accept = 0;
+    	    	    dbgprt (2, '  RECEIVED_ALL_ZEROS check matched, confidence level now !UL', .confidence);
+    	    	END;
+    	    END;
+    	    IF .accept AND .heurtbl [HEUR_K_RECEIVED_AFTER_FROM,HEUR_V_ENABLED] THEN
+    	    BEGIN
+    	    	confidence = MAXU (.confidence, .heurtbl [HEUR_K_RECEIVED_AFTER_FROM,HEUR_L_CONFIDENCE]);
+    	    	reason = %ASCID'Received: header found after From: header';
+    	    	dbgprt (2, '  RECEIVED_AFTER_FROM check matched, confidence level now !UL', .confidence);
+    	    END;
+    	END;
+    END;
+
+    FREE_STRINGS (fromstr, sndr, tostr);
+
+    dbgprt (1, '  Confidence Level=!UL, accept level=!UL, reject level=!UL', .confidence,
+    	    	    .gheur_info [GHEUR_L_CL_ACCEPT], .gheur_info [GHEUR_L_CL_REJECT]);
+
+! If below the acceptance threshold (i.e., accept outright), just return with no/mods
+
+    IF .confidence LEQ .gheur_info [GHEUR_L_CL_ACCEPT] THEN
+    BEGIN
+    	dbgprt (1, '  ...accepted as legitimate');
+    	RETURN 0;
+    END;
+
+! If between accept and reject thresholds, return with extra header
+
+    IF .confidence LEQ .gheur_info [GHEUR_L_CL_REJECT] THEN
+    BEGIN
+    	dbgprt (1, '  ...could be junk, but will pass on to recipient with warning');
+    	INIT_SDESC (dsc, %ALLOCATION (rbuf), rbuf);
+    	$FAO (%ASCID'!AS', dsc [DSC$W_LENGTH], dsc,
+    	    	(IF .confidence EQL 0 THEN %ASCID'NIL'
+    	    	 ELSE IF .confidence LSSU 4 THEN %ASCID'LOW' 
+    	    	 ELSE IF .confidence LSSU 8 THEN %ASCID'MEDIUM'
+    	    	 ELSE %ASCID'HIGH'));
+    	INSTXT (dsc, .hdrq [QUE_L_TAIL], MX_K_HDR_X_JUNK_MAIL_RATING);
+    	IF .gheur_info [GHEUR_V_INCLUDE_REASON] THEN
+    	    INSTXT (.reason, .hdrq [QUE_L_TAIL], MX_K_HDR_X_JUNK_MAIL_REASON);
+    	RETURN 0;
+    END;
+
+!  If above the rejection threshold, check reject action to see if we should drop.
+
+    IF .gheur_info [GHEUR_W_ACTION] EQL HEUR_K_ACTION_DROP THEN
+    BEGIN
+    	dbgprt (1, '  ...this is a reject, dropping (ACTION=DROP)');
+    	RETURN 1;
+    END;
+
+! This is a rejection, with forwarding as the reject action.
+
+    dbgprt (1, '  ...this is a reject, forwarding (ACTION=FORWARD)');
+    INIT_SDESC (dsc, %ALLOCATION (rbuf), rbuf);
+    $FAO (%ASCID'X-Filtered-Because: !AD', dsc [DSC$W_LENGTH], dsc, .reason [DSC$W_LENGTH], .reason [DSC$A_POINTER]);
+    INSTXT (dsc, inspt, MX_K_HDR_OTHER);
+    hdr = .inspt [TXT_L_FLINK]; ! get the pointer to the header we just inserted
+
+    dsc [DSC$W_LENGTH] = %ALLOCATION (rbuf);
+    $FAO (%ASCID'X-Original-Return-Path: !AD', dsc [DSC$W_LENGTH], dsc, .fromadr [TXT_W_LEN], fromadr [TXT_T_TEXT]);
+    INSTXT (dsc, .hdr, MX_K_HDR_OTHER);
+    hdr = .hdr [TXT_L_FLINK];  ! get the pointer to the header we just inserted
+
+    WHILE NOT REMQUE (.rcptque [QUE_L_HEAD], rcpt) DO
+    BEGIN
+    	BIND adr = rcpt [RCPT_A_ADDR] : REF TXTDEF;
+    	IF .adr NEQA 0 THEN
+    	BEGIN
+    	    dsc [DSC$W_LENGTH] = %ALLOCATION (rbuf);
+    	    $FAO (%ASCID'X-Original-Recipient: !AD', dsc [DSC$W_LENGTH], dsc, .adr [TXT_W_LEN], adr [TXT_T_TEXT]);
+    	    INSTXT (dsc, .hdr, MX_K_HDR_OTHER);
+    	    hdr = .hdr [TXT_L_FLINK];
+    	END;
+    	MEM_FREERCPT (rcpt);
+    END;
+
+    IF .gheur_info [GHEUR_W_FWDTO] EQL 0 THEN
+    	MX_FMT_LCL_ADDR (MX__FMT_ENVFROM, %ASCID'Postmaster', fromstr)
+    ELSE
+    BEGIN
+    	LOCAL
+    	    lcl	: BLOCK [DSC$K_S_BLN,BYTE],
+    	    dom	: BLOCK [DSC$K_S_BLN,BYTE],
+    	    q	: QUEDEF;
+    	INIT_SDESC (dsc, .gheur_info [GHEUR_W_FWDTO], gheur_info [GHEUR_T_FWDTO]);
+    	INIT_QUEUE (q);
+    	INIT_DYNDESC (lcl, dom);
+    	IF NOT PARSE_MBOX (dsc, lcl, dom) THEN
+    	    MX_FMT_LCL_ADDR (MX__FMT_ENVFROM, %ASCID'Postmaster', fromstr)
+    	ELSE
+    	    FORMAT821 (q, lcl, dom, fromstr);
+    	FREE_STRINGS (lcl, dom);
+    END;
+    MEM_GETRCPT (rcpt);
+    dbgprt (1, '  Forwarding to: !AS', fromstr);
+    rcpt [RCPT_A_ADDR] = MEM_GETTXT (.fromstr [DSC$W_LENGTH], .fromstr [DSC$A_POINTER]);
+    rcpt [RCPT_V_DSN_NEVER] = 1;
+    FREE_STRINGS (fromstr);
+    INSQUE (.rcpt, .rcptque [QUE_L_TAIL]);
+    FREETXT (fromadr);
+    envl [ENVL_V_DSN_HDRSONLY] = envl [ENVL_V_DSN_FULL] = 0;
+    envl [ENVL_L_RCPTCOUNT] = 1;
+    fromadr = MEM_GETTXT (2, UPLIT ('<>'));
+
+    2  ! return with modifications
+
+END; ! IS_SPAM_HEADER_COMBINATION    	
+
+%SBTTL 'IS_LOCAL_DOMAIN'
+GLOBAL ROUTINE IS_LOCAL_DOMAIN (DOMP_A, OVERRIDE, is_source_address) = 
+BEGIN
+!++
+! FUNCTIONAL DESCRIPTION:
+!
+!   Checks to see if a host name is part of a
+!   "local" domain, where "local" is defined as
+!   being part of one of the domains used for
+!   mail or TCP/IP, or matching one of the domains
+!   on the local domains list.
+!
+! RETURNS:  	boolean
+!
+! PROTOTYPE:
+!
+!   IS_LOCAL_DOMAIN hostname
+!
+! IMPLICIT INPUTS:  None.
+!
+! IMPLICIT OUTPUTS: None.
+!
+! COMPLETION CODES:
+!
+!   1: is local
+!   0: is not local
+!
+! SIDE EFFECTS:
+!
+!   None.
+!--
+    BIND
+    	DOMP	= .DOMP_A   : BLOCK [,BYTE];
+
+    BUILTIN
+    	ACTUALCOUNT;
+
+    LOCAL
+    	SDSC	: BLOCK [DSC$K_S_BLN,BYTE],
+    	SDS2	: BLOCK [DSC$K_S_BLN,BYTE],
+    	STR 	: BLOCK [DSC$K_S_BLN,BYTE],
+    	LCLDOM	: REF LCLDOMDEF,
+        is_src,
+    	PATHID,
+    	CP, I,
+    	DO_CHECK,
+    	STATUS;
+
+    IF .CALLER_COUNT EQL 0 AND .RESET_MASK NEQ 0 THEN
+    BEGIN
+    	STATUS = VERIFY_INIT (1);
+    	IF .STATUS THEN RESET_MASK = 0;
+    END;
+
+! if we aren't set for NORELAY, we don't have to worry about it
+
+    DO_CHECK = .SMTP_INFO [SMTP_V_NORELAY];
+    IF NOT .DO_CHECK AND ACTUALCOUNT () GTR 1 THEN DO_CHECK = .OVERRIDE;
+
+    IF NOT .DO_CHECK THEN RETURN 1;
+
+    is_src = (IF ACTUALCOUNT () GTR 2 THEN .is_source_address ELSE 0);
+
+    dbgprt (2, 'in IS_LOCAL_DOMAIN, checking !AS (!AS address)', domp,
+            (IF .is_src THEN %ASCID'source' ELSE %ASCID'destination'));
+
+    IF STR$CASE_BLIND_COMPARE (DOMP, MAILNAME) EQL 0 OR
+       STR$CASE_BLIND_COMPARE (DOMP, HOSTNAME) EQL 0 THEN
+    BEGIN
+    	dbgprt (2, ' -- matched local mail domain name or host name');
+    	RETURN 1;
+    END;
+
+! look for dot in our domain name ==> MX host name
+
+    I = STR$POSITION (MAILNAME, %ASCID'.');
+    IF .I NEQ 0 THEN
+    BEGIN
+    	IF STR$POSITION (MAILNAME, %ASCID'.', %REF (.I+1)) NEQ 0 THEN  ! must be at least two dots
+    	BEGIN
+
+! is host name we're checking == our parent domain?  (only allowed on source addresses)
+
+            IF .is_src THEN
+            BEGIN
+    	        INIT_SDESC (SDSC, .MAILNAME [DSC$W_LENGTH] - .I, CH$PLUS (.MAILNAME [DSC$A_POINTER], .I));
+    	        IF STR$CASE_BLIND_COMPARE (DOMP, SDSC) EQL 0 THEN
+    	        BEGIN
+    	    	    dbgprt (2, '  -- match on parent domain (mail)');
+    	    	    RETURN 1;
+    	        END;
+
+! is host name we're checking in our parent domain? (only on source addresses)
+
+    	        I = .I - 1; ! put the dot back
+    	        INIT_SDESC (SDSC, .MAILNAME [DSC$W_LENGTH] - .I, CH$PLUS (.MAILNAME [DSC$A_POINTER], .I));
+    	        IF .SDSC [DSC$W_LENGTH] LSS .DOMP [DSC$W_LENGTH] THEN
+    	        BEGIN
+    	    	    LOCAL OFFSET;
+    	    	    OFFSET = .DOMP [DSC$W_LENGTH] - .SDSC [DSC$W_LENGTH];
+    	    	    INIT_SDESC (SDS2, .SDSC [DSC$W_LENGTH], CH$PLUS (.DOMP [DSC$A_POINTER], .OFFSET));
+    	    	    IF STR$CASE_BLIND_COMPARE (SDSC, SDS2) EQL 0 THEN
+    	    	    BEGIN
+    	    	        dbgprt (2, '  -- match, same parent domain (mail)');
+    	    	        RETURN 1;
+    	    	    END;
+                END;
+    	    END; ! is_src
+    	END;
+    END;
+    	    
+! look for dot in our domain name ==> the TCP/IP host name
+
+    I = STR$POSITION (HOSTNAME, %ASCID'.');
+    IF .is_src AND .I NEQ 0 THEN
+    BEGIN
+    	IF STR$POSITION (HOSTNAME, %ASCID'.', %REF (.I+1)) NEQ 0 THEN  ! must be at least two dots
+    	BEGIN
+
+! is host name we're checking == our parent domain?
+
+    	    INIT_SDESC (SDSC, .HOSTNAME [DSC$W_LENGTH] - .I, CH$PLUS (.HOSTNAME [DSC$A_POINTER], .I));
+    	    IF STR$CASE_BLIND_COMPARE (DOMP, SDSC) EQL 0 THEN
+    	    BEGIN
+    	    	dbgprt (2, '  -- match on domain name (host)');
+    	    	RETURN 1;
+    	    END;
+
+! is host name we're checking in our parent domain?
+
+    	    I = .I - 1;   ! put the dot back
+    	    INIT_SDESC (SDSC, .HOSTNAME [DSC$W_LENGTH] - .I, CH$PLUS (.HOSTNAME [DSC$A_POINTER], .I));
+    	    IF .SDSC [DSC$W_LENGTH] LSS .DOMP [DSC$W_LENGTH] THEN
+    	    BEGIN
+    	    	LOCAL OFFSET;
+    	    	OFFSET = .DOMP [DSC$W_LENGTH] - .SDSC [DSC$W_LENGTH];
+    	    	INIT_SDESC (SDS2, .SDSC [DSC$W_LENGTH], CH$PLUS (.DOMP [DSC$A_POINTER], .OFFSET));
+    	    	IF STR$CASE_BLIND_COMPARE (SDSC, SDS2) EQL 0 THEN
+    	    	BEGIN
+    	    	    dbgprt (2, '  -- match, same parent domain (host)');
+    	    	    RETURN 1;
+    	    	END;
+    	    END;
+    	END;
+    END;
+
+    IF REWRITE_VIRTUAL_DOMAIN (.domp_a) THEN
+    BEGIN
+    	dbgprt (2, '  -- matched ADDRESS_REWRITER virtual domain');
+    	RETURN 1;
+    END;
+    	
+    INIT_DYNDESC (STR);
+    STR$UPCASE (STR, .DOMP_A);
+
+! Check for domain on path list to see if it's local
+
+    STATUS = FINDPATH (STR, PATHID);
+    IF .STATUS AND .PATHID EQL MX_K_PATH_LOCAL THEN
+    BEGIN
+    	FREE_STRINGS (STR);
+    	dbgprt (2, '  -- match, found matching LOCAL path');
+    	RETURN 1;
+    END;
+
+    LCLDOM = .LCLDOMS [QUE_L_HEAD];
+    WHILE .LCLDOM NEQA LCLDOMS DO
+    BEGIN
+    	dbgprt (3, '  checking against LOCAL_DOMAIN !AD',
+    	    	    .lcldom [lcldom_w_hostlen], lcldom [lcldom_t_host]);
+    	INIT_SDESC (SDSC, .LCLDOM [LCLDOM_W_HOSTLEN], LCLDOM [LCLDOM_T_HOST]);
+    	CP = CH$FIND_CH (.LCLDOM [LCLDOM_W_HOSTLEN], LCLDOM [LCLDOM_T_HOST], %C'*');
+    	IF CH$FAIL (.CP) THEN
+    	    CP = CH$FIND_CH (.LCLDOM [LCLDOM_W_HOSTLEN], LCLDOM [LCLDOM_T_HOST], %C'%');
+    	IF CH$FAIL (.CP) THEN
+    	BEGIN
+    	    IF CH$EQL (.STR [DSC$W_LENGTH], .STR [DSC$A_POINTER],
+    	    	       .SDSC [DSC$W_LENGTH], .SDSC [DSC$A_POINTER], %C' ') THEN
+    	    BEGIN
+    	    	dbgprt (3, '  -- exact match');
+    	    	EXITLOOP;
+    	    END;
+    	END
+    	ELSE
+    	BEGIN
+    	    IF STR$MATCH_WILD (STR, SDSC) THEN
+    	    BEGIN
+    	    	dbgprt (3, '  -- wildcard match');
+    	    	EXITLOOP;
+    	    END;
+    	END;
+    	LCLDOM = .LCLDOM [LCLDOM_L_FLINK];
+    END;
+    FREE_STRINGS (STR);
+
+    IF .lcldom EQLA LCLDOMS THEN
+    	dbgprt (2, 'IS_LOCAL_DOMAIN: no')
+    ELSE
+    	dbgprt (2, 'IS_LOCAL_DOMAIN: yes');
+
+    (.LCLDOM NEQA LCLDOMS)  ! if NEQA, then we found one
+
+END; ! IS_LOCAL_DOMAIN
+
+%SBTTL 'valid_addresses_for_domain'
+ROUTINE valid_address_for_domain (addr_a) =
+BEGIN
+!++
+! FUNCTIONAL DESCRIPTION:
+!
+!
+! RETURNS:  	integer
+!
+! PROTOTYPE:
+!
+!   valid_address_for_domain  addr
+!
+! IMPLICIT INPUTS:  None.
+!
+! IMPLICIT OUTPUTS: None.
+!
+! COMPLETION CODES:
+!
+!   1: is valid
+!   0: is not valid
+!
+! SIDE EFFECTS:
+!
+!   None.
+!--
+    BIND
+        addr    = .addr_a : INADDRDEF;
+    LOCAL
+        buf     : VECTOR [256,BYTE],
+        sdsc    : BLOCK [DSC$K_S_BLN,BYTE],
+        lnmlst  : $ITMLST_DECL (ITEMS=2),
+        invaddr : INADDRDEF,
+        invmask : INADDRDEF,
+        lnmidx,
+        len     : WORD VOLATILE,
+        cp,
+        status;
+
+    INIT_SDESC (sdsc, %ALLOCATION (buf), buf);
+    status = NETLIB_ADDRTOSTR (addr, sdsc, sdsc [DSC$W_LENGTH]);
+    IF NOT .status THEN
+        sdsc [DSC$W_LENGTH] = 0;
+
+    dbgprt(2, 'Checking !AS against MX_INVALID_DOMAIN_ADDRESSES...', sdsc);
+
+    lnmidx = 0;
+    $ITMLST_INIT (ITMLST=lnmlst,
+        (ITMCOD=LNM$_INDEX, BUFADR=lnmidx, BUFSIZ=%ALLOCATION (lnmidx)),
+        (ITMCOD=LNM$_STRING, BUFADR=buf, BUFSIZ=%ALLOCATION (buf), RETLEN=len));
+    WHILE 1 DO
+    BEGIN
+        status = $TRNLNM (TABNAM=%ASCID'LNM$FILE_DEV', LOGNAM=%ASCID'MX_INVALID_DOMAIN_ADDRESSES',
+                          ACMODE=%REF (PSL$C_EXEC), ITMLST=lnmlst);
+        IF NOT .status THEN
+            EXITLOOP;
+        lnmidx = .lnmidx + 1;
+        cp = CH$FIND_CH (.len, buf, %C':');
+        IF CH$FAIL (.cp) THEN
+            invmask [INADDR_L_ADDR] = %X'FFFFFFFF'
+        ELSE
+        BEGIN
+            cp = CH$PLUS (.cp, 1);
+            INIT_SDESC (sdsc, .len-CH$DIFF (.cp, buf), .cp);
+            status = NETLIB_STRTOADDR (sdsc, invmask);
+            IF NOT .status THEN
+            BEGIN
+                dbgprt (2, '  -- error translating netmask !AS, using 255.255.255.255', sdsc);
+                invmask [INADDR_L_ADDR] = %X'FFFFFFFF';
+            END
+            ELSE
+                len = CH$DIFF (.cp, buf) - 1;
+        END;
+        INIT_SDESC (sdsc, .len, buf);
+        status = NETLIB_STRTOADDR (sdsc, invaddr);
+        IF .status THEN
+        BEGIN
+            IF (.addr [INADDR_L_ADDR] AND .invmask [INADDR_L_ADDR]) EQLU
+               (.invaddr [INADDR_L_ADDR] AND .invmask [INADDR_L_ADDR]) THEN
+            BEGIN
+                dbgprt (2, '  -- address matched !AS netmask 0x!XL', sdsc, .invmask [INADDR_L_ADDR]);
+                RETURN 0;
+            END;
+        END
+        ELSE
+            dbgprt (2, '  -- error translating address !AS, skipping', sdsc);
+    END;
+
+    dbgprt (2, ' -- did not match, is valid');
+
+    1   ! no matching invalid addresses
+
+END; ! valid_address_for_domain
+
+! Hack to work around bug in NETLIB_DNS_SKIPNAME
+
+ROUTINE my_skipname (buf_a, rem_a) =
+BEGIN
+    BIND
+        rem     = .rem_a : WORD;
+
+    LOCAL
+        cp      : REF BLOCK [,BYTE],
+        eom     : REF BLOCK [,BYTE];
+
+    cp = .buf_a;
+    eom = CH$PLUS (.cp, .rem);
+    WHILE (.cp LEQA .eom) AND (CH$RCHAR (.cp) NEQU 0) DO
+        IF CH$RCHAR (.cp) GEQU 64 THEN
+        BEGIN
+            cp = CH$PLUS (.cp, 1);
+            EXITLOOP;
+        END
+        ELSE
+            cp = CH$PLUS (.cp, CH$RCHAR (.cp)+1);
+
+    CH$DIFF (.cp, .buf_a) + 1
+
+END; ! my_skipname
+
+%SBTTL 'has_valid_addresses'
+GLOBAL ROUTINE has_valid_addresses (bufstart, buflen : WORD) =
+BEGIN
+!++
+! FUNCTIONAL DESCRIPTION:
+!
+!
+! RETURNS:  	integer
+!
+! PROTOTYPE:
+!
+!   has_valid_addresses  buf, len
+!
+! IMPLICIT INPUTS:  None.
+!
+! IMPLICIT OUTPUTS: None.
+!
+! COMPLETION CODES:
+!
+!   2: invalid DNS reply
+!   1: is valid
+!   0: is not valid
+!
+! SIDE EFFECTS:
+!
+!   None.
+!--
+    LOCAL
+        hdr     : REF NETLIB_DNS_HEADER,
+        remain  : WORD,
+        skip    : WORD,
+        bufp    : REF BLOCK [,BYTE],
+        addr    : INADDRDEF,
+        type    : WORD,
+        class   : WORD,
+        n       : WORD,
+        ancount, qdcount;
+
+    MACRO
+        extract_word (tgt, buf, rem) =
+        IF .rem GEQU 2 THEN
+        BEGIN
+            tgt<8,8,0> = .buf[0,0,8,0];
+            tgt<0,8,0> = .buf[1,0,8,0];
+            buf = buf [2,0,0,0];
+            rem = .rem - 2;
+        END
+        ELSE
+            rem = 0%;
+
+    IF .buflen LSSU DNS_S_HEADER THEN
+        RETURN 2;
+
+    hdr = .bufstart;
+    ancount = NETLIB_NTOH_WORD (hdr [DNS_W_ANCOUNT]);
+    qdcount = NETLIB_NTOH_WORD (hdr [DNS_W_QDCOUNT]);
+
+    ! reply code is already checked by caller
+
+    remain = .buflen - DNS_S_HEADER;
+    bufp = CH$PLUS (.bufstart, DNS_S_HEADER);
+    WHILE .qdcount GTRU 0 AND .remain NEQU 0 DO
+    BEGIN
+        qdcount = .qdcount - 1;
+        skip = my_skipname (.bufp, remain) + 4; ! class & type
+        IF .skip GTRU .remain THEN
+            RETURN 2;
+        bufp = CH$PLUS (.bufp, .skip);
+        remain = .remain - .skip;
+    END;
+
+    IF .qdcount NEQU 0 THEN
+        RETURN 2;
+
+    WHILE .ancount GTRU 0 AND .remain NEQU 0 DO
+    BEGIN
+        ancount = .ancount - 1;
+        skip = my_skipname (.bufp, remain); ! don't care what the name is
+        IF .skip GEQU .remain THEN
+            RETURN 2;
+        bufp = CH$PLUS (.bufp, .skip);
+        remain = .remain - .skip;
+        IF .remain LSSU 10 THEN ! 2-type, 2-class, 4-TTL, 2-length
+            RETURN 2;
+        extract_word(type, bufp, remain);
+        extract_word(class, bufp, remain);
+        bufp = CH$PLUS (.bufp, 4); ! TTL
+        remain = .remain - 4;
+        extract_word(n, bufp, remain); ! data length
+        IF .n GTRU .remain THEN
+            RETURN 2;
+        IF .type EQL NETLIB_K_DNS_TYPE_A THEN
+        BEGIN
+            IF .n NEQU 4 THEN              ! IP address should be 4 bytes
+                RETURN 2;
+            CH$MOVE (4, .bufp, addr);  ! note no byte-swapping here
+            IF NOT valid_address_for_domain (addr) THEN
+                RETURN 0;
+        END;
+        bufp = CH$PLUS (.bufp, .n);
+        remain = .remain - .n;
+    END;
+
+    IF .ancount EQLU 0 THEN 1 ELSE 2
+
+END; ! has_valid_addresses
+
+%SBTTL 'match_regex'
+ROUTINE match_regex (cand_a, regex_a) = 
+BEGIN
+!++
+! FUNCTIONAL DESCRIPTION:
+!
+!   description
+!
+! RETURNS:  	cond_value, longword (unsigned), write only, by value
+!
+! PROTOTYPE:
+!
+!   x
+!
+! IMPLICIT INPUTS:  None.
+!
+! IMPLICIT OUTPUTS: None.
+!
+! COMPLETION CODES:
+!
+!   SS$_NORMAL:	    	normal successful completion.
+!
+! SIDE EFFECTS:	    None.
+!--
+    BIND
+        cand    = .cand_a   : BLOCK [,BYTE],
+        regex   = .regex_a  : REGEXDEF;
+
+    LOCAL
+        regmat  : REGMATDEF;
+
+    regmat [REGMAT_L_SO] = 0;
+    regmat [REGMAT_L_EO] = .cand [DSC$W_LENGTH];
+
+    MX_REGEXEC (regex, .cand [DSC$A_POINTER], 0, regmat, REG_M_STARTEND) EQL 0
+
+END; ! match_regex
+
+%SBTTL 'match_wild'
+ROUTINE match_wild (cand_a, plen : WORD, pat) = 
+BEGIN
+!++
+! FUNCTIONAL DESCRIPTION:
+!
+!   Augmented wildcard matching routine that allows the
+!   use of '\' in the pattern for a literal-next function.
+!   Also, comparisons are case-blind.
+!
+! RETURNS:  	boolean
+!
+! PROTOTYPE:
+!
+!   MATCH_WILD   cand, plen, pat
+!
+! IMPLICIT INPUTS:  None.
+!
+! IMPLICIT OUTPUTS: None.
+!
+! COMPLETION CODES:
+!
+!   1: match
+!   0: no match
+!
+! SIDE EFFECTS:
+!
+!   None.
+!--
+    LOCAL
+    	pp,
+    	psave,
+    	cp,
+    	can,
+    	litnext,
+    	clen	: WORD,
+    	pslen	: WORD,
+    	pc  	: BYTE,
+    	cc  	: BYTE,
+    	status;
+
+    status = LIB$ANALYZE_SDESC (.cand_a, clen, can);
+    IF NOT .status THEN RETURN 0;
+
+! Strip off angle brackets if the pattern doesn't have 'em
+
+    IF (.clen GTR 2 AND CH$RCHAR (.can) EQL %C'<' AND
+    	CH$RCHAR (CH$PLUS (.can, .clen-1)) EQL %C'>') AND
+    	(.plen LSS 2 OR CH$RCHAR (.pat) NEQ %C'<') THEN
+    BEGIN
+    	clen = .clen - 2;
+    	can = CH$PLUS (.can, 1);
+    END;
+
+    psave = 0;
+    pslen = 0;
+    pp = .pat;
+    cp = .can;
+
+    litnext = 0;
+    WHILE .plen GTR 0 DO
+    BEGIN
+    	pc = CH$RCHAR (.pp);
+    	IF (.pc GEQ %C'A') AND (.pc LEQ %C'Z') THEN pc = .pc + (%C'a'-%C'A');
+    	IF .clen GTR 0 THEN
+    	BEGIN
+    	    cc = CH$RCHAR (.cp);
+    	    IF (.cc GEQ %C'A') AND (.cc LEQ %C'Z') THEN cc = .cc + (%C'a'-%C'A');
+    	END;
+    	IF .litnext THEN
+    	BEGIN
+    	    litnext = 0;
+    	    IF .clen EQL 0 THEN RETURN 0;
+    	    IF .pc EQL .cc THEN
+    	    BEGIN
+    	    	cp = CH$PLUS (.cp, 1);
+    	    	clen = .clen - 1;
+    	    END
+    	    ELSE IF .psave EQLA 0 THEN RETURN 0
+    	    ELSE
+    	    BEGIN
+    	    	pp = .psave;
+    	    	plen = .pslen;
+    	    	clen = .clen - 1;
+    	    	cp = CH$PLUS (.cp, 1);
+    	    END;
+    	END
+    	ELSE
+    	BEGIN
+    	    SELECTONE .pc OF
+    	    SET
+    	    [%C'\'] :
+    	    	litnext = 1;
+    	    [%C'*'] :
+    	    	BEGIN
+    	    	    IF .plen EQL 1 THEN RETURN 1;
+    	    	    psave = .pp;
+    	    	    pslen = .plen;
+    	    	END;
+    	    [%C'%'] :
+    	    	BEGIN
+    	    	    IF .clen EQL 0 THEN RETURN 0;
+    	    	    clen = .clen - 1;
+    	    	    cp = CH$PLUS (.cp, 1);
+    	    	END;
+    	    [OTHERWISE] :
+    	    	BEGIN
+    	    	    IF .clen EQL 0 THEN RETURN 0;
+    	    	    IF .cc EQL .pc THEN
+    	    	    BEGIN
+    	    	    	clen = .clen - 1;
+    	    	    	cp = CH$PLUS (.cp, 1);
+    	    	    END
+    	    	    ELSE IF .psave EQLA 0 THEN RETURN 0
+    	    	    ELSE
+    	    	    BEGIN
+    	    	    	pp = .psave;
+    	    	    	plen = .pslen;
+    	    	    	clen = .clen - 1;
+    	    	    	cp = CH$PLUS (.cp, 1);
+    	    	    END;
+    	    	END;
+    	    TES;
+    	END;
+
+    	plen = .plen - 1;
+    	pp = CH$PLUS (.pp, 1);
+
+    END; ! WHILE .plen GTR 0
+
+!  If we've exhausted the pattern, there's only a match
+!  if we've also exhausted the candidate (because a pattern
+!  with a final character of '*' is handled in the SELECTONE above).
+
+    .clen EQL 0
+
+END; ! match_wild
+
+%SBTTL 'validate_aol_address'
+ROUTINE validate_aol_address (len, ptr) = 
+BEGIN
+!++
+! FUNCTIONAL DESCRIPTION:
+!
+!   description
+!
+! RETURNS:  	cond_value, longword (unsigned), write only, by value
+!
+! PROTOTYPE:
+!
+!   x
+!
+! IMPLICIT INPUTS:  None.
+!
+! IMPLICIT OUTPUTS: None.
+!
+! COMPLETION CODES:
+!
+!   SS$_NORMAL:	    	normal successful completion.
+!
+! SIDE EFFECTS:
+!
+!   None.
+!--
+    LOCAL
+    	dsc 	: BLOCK [DSC$K_S_BLN,BYTE],
+    	lclp	: BLOCK [DSC$K_S_BLN,BYTE],
+    	domp	: BLOCK [DSC$K_S_BLN,BYTE],
+    	accept;
+
+    IF .len GTRU 1 AND CH$RCHAR (.ptr) EQL %C'<' THEN
+    BEGIN
+    	len = .len - 2;
+    	ptr = CH$PLUS (.ptr, 1);
+    END;
+
+    IF .len EQL 0 THEN RETURN 1;
+
+    INIT_SDESC (dsc, .len, .ptr);
+    INIT_DYNDESC (lclp, domp);
+
+    accept = 1;
+
+    IF PARSE_MBOX (dsc, lclp, domp) THEN
+    BEGIN
+    	IF .domp [DSC$W_LENGTH] EQL 7 AND STR$CASE_BLIND_COMPARE (domp, %ASCID'AOL.COM') EQL 0 THEN
+    	BEGIN
+    	    IF STR$CASE_BLIND_COMPARE (lclp, %ASCID'MAILER-DAEMON') EQL 0 THEN
+    	    	accept = 1
+    	    ELSE IF .lclp [DSC$W_LENGTH] GTR 16 THEN
+    	    	accept = 0
+    	    ELSE IF .lclp [DSC$W_LENGTH] GEQ 3 THEN
+    	    BEGIN
+    	    	LOCAL ch : BYTE;
+    	    	ch = CH$RCHAR (.lclp [DSC$A_POINTER]);
+    	    	IF .ch GEQ %C'0' AND .ch LEQ %C'9' THEN accept = 0
+    	    	ELSE
+    	    	BEGIN
+    	    	    LOCAL cp;
+    	    	    cp = .lclp [DSC$A_POINTER];
+    	    	    INCR i FROM 1 TO .lclp [DSC$W_LENGTH] DO
+    	    	    BEGIN
+    	    	    	IF CH$FAIL (CH$FIND_CH (.alnum [DSC$W_LENGTH], .alnum [DSC$A_POINTER], CH$RCHAR (.cp))) THEN
+    	    	    	BEGIN
+    	    	    	    accept = 0;
+    	    	    	    EXITLOOP;
+    	    	    	END;
+    	    	    	cp = CH$PLUS (.cp, 1);
+    	    	    END;
+    	    	END;
+    	    END
+    	    ELSE accept = 0;
+    	END;
+    END;
+
+    FREE_STRINGS (lclp, domp);
+
+    .accept
+
+END; ! validate_aol_address
+
+
+%SBTTL 'validate_hotmail_address'
+ROUTINE validate_hotmail_address (len, ptr) = 
+BEGIN
+!++
+! FUNCTIONAL DESCRIPTION:
+!
+!   description
+!
+! RETURNS:  	cond_value, longword (unsigned), write only, by value
+!
+! PROTOTYPE:
+!
+!   x
+!
+! IMPLICIT INPUTS:  None.
+!
+! IMPLICIT OUTPUTS: None.
+!
+! COMPLETION CODES:
+!
+!   SS$_NORMAL:	    	normal successful completion.
+!
+! SIDE EFFECTS:
+!
+!   None.
+!--
+    LOCAL
+    	dsc 	: BLOCK [DSC$K_S_BLN,BYTE],
+    	lclp	: BLOCK [DSC$K_S_BLN,BYTE],
+    	domp	: BLOCK [DSC$K_S_BLN,BYTE],
+    	accept;
+
+    IF .len GTRU 1 AND CH$RCHAR (.ptr) EQL %C'<' THEN
+    BEGIN
+    	len = .len - 2;
+    	ptr = CH$PLUS (.ptr, 1);
+    END;
+
+    IF .len EQL 0 THEN RETURN 1;
+
+    INIT_SDESC (dsc, .len, .ptr);
+    INIT_DYNDESC (lclp, domp);
+
+    accept = 1;
+
+    IF PARSE_MBOX (dsc, lclp, domp) THEN
+    BEGIN
+    	IF .domp [DSC$W_LENGTH] EQL 11 AND STR$CASE_BLIND_COMPARE (domp, %ASCID'HOTMAIL.COM') EQL 0 THEN
+    	BEGIN
+    	    accept = 2;
+    	    IF .lclp [DSC$W_LENGTH] GTR 0 THEN
+    	    BEGIN
+    	    	LOCAL ch : BYTE;
+    	    	ch = CH$RCHAR (.lclp [DSC$A_POINTER]);
+    	    	IF .ch GEQ %C'0' AND .ch LEQ %C'9' THEN accept = 0
+    	    END;
+    	END;
+    END;
+
+    FREE_STRINGS (lclp, domp);
+
+    .accept
+
+END; ! validate_hotmail_address
+
+
+%SBTTL 'validate_local_part'
+ROUTINE validate_local_part (len, ptr) = 
+BEGIN
+!++
+! FUNCTIONAL DESCRIPTION:
+!
+!   description
+!
+! RETURNS:  	cond_value, longword (unsigned), write only, by value
+!
+! PROTOTYPE:
+!
+!   x
+!
+! IMPLICIT INPUTS:  None.
+!
+! IMPLICIT OUTPUTS: None.
+!
+! COMPLETION CODES:
+!
+!   SS$_NORMAL:	    	normal successful completion.
+!
+! SIDE EFFECTS:
+!
+!   None.
+!--
+    LOCAL
+    	dsc 	: BLOCK [DSC$K_S_BLN,BYTE],
+    	lclp	: BLOCK [DSC$K_S_BLN,BYTE],
+    	domp	: BLOCK [DSC$K_S_BLN,BYTE],
+    	accept;
+
+    IF .len GTRU 1 AND CH$RCHAR (.ptr) EQL %C'<' THEN
+    BEGIN
+    	len = .len - 2;
+    	ptr = CH$PLUS (.ptr, 1);
+    END;
+
+    IF .len EQL 0 THEN RETURN 1;
+
+    INIT_SDESC (dsc, .len, .ptr);
+    INIT_DYNDESC (lclp, domp);
+
+
+    IF NOT PARSE_MBOX (dsc, lclp, domp) THEN RETURN 1;
+    accept = 0;
+
+    INCRA cp FROM .lclp [DSC$A_POINTER] TO CH$PLUS (.lclp [DSC$A_POINTER], .lclp [DSC$W_LENGTH]-1) DO
+    BEGIN
+    	IF CH$RCHAR (.cp) LEQ %C'0' OR CH$RCHAR (.cp) GEQ %C'9' THEN
+    	BEGIN
+    	    accept = 1;
+    	    EXITLOOP;
+    	END;
+    END;
+
+    IF NOT .accept THEN
+    BEGIN
+    	INCR i FROM 0 TO NUMEXCEPT_K_COUNT-1 DO
+    	BEGIN
+    	    IF STR$CASE_BLIND_COMPARE (domp, .numexcept [.i]) EQL 0 THEN
+    	    BEGIN
+    	    	accept = 1;
+    	    	EXITLOOP;
+    	    END;
+    	END;
+    END;
+
+    FREE_STRINGS (lclp, domp);
+
+    .accept
+
+END; ! validate_local_part
+
+%SBTTL 'is_excluded'
+ROUTINE is_excluded (checknum, sndr_a, fromadr_a) = 
+BEGIN
+!++
+! FUNCTIONAL DESCRIPTION:
+!
+!   description
+!
+! RETURNS:  	cond_value, longword (unsigned), write only, by value
+!
+! PROTOTYPE:
+!
+!   x
+!
+! IMPLICIT INPUTS:  None.
+!
+! IMPLICIT OUTPUTS: None.
+!
+! COMPLETION CODES:
+!
+!   SS$_NORMAL:	    	normal successful completion.
+!
+! SIDE EFFECTS:
+!
+!   None.
+!--
+    BIND
+    	sender	= .sndr_a    	    	     : BLOCK [,BYTE],
+    	fromadr = .fromadr_a	    	     : BLOCK [,BYTE],
+    	gblque	= gheur_info [GHEUR_Q_GBLEXCL] : QUEDEF,
+    	excque	= heurtbl [.checknum,HEUR_Q_EXCL] : QUEDEF;
+
+    LOCAL
+    	t   	: REF TXTDEF,
+    	upfrom	: BLOCK [DSC$K_S_BLN,BYTE],
+    	upsndr	: BLOCK [DSC$K_S_BLN,BYTE],
+    	dsc 	: BLOCK [DSC$K_S_BLN,BYTE],
+    	buf 	: VECTOR [256,BYTE],
+    	nam 	: VECTOR [256,BYTE],
+    	lnmlst	: $ITMLST_DECL (ITEMS=2);
+
+    INIT_DYNDESC (upfrom, upsndr);
+
+    STR$UPCASE (upsndr, sender);
+    IF fromadr NEQA 0 THEN STR$UPCASE (upfrom, fromadr);
+
+    t = .gblque [QUE_L_HEAD];
+    WHILE .t NEQA gblque [QUE_L_HEAD] DO
+    BEGIN
+    	INIT_SDESC (dsc, .t [TXT_W_LEN], t [TXT_T_TEXT]);
+    	IF STR$MATCH_WILD (upfrom, dsc) OR STR$MATCH_WILD (upsndr, dsc) THEN
+    	BEGIN
+    	    dbgprt (3, '    Found sender or From: on global heuristics exclusion list');
+    	    FREE_STRINGS (upfrom, upsndr);
+    	    RETURN 1;
+    	END;
+    	t = .t [TXT_L_FLINK];
+    END;
+
+    t = .excque [QUE_L_HEAD];
+    WHILE .t NEQA excque [QUE_L_HEAD] DO
+    BEGIN
+    	INIT_SDESC (dsc, .t [TXT_W_LEN], t [TXT_T_TEXT]);
+    	IF STR$MATCH_WILD (upfrom, dsc) OR STR$MATCH_WILD (upsndr, dsc) THEN
+    	BEGIN
+    	    dbgprt (3, '    Found sender or From: on local exclusion list for !AS', .heurnam [.checknum]);
+    	    FREE_STRINGS (upfrom, upsndr);
+    	    RETURN 1;
+    	END;
+    	t = .t [TXT_L_FLINK];
+    END;
+
+    FREE_STRINGS (upfrom, upsndr);
+
+    0
+
+END; ! is_excluded
+
+%SBTTL 'header_match'
+ROUTINE header_match (hdr_a, str_a) = 
+BEGIN
+!++
+! FUNCTIONAL DESCRIPTION:
+!
+!   description
+!
+! RETURNS:  	cond_value, longword (unsigned), write only, by value
+!
+! PROTOTYPE:
+!
+!   x
+!
+! IMPLICIT INPUTS:  None.
+!
+! IMPLICIT OUTPUTS: None.
+!
+! COMPLETION CODES:
+!
+!   SS$_NORMAL:	    	normal successful completion.
+!
+! SIDE EFFECTS:
+!
+!   None.
+!--
+    BIND
+    	hdr 	= .hdr_a    : TXTDEF,
+    	str 	= .str_a    : BLOCK [,BYTE];
+
+    LOCAL
+    	dsc 	: BLOCK [DSC$K_S_BLN,BYTE];
+
+    IF .hdr [TXT_W_LEN] GTR .str [DSC$W_LENGTH] THEN
+    BEGIN
+    	INIT_SDESC (dsc, .str [DSC$W_LENGTH], hdr [TXT_T_TEXT]);
+    	STR$CASE_BLIND_COMPARE (dsc, str) EQL 0
+    END
+    ELSE 0
+
+END; ! header_match
+
+%SBTTL 'ETRN_CHECK'
+GLOBAL ROUTINE ETRN_CHECK (hostlen, hostptr) = 
+BEGIN
+!++
+! FUNCTIONAL DESCRIPTION:
+!
+!   Fires up a process to release a holding queue if the domain
+!   name on an ETRN command matches one of the holding queue paths.
+!
+! RETURNS:  	cond_value
+!
+! PROTOTYPE:
+!
+!   VALIDATE_DOMAIN
+!
+! IMPLICIT INPUTS:  None.
+!
+! IMPLICIT OUTPUTS: None.
+!
+! COMPLETION CODES: from $CREPRC, or MX__NOPATH if no match.
+!
+! SIDE EFFECTS:
+!
+!   None.
+!--
+    LOCAL
+    	str1 	: BLOCK [DSC$K_S_BLN,BYTE],
+    	str2	: BLOCK [DSC$K_S_BLN,BYTE],
+    	do_wild,
+    	do_param,
+    	path	: REF PATHDEF,
+    	status;
+
+    IF .CALLER_COUNT EQL 0 THEN
+    BEGIN
+    	IF .RESET_MASK NEQ 0 THEN
+    	BEGIN
+    	    STATUS = VERIFY_INIT (1);
+    	    IF NOT .STATUS THEN RETURN 0;
+    	    RESET_MASK = 0;
+    	END;
+    END;
+
+    do_wild = do_param = 0;
+    IF CH$RCHAR (.hostptr) EQL %C'@' OR CH$RCHAR (.hostptr) EQL %C'#' THEN
+    BEGIN
+    	do_wild = CH$RCHAR (.hostptr) EQL %C'@';
+    	do_param = NOT .do_wild;
+    	hostlen = .hostlen - 1;
+    	hostptr = CH$PLUS (.hostptr, 1);
+    END;
+    INIT_SDESC (str1, .hostlen, .hostptr);
+    path = .PATHLIST [QUE_L_HEAD];
+    WHILE .path NEQA PATHLIST DO
+    BEGIN
+    	IF .path [PATH_W_PATH] GEQU MX_K_PATH_HOLDQ_BASE AND
+    	   .path [PATH_W_PATH] LSSU (MX_K_PATH_HOLDQ_BASE + MX_K_HOLDQ_MAX) THEN
+    	BEGIN
+    	    IF .do_wild THEN
+    	    BEGIN
+    	    	IF .path [PATH_W_DOMAIN] GTR 2 AND CH$RCHAR (path [PATH_T_DOMAIN]) EQL %C'*' AND
+    	       	    CH$RCHAR (CH$PLUS (path [PATH_T_DOMAIN], 1)) EQL %C'.' THEN
+    	    	BEGIN
+    	    	    INIT_SDESC (str2, .path [PATH_W_DOMAIN]-2, CH$PLUS (path [PATH_T_DOMAIN], 2));
+    	    	    IF STR$CASE_BLIND_COMPARE (str1, str2) EQL 0 THEN EXITLOOP;
+    	    	END;
+    	    END
+    	    ELSE IF .do_param THEN
+    	    BEGIN
+    	    	IF .path [PATH_W_PARAM] NEQU 0 THEN
+    	    	BEGIN
+    	    	    INIT_SDESC (str2, .path [PATH_W_PARAM], path [PATH_T_PARAM]);
+    	    	    IF STR$CASE_BLIND_COMPARE (str1, str2) EQL 0 THEN EXITLOOP;
+    	    	END;
+    	    END
+    	    ELSE
+    	    BEGIN
+    	    	INIT_SDESC (str2, .path [PATH_W_DOMAIN], path [PATH_T_DOMAIN]);
+    	    	IF STR$CASE_BLIND_COMPARE (str1, str2) EQL 0 THEN EXITLOOP;
+    	    END;
+    	END;
+    	path = .path [PATH_L_FLINK];
+    END;
+
+    IF .path EQLA PATHLIST THEN
+    	status = MX__NOPATH
+    ELSE
+    BEGIN
+    	LOCAL
+    	    pname : VECTOR [15,BYTE];
+
+    	INIT_SDESC (str1, %ALLOCATION (pname), pname);
+    	$FAO (%ASCID'MX_HOLD!UL', str1 [DSC$W_LENGTH], str1,
+    	     (.path [PATH_W_PATH] - MX_K_PATH_HOLDQ_BASE) + 1);
+    	status = $CREPRC (IMAGE=%ASCID'SYS$SYSTEM:LOGINOUT.EXE',
+    	    	    	  INPUT=%ASCID'MX_EXE:PROCESS_HOLDING_QUEUE.COM',
+    	    	    	  OUTPUT=%ASCID'MX_SMTP_DIR:PROCESS_HOLDING_QUEUE.LOG',
+    	    	    	  PRVADR=UPLIT (-1, -1),
+    	    	    	  PRCNAM=str1,
+    	    	          STSFLG=PRC$M_DETACH);
+    END;
+
+    .status
+
+END; ! ETRN_CHECK
+
+
+%SBTTL 'user_authenticate'
+GLOBAL ROUTINE user_authenticate (ctx_a, usr_a, pwd_a, sockaddr_a, salen, id_a, astat_a, astadr, astprm) = 
+BEGIN
+!++
+! FUNCTIONAL DESCRIPTION:
+!
+!   description
+!
+! RETURNS:  	cond_value, longword (unsigned), write only, by value
+!
+! PROTOTYPE:
+!
+!   x
+!
+! IMPLICIT INPUTS:  None.
+!
+! IMPLICIT OUTPUTS: None.
+!
+! COMPLETION CODES:
+!
+!   SS$_NORMAL:	    	normal successful completion.
+!
+! SIDE EFFECTS:	    None.
+!--
+
+    LOCAL
+    	status;
+
+    IF .auth_init NEQA 0 THEN
+    BEGIN
+    	IF ..ctx_a NEQA 0 THEN
+    	BEGIN
+    	    (.auth_clup) (.ctx_a);
+    	    .ctx_a = 0;
+    	END;
+
+    	status = (.auth_init) (.ctx_a);
+
+    	IF NOT .status THEN
+    	    RETURN .status;
+
+    	status = (.auth_auth) (.ctx_a, .usr_a, .pwd_a, .sockaddr_a, .salen,
+    	    	    	       .id_a, .astat_a, .astadr, .astprm);
+
+    	RETURN .status;
+
+    END;
+
+    .astat_a = vms_authenticate (.usr_a, .pwd_a, .sockaddr_a, .salen, .id_a);
+
+    0  ! no AST to be fired is all this is indicating
+
+END; ! user_authenticate
+
+%SBTTL 'user_auth_close'
+GLOBAL ROUTINE user_auth_close (ctx_a) : NOVALUE = 
+BEGIN
+!++
+! FUNCTIONAL DESCRIPTION:
+!
+!   description
+!
+! RETURNS:  	cond_value, longword (unsigned), write only, by value
+!
+! PROTOTYPE:
+!
+!   x
+!
+! IMPLICIT INPUTS:  None.
+!
+! IMPLICIT OUTPUTS: None.
+!
+! COMPLETION CODES:
+!
+!   SS$_NORMAL:	    	normal successful completion.
+!
+! SIDE EFFECTS:	    None.
+!--
+
+    IF .auth_clup NEQA 0 AND ..ctx_a NEQU 0 THEN
+    	(.auth_clup) (.ctx_a);
+
+    .ctx_a = 0;
+
+END; ! user_auth_close
+
+%SBTTL 'vms_authenticate'
+ROUTINE vms_authenticate (udsc_a, pdsc_a, sockaddr_a, salen, id_a) = 
+BEGIN
+!++
+! FUNCTIONAL DESCRIPTION:
+!
+!   Checks VMS username and password against SYSUAF.
+!
+! RETURNS:  	cond_value, longword (unsigned), write only, by value
+!
+! PROTOTYPE:
+!
+!   VMS_AUTHENTICATE  udsc, pdsc, sockaddr, salen
+!
+! IMPLICIT INPUTS:  None.
+!
+! IMPLICIT OUTPUTS: None.
+!
+! COMPLETION CODES:
+!
+!   SS$_NORMAL:	    	normal successful completion.
+!
+! SIDE EFFECTS:
+!
+!   None.
+!--
+    BIND
+    	Xudsc	=   .udsc_a 	: BLOCK [DSC$K_S_BLN,BYTE],
+    	Xpdsc	=   .pdsc_a 	: BLOCK [DSC$K_S_BLN,BYTE],
+        id      =   .id_a       : LONG;
+
+    LOCAL
+    	uailst	: $ITMLST_DECL (ITEMS=5),
+    	holder	: VECTOR [2,LONG],
+    	pwd 	: VECTOR [2,LONG],
+    	hash	: VECTOR [2,LONG],
+    	alg 	: BYTE,
+    	salt	: WORD,
+    	uaiflg	: BLOCK [4,BYTE],
+    	status,
+    	ulen	: WORD,
+    	plen	: WORD,
+    	ubuf	: VECTOR [32,BYTE],
+    	pbuf	: VECTOR [32,BYTE],
+    	udsc	: BLOCK [DSC$K_S_BLN,BYTE],
+    	pdsc	: BLOCK [DSC$K_S_BLN,BYTE];
+
+    ulen = 0;
+    INCR cp FROM .Xudsc [DSC$A_POINTER] TO CH$PLUS (.Xudsc [DSC$A_POINTER], .Xudsc [DSC$W_LENGTH]-1) DO
+    BEGIN
+    	IF CH$RCHAR (.cp) GEQU %C'a' AND CH$RCHAR (.cp) LEQU %C'z' THEN
+    	BEGIN
+    	    ubuf [.ulen] = CH$RCHAR (.cp) AND %X'5F';
+    	    ulen = .ulen + 1;
+    	END
+    	ELSE IF CH$RCHAR (.cp) NEQ %C' ' THEN
+    	BEGIN
+    	    ubuf [.ulen] = CH$RCHAR (.cp);
+    	    ulen = .ulen + 1;
+    	END;
+    END;
+    INIT_SDESC (udsc, .ulen, ubuf);
+    
+    plen = 0;
+    INCR cp FROM .Xpdsc [DSC$A_POINTER] TO CH$PLUS (.Xpdsc [DSC$A_POINTER], .Xpdsc [DSC$W_LENGTH]-1) DO
+    BEGIN
+    	IF CH$RCHAR (.cp) GEQU %C'a' AND CH$RCHAR (.cp) LEQU %C'z' THEN
+    	BEGIN
+    	    pbuf [.plen] = CH$RCHAR (.cp) AND %X'5F';
+    	    plen = .plen + 1;
+    	END
+    	ELSE IF CH$RCHAR (.cp) NEQ %C' ' THEN
+    	BEGIN
+    	    pbuf [.plen] = CH$RCHAR (.cp);
+    	    plen = .plen + 1;
+    	END;
+    END;
+    INIT_SDESC (pdsc, .plen, pbuf);
+
+    $ITMLST_INIT (ITMLST=uailst,
+    	    	    (ITMCOD=UAI$_ENCRYPT, BUFADR=alg, BUFSIZ=%ALLOCATION (alg)),
+    	    	    (ITMCOD=UAI$_SALT, BUFADR=salt, BUFSIZ=%ALLOCATION (salt)),
+    	    	    (ITMCOD=UAI$_FLAGS, BUFADR=uaiflg, BUFSIZ=%ALLOCATION (uaiflg)),
+    	    	    (ITMCOD=UAI$_PWD, BUFADR=pwd, BUFSIZ=%ALLOCATION (pwd)),
+    	    	    (ITMCOD=UAI$_UIC, BUFADR=holder [0], BUFSIZ=4));
+
+    status = $GETUAI (USRNAM=udsc, ITMLST=uailst);
+
+    IF .status THEN
+    	status = NOT .uaiflg [UAI$V_DISACNT];
+
+    !	Check for identifier, if one was specified
+    IF .status AND .auth_ident NEQU 0 THEN
+    BEGIN
+    	LOCAL
+    	    idctx,
+    	    held_id;
+    	holder [1] = 0;
+    	idctx = 0;
+    	WHILE (status = $FIND_HELD (HOLDER=holder, ID=held_id, CONTXT=idctx)) DO
+    	    IF .held_id EQLU .auth_ident THEN
+    	    	EXITLOOP;
+    	IF .status OR (.status NEQU SS$_NOSUCHID) THEN
+    	    $FINISH_RDB (CONTXT=idctx);
+    END;
+    
+
+    IF .status THEN
+    BEGIN
+    	status = hash_password (udsc, pdsc, .alg, .salt, hash);
+    	IF .status THEN
+    	    status = (IF .pwd [0] EQLU .hash [0] AND .pwd [1] EQLU .hash [1] THEN
+    	    	    	SS$_NORMAL ELSE MX__AUTHFAIL);
+    	update_evasion_list (udsc, .sockaddr_a, .salen, status);
+    END;
+
+    CH$FILL (%CHAR (0), .ulen, ubuf);
+    CH$FILL (%CHAR (0), .plen, pbuf);
+
+    IF .status THEN
+    BEGIN
+        id = .vmsaaaid;
+        vmsaaaid = .vmsaaaid + 1;
+    END;
+
+    .status
+
+END; ! vms_authenticate
+
+%SBTTL 'hash_password'
+ROUTINE hash_password (usr_a, pwd_a, alg, salt, hash_a) = 
+BEGIN
+!++
+! FUNCTIONAL DESCRIPTION:
+!
+!   description
+!
+! RETURNS:  	cond_value, longword (unsigned), write only, by value
+!
+! PROTOTYPE:
+!
+!   x
+!
+! IMPLICIT INPUTS:  None.
+!
+! IMPLICIT OUTPUTS: None.
+!
+! COMPLETION CODES:
+!
+!   SS$_NORMAL:	    	normal successful completion.
+!
+! SIDE EFFECTS:	    None.
+!--
+
+    EXTERNAL ROUTINE
+    	SYS$HASH_PASSWORD   : BLISS ADDRESSING_MODE (GENERAL);
+
+    SYS$HASH_PASSWORD (.pwd_a, .alg, .salt, .usr_a, .hash_a)
+
+END; ! hash_password
+
+%SBTTL 'update_evasion_list'
+ROUTINE update_evasion_list (udsc_a, sockaddr_a, salen, status_a) : NOVALUE = 
+BEGIN
+!++
+! FUNCTIONAL DESCRIPTION:
+!
+!   description
+!
+! RETURNS:  	cond_value, longword (unsigned), write only, by value
+!
+! PROTOTYPE:
+!
+!   x
+!
+! IMPLICIT INPUTS:  None.
+!
+! IMPLICIT OUTPUTS: None.
+!
+! COMPLETION CODES:
+!
+!   SS$_NORMAL:	    	normal successful completion.
+!
+! SIDE EFFECTS:	    None.
+!--
+    BIND
+    	udsc	= .udsc_a   	: BLOCK [DSC$K_S_BLN,BYTE],
+    	sa  	= .sockaddr_a	: SINDEF,
+    	xstatus	= .status_a;
+
+    LOCAL
+    	adr,
+    	evr 	    	: REF EVRDEF,
+    	hidsecs,
+    	brksecs,
+    	lgi_brk_lim,
+    	lgi_brk_tmo 	: VECTOR [2,LONG],
+    	lgi_hid_tim 	: VECTOR [2,LONG],
+    	junkdt	    	: VECTOR [2,LONG],
+    	now 	    	: VECTOR [2,LONG],
+    	syilst	    	: $ITMLST_DECL (ITEMS=3);
+
+    $ITMLST_INIT (ITMLST=syilst,
+    	    	    (ITMCOD=SYI$_LGI_BRK_LIM, BUFADR=lgi_brk_lim, BUFSIZ=4),
+    	    	    (ITMCOD=SYI$_LGI_BRK_TMO, BUFADR=brksecs, BUFSIZ=4),
+    	    	    (ITMCOD=SYI$_LGI_HID_TIM, BUFADR=hidsecs, BUFSIZ=4));
+    $GETSYIW (ITMLST=syilst);
+    LIB$EMUL (%REF (-10000000), brksecs, %REF (0), lgi_brk_tmo);
+    LIB$EMUL (%REF (-10000000), hidsecs, %REF (0), lgi_hid_tim);
+
+    IF .salen GEQU SIN_S_SINDEF THEN
+    BEGIN
+    	BIND ina = SA [SIN_X_ADDR] : INADDRDEF;
+    	adr = .ina [INADDR_L_ADDR];
+    END
+    ELSE
+    	adr = 0;
+
+    $GETTIM (TIMADR=now);
+
+    !  If this was a successful authentication, check to see if
+    !  we need to take evasive action anyway.
+    IF .xstatus THEN
+    BEGIN
+    	evr = .evrque [QUE_L_HEAD];
+    	WHILE .evr NEQA evrque DO
+    	BEGIN
+    	    LOCAL   evrnext : REF EVRDEF;
+    	    evrnext = .evr [EVR_L_FLINK];
+    	    IF .adr EQLU .evr [EVR_L_IPADDR] AND
+    	    	CH$EQL (.evr [EVR_W_USERNAME], evr [EVR_T_USERNAME],
+    	    	    	.udsc [DSC$W_LENGTH], .udsc [DSC$A_POINTER], %C' ') THEN
+    	    BEGIN
+    	    	! If after evasion expiration time, no problem.
+    	    	IF NOT .evr [EVR_V_EVASION] OR
+    	    	    LIB$SUB_TIMES (now, evr [EVR_Q_EVEXPIRY], junkdt) EQL LIB$_NORMAL THEN
+    	    	BEGIN
+    	    	    ! If suspicion expiration time has gone by, get rid of the record
+    	    	    IF LIB$SUB_TIMES (now, evr [EVR_Q_EXPIRY], junkdt) EQL LIB$_NORMAL THEN
+    	    	    BEGIN
+    	    	    	REMQUE (.evr, evr);
+    	    	    	LIB$FREE_VM (%REF (EVR_S_EVRDEF), evr);
+    	    	    END;
+    	    	    RETURN;
+    	    	END;
+    	    	! Not expired yet.  Take evasive action.
+    	    	xstatus = MX__AUTHFAIL;
+    	    	RETURN;
+    	    END;
+
+    	    ! Clean up this record if suspicion time has expired.
+    	    IF LIB$SUB_TIMES (now, evr [EVR_Q_EXPIRY], junkdt) EQL LIB$_NORMAL THEN
+    	    BEGIN
+    	    	REMQUE (.evr, evr);
+    	    	LIB$FREE_VM (%REF (EVR_S_EVRDEF), evr);
+    	    END;
+
+    	    evr = .evrnext;
+
+    	END;  ! while
+
+    	RETURN;
+
+    END;  ! if authentication was successful
+
+    !  Failed authentication.  Start recording for possible evasive maneuvers.
+
+    evr = .evrque [QUE_L_HEAD];
+    WHILE .evr NEQA evrque DO
+    BEGIN
+    	LOCAL
+    	    evrnext : REF EVRDEF;
+    	evrnext = .evr [EVR_L_FLINK];
+
+    	! Get rid of expired entries along the way while we're searching
+
+    	IF LIB$SUB_TIMES (now, evr [EVR_Q_EXPIRY], junkdt) EQL LIB$_NORMAL THEN
+    	BEGIN
+    	    REMQUE (.evr, evr);
+    	    LIB$FREE_VM (%REF (EVR_S_EVRDEF), evr);
+    	END
+    	ELSE IF .adr EQLU .evr [EVR_L_IPADDR] AND
+    	    CH$EQL (.evr [EVR_W_USERNAME], evr [EVR_T_USERNAME],
+    	    	    .udsc [DSC$W_LENGTH], .udsc [DSC$A_POINTER], %C' ') THEN
+    	    EXITLOOP;
+    	evr = .evrnext;
+    END;
+    IF .evr EQLA evrque THEN
+    BEGIN
+    	IF NOT LIB$GET_VM (%REF (EVR_S_EVRDEF), evr) THEN
+    	    RETURN;  ! just skip it
+    	CH$FILL (%CHAR (0), EVR_S_EVRDEF, .evr);
+    	evr [EVR_L_IPADDR] = .adr;
+    	evr [EVR_W_USERNAME] = MINU (.udsc [DSC$W_LENGTH], EVR_S_USERNAME);
+    	CH$MOVE (.evr [EVR_W_USERNAME], .udsc [DSC$A_POINTER], evr [EVR_T_USERNAME]);
+    	INSQUE (.evr, evrque);  ! put it at the front for faster access later
+    END;
+
+    LIB$ADD_TIMES (now, lgi_brk_tmo, evr [EVR_Q_EXPIRY]);
+    evr [EVR_L_FAILURES] = .evr [EVR_L_FAILURES] + 1;
+    IF .evr [EVR_L_FAILURES] GEQU .lgi_brk_lim THEN
+    BEGIN
+    	evr [EVR_V_EVASION] = 1;
+    	LIB$ADD_TIMES (now, lgi_hid_tim, evr [EVR_Q_EVEXPIRY]);
+    END;
+    
+END; ! update_evasion_list
+
+%SBTTL 'do_accounting'
+GLOBAL ROUTINE do_accounting (ctx_a, aaaid_a, msgsize, envl_a) : NOVALUE = 
+BEGIN
+!++
+! FUNCTIONAL DESCRIPTION:
+!
+!   description
+!
+! RETURNS:  	cond_value, longword (unsigned), write only, by value
+!
+! PROTOTYPE:
+!
+!   x
+!
+! IMPLICIT INPUTS:  None.
+!
+! IMPLICIT OUTPUTS: None.
+!
+! COMPLETION CODES:
+!
+!   SS$_NORMAL:	    	normal successful completion.
+!
+! SIDE EFFECTS:	    None.
+!--
+    BIND
+    	envl	    = .envl_a	: ENVLDEF;
+
+    BIND_ENVL_FIELDS (envl);
+
+    LOCAL
+    	rcpt	    : REF RCPTDEF,
+    	fdsc	    : BLOCK [DSC$K_S_BLN,BYTE],
+    	rdsc	    : BLOCK [DSC$K_S_BLN,BYTE];
+
+    IF .auth_acctg EQLA 0 THEN
+    	RETURN;
+
+    INIT_SDESC (fdsc, .fromadr [TXT_W_LEN], fromadr [TXT_T_TEXT]);
+    rcpt = .rcptque [QUE_L_HEAD];
+    WHILE .rcpt NEQA rcptque DO
+    BEGIN
+    	BIND
+    	    addr = rcpt [RCPT_A_ADDR]	: REF TXTDEF;
+    	INIT_SDESC (rdsc, .addr [TXT_W_LEN], addr [TXT_T_TEXT]);
+    	(.auth_acctg) (.ctx_a, .aaaid_a, msgsize, fdsc, rdsc);
+    	rcpt = .rcpt [RCPT_L_FLINK];
+    END;
+
+END; ! do_accounting
+
+%SBTTL 'accept_check_init'
+GLOBAL ROUTINE accept_check_init (ctx_a_a) = 
+BEGIN
+!++
+! FUNCTIONAL DESCRIPTION:
+!
+!   description
+!
+! RETURNS:  	cond_value, longword (unsigned), write only, by value
+!
+! PROTOTYPE:
+!
+!   x
+!
+! IMPLICIT INPUTS:  None.
+!
+! IMPLICIT OUTPUTS: None.
+!
+! COMPLETION CODES:
+!
+!   SS$_NORMAL:	    	normal successful completion.
+!
+! SIDE EFFECTS:	    None.
+!--
+    LOCAL
+    	status;
+
+    IF .accchk_init EQLA 0 THEN
+    BEGIN
+    	.ctx_a_a = 0;
+    	status = SS$_NORMAL;
+    END
+    ELSE
+    BEGIN
+    	status = (.accchk_init) (.ctx_a_a);
+    	IF NOT .status THEN
+    	    .ctx_a_a = 0;
+    END;
+
+    .status
+
+END; ! accept_check_init
+
+%SBTTL 'accept_check'
+GLOBAL ROUTINE accept_check (ctx_a_a, sockaddr_a, salen, accstat_a, astadr, astprm) = 
+BEGIN
+!++
+! FUNCTIONAL DESCRIPTION:
+!
+!   description
+!
+! RETURNS:  	cond_value, longword (unsigned), write only, by value
+!
+! PROTOTYPE:
+!
+!   x
+!
+! IMPLICIT INPUTS:  None.
+!
+! IMPLICIT OUTPUTS: None.
+!
+! COMPLETION CODES:
+!
+!   SS$_NORMAL:	    	normal successful completion.
+!
+! SIDE EFFECTS:	    None.
+!--
+
+    IF .accchk_check EQLA 0 OR ..ctx_a_a EQLU 0 THEN
+    BEGIN
+    	.accstat_a = 1;
+    	RETURN 0;
+    END;
+
+    (.accchk_check) (.ctx_a_a, .sockaddr_a, .salen, .accstat_a, .astadr, .astprm)
+
+END; ! accept_check
+
+%SBTTL 'accept_check_hello'
+GLOBAL ROUTINE accept_check_hello (ctx_a_a, domain_a, is_inside, accstat_a, astadr, astprm) = 
+BEGIN
+!++
+! FUNCTIONAL DESCRIPTION:
+!
+!   description
+!
+! RETURNS:  	cond_value, longword (unsigned), write only, by value
+!
+! PROTOTYPE:
+!
+!   x
+!
+! IMPLICIT INPUTS:  None.
+!
+! IMPLICIT OUTPUTS: None.
+!
+! COMPLETION CODES:
+!
+!   SS$_NORMAL:	    	normal successful completion.
+!
+! SIDE EFFECTS:	    None.
+!--
+
+    IF .accchk_hello EQLA 0 OR ..ctx_a_a EQLU 0 THEN
+    BEGIN
+    	.accstat_a = 1;
+    	RETURN 0;
+    END;
+
+    (.accchk_hello) (.ctx_a_a, .domain_a, .is_inside, .accstat_a, .astadr, .astprm)
+
+END; ! accept_check_hello
+
+%SBTTL 'accept_check_cleanup'
+GLOBAL ROUTINE accept_check_cleanup (ctx_a_a) = 
+BEGIN
+!++
+! FUNCTIONAL DESCRIPTION:
+!
+!   description
+!
+! RETURNS:  	cond_value, longword (unsigned), write only, by value
+!
+! PROTOTYPE:
+!
+!   x
+!
+! IMPLICIT INPUTS:  None.
+!
+! IMPLICIT OUTPUTS: None.
+!
+! COMPLETION CODES:
+!
+!   SS$_NORMAL:	    	normal successful completion.
+!
+! SIDE EFFECTS:	    None.
+!--
+
+    IF .accchk_clup NEQA 0 AND ..ctx_a_a NEQU 0 THEN
+    	(.accchk_clup) (.ctx_a_a);
+
+    .ctx_a_a = 0;
+    SS$_NORMAL
+
+END; ! accept_check_cleanup
+
+%SBTTL 'FIS_SIG_TO_RET'
+ROUTINE FIS_SIG_TO_RET (SIG_A, MCH_A, ENB_A) =
+BEGIN
+!++
+! FUNCTIONAL DESCRIPTION:
+!
+!   Condition handler to convert find_image_symbol
+!   signals into return status codes.  Sort of like
+!   LIB$SIG_TO_RET, but returns the ancillary status
+!   code when the signal name is LIB$_ACTIMAGE.
+!
+! RETURNS:  	cond_value, longword (unsigned), write only, by value
+!
+! PROTOTYPE:
+!
+!   x
+!
+! IMPLICIT INPUTS:  None.
+!
+! IMPLICIT OUTPUTS: None.
+!
+! COMPLETION CODES:
+!
+!   SS$_NORMAL:	    	normal successful completion.
+!
+! SIDE EFFECTS:
+!
+!   None.
+!--
+    BIND
+    	sig 	= .SIG_A    	    	: BLOCK [,BYTE],
+    	sigvec 	= .SIG_A    	    	: VECTOR [,LONG],
+    	cond	= sig [CHF$L_SIG_NAME]	: BLOCK [,BYTE],
+    	mch 	= .MCH_A    	    	: BLOCK [,BYTE];
+
+    EXTERNAL LITERAL
+    	LIB$_ACTIMAGE;
+
+    LOCAL
+    	unwind : BLOCK [4,BYTE] INITIAL (SS$_UNWIND),
+    	libact : BLOCK [4,BYTE] INITIAL (LIB$_ACTIMAGE),
+    	status;
+
+    IF .cond [STS$V_COND_ID] EQL .unwind [STS$V_COND_ID] THEN
+    	RETURN SS$_NORMAL;
+
+    status = .sig [CHF$L_SIG_NAME];
+
+    IF .cond [STS$V_COND_ID] EQL .libact [STS$V_COND_ID] AND
+    	    .sig [CHF$L_SIG_ARGS] GEQU 6 THEN
+    	status = .sigvec [.sig [CHF$L_SIG_ARG1] + 3];
+
+%IF %BLISS (BLISS32V) %THEN
+    mch [CHF$L_MCH_SAVR0] = .status;
+%ELSE
+    mch [CHF$IL_MCH_SAVR0_LOW] = .status;
+%FI
+
+    $UNWIND ()  ! return to caller of procedure that established us
+
+END; ! fis_sig_to_ret
+
+%SBTTL 'find_image_symbol'
+ROUTINE find_image_symbol (fspec_a, symnam_a, symval_a) = 
+BEGIN
+!++
+! FUNCTIONAL DESCRIPTION:
+!
+!   Wrapper routine for calling LIB$FIND_IMAGE_SYMBOL that
+!   established a condition handler.  Need this because the
+!   handler unwinds the call stack to above where it gets
+!   established.
+!
+! RETURNS:  	cond_value, longword (unsigned), write only, by value
+!
+! PROTOTYPE:
+!
+!   FIND_IMAGE_SYMBOL  fspec, symnam, symval
+!
+! IMPLICIT INPUTS:  None.
+!
+! IMPLICIT OUTPUTS: None.
+!
+! COMPLETION CODES:
+!
+!   SS$_NORMAL:	    	normal successful completion.
+!
+! SIDE EFFECTS:
+!
+!   None.
+!--
+
+    ENABLE
+    	fis_sig_to_ret;
+
+    LIB$FIND_IMAGE_SYMBOL (.fspec_a, .symnam_a, .symval_a)
+
+END; ! find_image_symbol
+
+END
+ELUDOM

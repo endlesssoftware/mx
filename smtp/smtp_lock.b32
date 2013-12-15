@@ -1,0 +1,313 @@
+%TITLE 'SMTP_LOCK'
+MODULE SMTP_LOCK (IDENT='V1.1',
+    	ADDRESSING_MODE (EXTERNAL=LONG_RELATIVE,NONEXTERNAL=LONG_RELATIVE)) =
+BEGIN
+!++
+! FACILITY: 	    MX SMTP
+!
+! ABSTRACT: 	    Routines for handling SMTP "lock" files.
+!
+! MODULE DESCRIPTION:
+!
+!   This module contains routines that manage the "lock" files used by
+!   the SMTP sender.
+!
+! AUTHOR:   	    M. Madison
+!
+! Copyright (c) 2008, Matthew Madison.
+! 
+! All rights reserved.
+! 
+! Redistribution and use in source and binary forms, with or without
+! modification, are permitted provided that the following conditions
+! are met:
+! 
+!     * Redistributions of source code must retain the above
+!       copyright notice, this list of conditions and the following
+!       disclaimer.
+!     * Redistributions in binary form must reproduce the above
+!       copyright notice, this list of conditions and the following
+!       disclaimer in the documentation and/or other materials provided
+!       with the distribution.
+!     * Neither the name of the copyright owner nor the names of any
+!       other contributors may be used to endorse or promote products
+!       derived from this software without specific prior written
+!       permission.
+! 
+! THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
+! "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
+! LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
+! A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
+! OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
+! SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
+! LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
+! DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
+! THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
+! (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
+! OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+!
+! CREATION DATE:    27-FEB-1995
+!
+! MODIFICATION HISTORY:
+!
+!   27-FEB-1995	V1.0	Madison	    Initial coding.
+!   23-MAR-1997	V1.0-1	Madison	    Test for file's existence before creating, to avoid
+!   	    	    	    	    potential infinite postponement.
+!   07-MAY-1997	V1.0-2	Madison	    Exclusion mechanism.
+!    8-SEP-1997 V1.0-3	Goatley     Use MX_SMTP_LOCK_DIR instead of MX_SMTP_DIR.
+!   11-DEC-2000	V1.1	Madison	    Allow wildcards in exception strings.
+!--
+    LIBRARY 'SYS$LIBRARY:STARLET';
+    LIBRARY 'MX_SRC_COMMON:MX';
+    LIBRARY 'MX_SRC_COMMON:MX_LCLDEFS';
+
+    FORWARD ROUTINE
+    	CHECK_LOCK,
+    	LOCK_BLOCKED;
+
+    EXTERNAL
+    	SMTP_INFO   	: SMTPDEF;
+
+    EXTERNAL LITERAL
+    	LIB$_NORMAL, MX__HOSTLOCK, MX__ADDRLOCK;
+
+    EXTERNAL ROUTINE
+    	G_HAT (LIB$ADD_TIMES, LIB$SUB_TIMES, LIB$SYS_FAO, LIB$WAIT, LIB$ANALYZE_SDESC),
+    	G_HAT (STR$TRANSLATE, STR$LEFT, STR$COPY_DX, STR$MATCH_WILD, STR$UPCASE);
+
+
+%SBTTL 'CHECK_LOCK'
+GLOBAL ROUTINE CHECK_LOCK (HOSTNM_A, IS_ADDRESS, CREATE_LOCK, FAILSTAT) = 
+BEGIN
+!++
+! FUNCTIONAL DESCRIPTION:
+!
+!   Looks for a lock on a host name or IP address.
+!
+! RETURNS:  	cond_value, longword (unsigned), write only, by value
+!
+! PROTOTYPE:
+!
+!   CHECK_LOCK  lock-type
+!
+! IMPLICIT INPUTS:  None.
+!
+! IMPLICIT OUTPUTS: None.
+!
+! COMPLETION CODES:
+!
+!   SS$_NORMAL:	    	normal successful completion - NO LOCK
+!   SS$_FILELOCKED: 	lock file found for this host
+!
+! SIDE EFFECTS:
+!
+!   None.
+!--
+    LOCAL
+    	FSPEC	    : BLOCK [DSC$K_S_BLN,BYTE],
+    	STR 	    : BLOCK [DSC$K_S_BLN,BYTE],
+    	FAB 	    : $FAB_DECL,
+    	RAB 	    : $RAB_DECL,
+    	XABRDT	    : $XABRDT_DECL,
+    	NOW 	    : VECTOR [2,LONG],
+    	TESTTIME    : VECTOR [2,LONG],
+    	JUNKTIME    : VECTOR [2,LONG],
+    	STATUS;
+
+    INIT_DYNDESC (STR, FSPEC);
+
+    IF LOCK_BLOCKED (.HOSTNM_A, .IS_ADDRESS) THEN
+    	RETURN SS$_NORMAL;
+
+    IF .IS_ADDRESS THEN
+    BEGIN
+    	BIND ADR = .HOSTNM_A : VECTOR [4,BYTE];
+    	LIB$SYS_FAO (%ASCID'MX_SMTP_LOCK_DIR:!UB$!UB$!UB$!UB.ADDRESS_LOCK', 0, FSPEC,
+    	    	    	.ADR [0], .ADR [1], .ADR [2], .ADR [3]);
+    END
+    ELSE
+    BEGIN
+    	BIND HOSTNM = .HOSTNM_A : BLOCK [DSC$K_S_BLN,BYTE];
+
+    	IF CH$RCHAR (.HOSTNM [DSC$A_POINTER]+(.HOSTNM [DSC$W_LENGTH]-1)) EQL %C'.'
+    	THEN
+    	    STR$LEFT (FSPEC, HOSTNM, %REF (.HOSTNM [DSC$W_LENGTH] - 1))
+    	ELSE
+    	    STR$COPY_DX (FSPEC, HOSTNM);
+
+    	STR$TRANSLATE (STR, FSPEC, %ASCID'$$$_', %ASCID'.[]#');
+    	LIB$SYS_FAO (%ASCID'MX_SMTP_LOCK_DIR:!AS.HOST_LOCK', 0, FSPEC, STR);
+    END;
+
+    IF .FSPEC [DSC$W_LENGTH] GTR 255 THEN
+    BEGIN
+    	FREE_STRINGS (FSPEC, STR);
+    	RETURN SS$_NORMAL;
+    END;
+
+    $XABRDT_INIT (XAB=XABRDT);
+
+    $FAB_INIT (FAB=FAB, FNA=.FSPEC [DSC$A_POINTER],
+    	    	    	FNS=.FSPEC [DSC$W_LENGTH],
+    	    	    	RFM=VAR, RAT=CR,
+    	    	    	FAC=GET, SHR=GET,
+    	    	    	XAB=(IF .CREATE_LOCK THEN 0 ELSE XABRDT));
+
+    IF .CREATE_LOCK THEN
+    BEGIN
+    	IF $OPEN (FAB=FAB) THEN
+    	BEGIN
+    	    $CLOSE (FAB=FAB);
+    	    FREE_STRINGS (FSPEC, STR);
+    	    RETURN SS$_NORMAL;
+    	END;
+    	FAB [FAB$B_FAC] = .FAB [FAB$B_FAC] OR FAB$M_PUT;
+    	FAB [FAB$V_CIF] = 1;
+    END
+    ELSE FAB [FAB$B_SHR] = .FAB [FAB$B_SHR] OR FAB$M_SHRPUT;
+
+    INCR I FROM 0 TO 5 DO
+    BEGIN
+
+    	IF .CREATE_LOCK THEN STATUS = $CREATE (FAB=FAB)
+    	ELSE STATUS = $OPEN (FAB=FAB);
+
+    	IF .STATUS NEQ RMS$_FLK THEN EXITLOOP;
+    	LIB$WAIT (%REF (%E'2.0'));
+
+    END;
+
+    IF NOT .STATUS THEN
+    BEGIN
+    	FREE_STRINGS (FSPEC, STR);
+    	RETURN (IF .CREATE_LOCK THEN .STATUS ELSE SS$_NORMAL);
+    END;
+
+    $GETTIM (TIMADR=NOW);
+
+    IF .CREATE_LOCK THEN
+    BEGIN
+    	$RAB_INIT (RAB=RAB, FAB=FAB, ROP=EOF);
+    	STATUS = $CONNECT (RAB=RAB);
+    	IF .STATUS THEN
+    	BEGIN
+    	    LOCAL
+    	    	MSGBUF	: BLOCK [1024,BYTE],
+    	    	DSC 	: BLOCK [DSC$K_S_BLN,BYTE],
+    	    	MSGLEN	: WORD;
+
+    	    DSC [DSC$B_DTYPE] = DSC$K_DTYPE_T;
+    	    DSC [DSC$B_CLASS] = DSC$K_CLASS_S;
+    	    DSC [DSC$A_POINTER] = MSGBUF;
+    	    DSC [DSC$W_LENGTH] = %ALLOCATION (MSGBUF);
+    	    STATUS = $GETMSG (MSGID=.FAILSTAT, MSGLEN=MSGLEN, BUFADR=DSC,
+    	    	    	    	FLAGS=15);
+    	    IF .STATUS THEN
+    	    BEGIN
+    	    	LIB$SYS_FAO (%ASCID'!%D  !XL: !AD', 0, STR, NOW, .FAILSTAT,
+    	    	    	    	.MSGLEN, MSGBUF);
+    	    	RAB [RAB$L_RBF] = .STR [DSC$A_POINTER];
+    	    	RAB [RAB$W_RSZ] = .STR [DSC$W_LENGTH];
+    	    	$PUT (RAB=RAB);
+    	    END;
+    	END;
+    END
+    ELSE
+    BEGIN
+    	LIB$ADD_TIMES (XABRDT [XAB$Q_RDT], SMTP_INFO [SMTP_Q_RETRY], TESTTIME);
+    	IF LIB$SUB_TIMES (NOW, TESTTIME, JUNKTIME) EQL LIB$_NORMAL THEN
+    	BEGIN
+    	    $CLOSE (FAB=FAB);
+    	    FAB [FAB$B_FAC] = .FAB [FAB$B_FAC] OR FAB$M_PUT;
+    	    $ERASE (FAB=FAB);
+    	    STATUS = SS$_NORMAL;
+    	END
+    	ELSE STATUS = (IF .IS_ADDRESS THEN MX__ADDRLOCK ELSE MX__HOSTLOCK);
+    END;
+
+    FAB [FAB$L_XAB] = 0;
+    IF .FAB [FAB$W_IFI] NEQ 0 THEN $CLOSE (FAB=FAB);
+
+    FREE_STRINGS (STR, FSPEC);
+
+    .STATUS
+
+END; ! CHECK_LOCK
+
+%SBTTL 'LOCK_BLOCKED'
+ROUTINE LOCK_BLOCKED (HOSTNM_A, IS_ADDRESS) = 
+BEGIN
+!++
+! FUNCTIONAL DESCRIPTION:
+!
+!   Checks to see if a host/address is on the
+!   lock exclusion list.
+!
+! RETURNS:  	1 or 0
+!
+! PROTOTYPE:
+!
+!   LOCK_BLOCKED  hostname, is_address
+!
+! IMPLICIT INPUTS:  None.
+!
+! IMPLICIT OUTPUTS: None.
+!
+! COMPLETION CODES: 1 or 0.
+!
+! SIDE EFFECTS:
+!
+!   None.
+!--
+    LOCAL
+    	lnmlst	: $ITMLST_DECL (ITEMS=2),
+    	buf 	: VECTOR [256,BYTE],
+    	tmpbuf	: VECTOR [256,BYTE],
+    	bufdsc	: BLOCK [DSC$K_S_BLN,BYTE],
+    	tmpdsc	: BLOCK [DSC$K_S_BLN,BYTE],
+    	status;
+
+    INIT_SDESC (bufdsc, %ALLOCATION (buf), buf);
+    IF .is_address THEN
+    BEGIN
+    	BIND adr = .hostnm_a	: VECTOR [4,BYTE];
+    	INIT_SDESC (tmpdsc, %ALLOCATION (tmpbuf), tmpbuf);
+    	$FAO (%ASCID'!UB.!UB.!UB.!UB', tmpdsc [DSC$W_LENGTH], tmpdsc,
+    	    	.adr [0], .adr [1], .adr [2], .adr [3]);
+    END
+    ELSE
+    BEGIN
+    	LOCAL
+    	    len	    : WORD,
+    	    ptr;
+    	INIT_SDESC (tmpdsc, %ALLOCATION (tmpbuf), tmpbuf);
+    	IF LIB$ANALYZE_SDESC (.hostnm_a, len, ptr) THEN
+    	    IF .len LSSU %ALLOCATION (tmpbuf) THEN
+    	    	tmpdsc [DSC$W_LENGTH] = .len;
+    	STR$UPCASE (tmpdsc, .hostnm_a);
+    END;
+
+    INCR I FROM 0 DO
+    BEGIN
+    	$ITMLST_INIT (ITMLST=lnmlst,
+    	    (ITMCOD=LNM$_INDEX, BUFSIZ=%ALLOCATION (I), BUFADR=I, RETLEN=0),
+    	    (ITMCOD=LNM$_STRING, BUFSIZ=%ALLOCATION (buf), BUFADR=buf, RETLEN=bufdsc [DSC$W_LENGTH]));
+    	IF NOT $TRNLNM (LOGNAM=%ASCID'MX_SMTP_LOCK_EXCLUSIONS', TABNAM=%ASCID'LNM$FILE_DEV',
+    	    	    	ACMODE=%REF (PSL$C_EXEC), ITMLST=lnmlst) THEN EXITLOOP;
+    	IF .bufdsc [DSC$W_LENGTH] EQL 0 THEN EXITLOOP;
+    	INCR cp FROM buf TO CH$PLUS (buf, .bufdsc [DSC$W_LENGTH]-1) DO
+    	BEGIN
+    	    LOCAL   	ch : BYTE;
+    	    ch = CH$RCHAR (.cp);
+    	    IF .ch GEQU %C'a' AND .ch LEQU %C'z' THEN
+    	    	CH$WCHAR ((.ch AND %X'5F'), .cp);
+    	END;
+    	IF STR$MATCH_WILD (tmpdsc, bufdsc) THEN RETURN 1;
+    END;
+
+    0
+
+END; ! LOCK_BLOCKED
+
+END
+ELUDOM

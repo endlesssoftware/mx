@@ -1,0 +1,552 @@
+%TITLE 'DECNET_ROUTINES'
+MODULE DECNET_ROUTINES (IDENT='V1.0') =
+BEGIN
+!++
+! FACILITY: 	    MX DNSMTP
+!
+! ABSTRACT: 	    Routine to emulate TCP_GET_LINE from NETLIB.
+!
+! MODULE DESCRIPTION:
+!
+! AUTHOR:   	    M. Madison
+!
+! Copyright (c) 2008, Matthew Madison.
+! 
+! All rights reserved.
+! 
+! Redistribution and use in source and binary forms, with or without
+! modification, are permitted provided that the following conditions
+! are met:
+! 
+!     * Redistributions of source code must retain the above
+!       copyright notice, this list of conditions and the following
+!       disclaimer.
+!     * Redistributions in binary form must reproduce the above
+!       copyright notice, this list of conditions and the following
+!       disclaimer in the documentation and/or other materials provided
+!       with the distribution.
+!     * Neither the name of the copyright owner nor the names of any
+!       other contributors may be used to endorse or promote products
+!       derived from this software without specific prior written
+!       permission.
+! 
+! THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
+! "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
+! LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
+! A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
+! OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
+! SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
+! LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
+! DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
+! THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
+! (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
+! OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+!
+! CREATION DATE:    29-OCT-1991
+!
+! MODIFICATION HISTORY:
+!
+!   29-OCT-1991	V1.0	Madison	    Initial coding.
+!--
+
+    LIBRARY 'SYS$LIBRARY:STARLET';
+    LIBRARY 'MX_SRC_COMMON:MX';
+    LIBRARY 'MX_SRC_COMMON:FIELDS';
+
+    FORWARD ROUTINE
+    	DECNET_INIT_CTX,
+    	DECNET_FREE_CTX,
+    	DECNET_GET_LINE,
+    	DECNET_RCV_AST,
+    	DECNET_TMO_AST;
+
+    _DEF (CTX)
+    	CTX_Q_BUFQ  	= _QUAD,
+    	CTX_Q_EXPTIME	= _QUAD,
+    	CTX_W_CHAN	= _WORD,
+    	CTX_W_FLAGS 	= _WORD,
+    	_OVERLAY (CTX_W_FLAGS)
+    	    CTX_V_IGNORELF  = _BIT
+    	_ENDOVERLAY
+    _ENDDEF (CTX);
+
+    LITERAL
+    	RCV_S_BUF  	= 1024;
+
+    _DEF (RCV)
+    	RCV_L_FLINK 	= _LONG,
+    	RCV_L_BLINK 	= _LONG,
+    	RCV_Q_IOSB  	= _QUAD,
+    	RCV_Q_TMO   	= _QUAD,
+    	RCV_L_STRPTR	= _LONG,
+    	RCV_L_CTX   	= _LONG,
+    	RCV_L_USRIOSB	= _LONG,
+    	RCV_L_ASTADR	= _LONG,
+    	RCV_L_ASTPRM	= _LONG,
+    	RCV_L_BUFPTR	= _LONG,
+    	RCV_T_BUF  	= _BYTES (RCV_S_BUF)
+    _ENDDEF (RCV);
+
+    _DEF (IOSB)
+    	IOSB_W_STATUS	= _WORD,
+    	IOSB_W_USTAT	= _WORD,
+    	_OVERLAY (IOSB_W_USTAT)
+    	    IOSB_W_COUNT = _WORD,
+    	_ENDOVERLAY
+    	IOSB_L_ADDRESS	= _LONG
+    _ENDDEF (IOSB);
+
+    EXTERNAL ROUTINE
+    	G_HAT (LIB$GET_VM, LIB$FREE_VM, STR$CONCAT, STR$FREE1_DX,
+    	    STR$APPEND, STR$COPY_DX, STR$FIND_FIRST_NOT_IN_SET,
+    	    STR$TRANSLATE, LIB$CVT_DTB, STR$UPCASE);
+
+    OWN
+    	FREEQ	: QUEDEF INITIAL (FREEQ, FREEQ);
+
+    LITERAL
+    	STR_MAX	    = 32765;
+
+
+%SBTTL 'DECNET_INIT_CTX'
+GLOBAL ROUTINE DECNET_INIT_CTX (CHN) = 
+BEGIN
+!++
+! FUNCTIONAL DESCRIPTION:
+!
+!   Inits a context block for subsequent use by DECNET_GET_LINE.
+!
+! RETURNS:  	cond_value, longword (unsigned), write only, by value
+!
+! PROTOTYPE:
+!
+!   DECNET_INIT_CTX
+!
+! IMPLICIT INPUTS:  None.
+!
+! IMPLICIT OUTPUTS: None.
+!
+! COMPLETION CODES:
+!
+!   SS$_NORMAL:	    	normal successful completion.
+!
+! SIDE EFFECTS:
+!
+!   None.
+!--
+    LOCAL
+    	CTX 	:  REF CTXDEF,
+    	STATUS;
+
+    STATUS = LIB$GET_VM (%REF (CTX_S_CTXDEF), CTX);
+    IF NOT .STATUS THEN RETURN 0;
+    CH$FILL (%CHAR (0), CTX_S_CTXDEF, .CTX);
+    INIT_QUEUE (CTX [CTX_Q_BUFQ]);
+    $BINTIM (TIMBUF=%ASCID'0 00:10:00.00', TIMADR=CTX [CTX_Q_EXPTIME]);
+    CTX [CTX_W_CHAN] = .CHN;
+    .CTX
+
+END; ! DECNET_INIT_CTX
+
+%SBTTL 'DECNET_FREE_CTX'
+GLOBAL ROUTINE DECNET_FREE_CTX (CTX_A_A) = 
+BEGIN
+!++
+! FUNCTIONAL DESCRIPTION:
+!
+!   Inits a context block for subsequent use by DECNET_GET_LINE.
+!
+! RETURNS:  	cond_value, longword (unsigned), write only, by value
+!
+! PROTOTYPE:
+!
+!   DECNET_FREE_CTX
+!
+! IMPLICIT INPUTS:  None.
+!
+! IMPLICIT OUTPUTS: None.
+!
+! COMPLETION CODES:
+!
+!   SS$_NORMAL:	    	normal successful completion.
+!
+! SIDE EFFECTS:
+!
+!   None.
+!--
+    BIND
+    	CTX 	= .CTX_A_A  	    : REF CTXDEF,
+    	BUFQ	= CTX [CTX_Q_BUFQ]  : QUEDEF;
+
+    LOCAL
+    	BUF 	: REF RCVDEF,
+    	STATUS;
+
+    WHILE NOT REMQUE (.BUFQ [QUE_L_HEAD], BUF) DO
+    	LIB$FREE_VM (%REF (RCV_S_RCVDEF), BUF);
+    LIB$FREE_VM (%REF (CTX_S_CTXDEF), CTX)
+
+END; ! DECNET_FREE_CTX
+
+%SBTTL 'DECNET_GET_LINE'
+GLOBAL ROUTINE DECNET_GET_LINE (CTX_A_A, RCVSTR_A, IOSB_A, ASTADR, ASTPRM,
+    	    	    	    	    TMO_A) =
+BEGIN
+!++
+! FUNCTIONAL DESCRIPTION:
+!
+!   This routine forms one "line" out of the input received over
+!   the net from the server.  A "line" is a string of characters terminated
+!   with a cr/lf sequence.  The routine will wait until enough input is
+!   received to form a "line".
+!
+!   Note that I cheat a bit and assume that CR ends a record.  This makes
+!   life a little easier since I don't have to wait around for another data
+!   block to show up if the CR occurs as the last character of a data block,
+!   just to verify that there is an LF at the front of the next block.
+!   IGNORE_LF_FRONT gets set instead, so on the next call I can strip the
+!   first character of the front of the next block (assuming it's an LF).
+!
+! RETURNS:  	cond_value, longword (unsigned), write only, by value
+!
+! PROTOTYPE:
+!
+!   DECNET_GET_LINE ctx, strdsc [,iosb, astadr, astprm] [,timeout]
+!
+! IMPLICIT INPUTS:  None.
+!
+! IMPLICIT OUTPUTS: None.
+!
+! COMPLETION CODES:
+!
+!   SS$_NORMAL:	    	normal successful completion.
+!
+! SIDE EFFECTS:
+!
+!   None.
+!--
+    BUILTIN
+    	ACTUALCOUNT;
+
+    BIND
+    	CTX 	= .CTX_A_A  	    	: REF CTXDEF,
+    	CHN 	= CTX [CTX_W_CHAN]	: WORD,
+    	INQ 	= CTX [CTX_Q_BUFQ]  	: QUEDEF,
+    	RCVSTR	= .RCVSTR_A 	    	: BLOCK [DSC$K_S_BLN,BYTE];
+
+    LOCAL
+    	SDSC	: BLOCK [DSC$K_S_BLN,BYTE],
+    	RCV 	: REF RCVDEF,
+    	LEN,
+    	EOPTR,
+    	LFPOS,
+    	STATUS,
+    	FOUND_CRLF;
+
+    STR$COPY_DX (RCVSTR, %ASCID'');
+
+    SDSC [DSC$B_DTYPE] = DSC$K_DTYPE_T;
+    SDSC [DSC$B_CLASS] = DSC$K_CLASS_S;
+
+    FOUND_CRLF = 0;
+    WHILE NOT REMQUE (.INQ [QUE_L_HEAD], RCV) DO
+    BEGIN
+    	BIND
+    	    IOSB = RCV [RCV_Q_IOSB] : IOSBDEF,
+    	    RCNT = IOSB [IOSB_W_COUNT] : WORD;
+    	EOPTR = CH$FIND_CH (.RCNT, .RCV [RCV_L_BUFPTR], %CHAR (13));
+    	LFPOS = CH$FIND_CH (.RCNT, .RCV [RCV_L_BUFPTR], %CHAR (10));
+
+    	IF CH$FAIL (.EOPTR) THEN EOPTR = .LFPOS
+    	ELSE IF NOT CH$FAIL (.LFPOS) THEN
+    	    IF .LFPOS LSSA .EOPTR THEN EOPTR = .LFPOS;
+
+    	IF CH$FAIL (.EOPTR) THEN
+    	BEGIN
+     	    SDSC [DSC$A_POINTER] = .RCV [RCV_L_BUFPTR];
+    	    SDSC [DSC$W_LENGTH] = MINU (.RCNT, STR_MAX-.RCVSTR [DSC$W_LENGTH]);
+    	    STR$APPEND (RCVSTR, SDSC);
+    	    INSQUE (.RCV, .FREEQ [QUE_L_TAIL]);
+    	END
+    	ELSE
+    	BEGIN
+    	    SDSC [DSC$A_POINTER] = .RCV [RCV_L_BUFPTR];
+    	    LEN = CH$DIFF (.EOPTR, .RCV [RCV_L_BUFPTR]);
+    	    SDSC [DSC$W_LENGTH] = MINU (.LEN, STR_MAX-.RCVSTR [DSC$W_LENGTH]);
+    	    STR$APPEND (RCVSTR, SDSC);
+    	    IF CH$RCHAR (.EOPTR) EQL %CHAR (13) THEN
+    	    BEGIN
+    	    	IF .LEN GEQ .RCNT-2 THEN
+    	    	BEGIN
+    	    	    IF .LEN EQL .RCNT-1 THEN CTX [CTX_V_IGNORELF] = 1;
+    	    	    INSQUE (.RCV, .FREEQ [QUE_L_TAIL]);
+    	    	END
+    	    	ELSE
+    	    	BEGIN
+    	    	    LOCAL DELTA;
+    	    	    DELTA = (IF CH$RCHAR (.EOPTR+1) EQL %CHAR (10)
+    	    	    	    	THEN 2 ELSE 1);
+    	    	    RCV [RCV_L_BUFPTR] = CH$PLUS (.EOPTR, .DELTA);
+    	    	    RCNT = .RCNT - .LEN - .DELTA;
+    	    	    INSQUE (.RCV, INQ);
+    	    	END;
+    	    END
+    	    ELSE
+    	    BEGIN
+    	    	IF .LEN GEQ .RCNT-1 THEN
+    	    	    INSQUE (.RCV, .FREEQ [QUE_L_TAIL])
+    	    	ELSE
+    	    	BEGIN
+    	    	    RCV [RCV_L_BUFPTR] = CH$PLUS (.EOPTR, 1);
+    	    	    RCNT = .RCNT - .LEN - 1;
+    	    	    INSQUE (.RCV, INQ);
+    	    	END;
+    	    END;
+    	    FOUND_CRLF = 1;
+    	    EXITLOOP;
+    	END;
+    END;  ! WHILE NOT REMQUE
+
+    IF .FOUND_CRLF THEN
+    BEGIN
+    	IF ACTUALCOUNT () GTR 2 THEN
+    	BEGIN
+    	    IF .IOSB_A NEQA 0 THEN
+    	    BEGIN
+    	    	BIND IOSB = .IOSB_A : IOSBDEF;
+    	    	IOSB [IOSB_W_COUNT] = .RCVSTR [DSC$W_LENGTH];
+    	    	IOSB [IOSB_W_STATUS] = SS$_NORMAL;
+    	    END;
+    	    IF .ASTADR NEQA 0 THEN
+    	    	RETURN $DCLAST (ASTADR=.ASTADR, ASTPRM=.ASTPRM);
+    	END;
+    	RETURN SS$_NORMAL;
+    END;
+    	
+    IF REMQUE (.FREEQ [QUE_L_HEAD], RCV) THEN
+    	LIB$GET_VM (%REF (RCV_S_RCVDEF), RCV);
+    RCV [RCV_L_BUFPTR] = RCV [RCV_T_BUF];
+    RCV [RCV_L_CTX] = .CTX;
+    RCV [RCV_L_STRPTR] = RCVSTR;
+    IF ACTUALCOUNT () GTR 2 THEN
+    BEGIN
+    	RCV [RCV_L_USRIOSB] = .IOSB_A;
+    	RCV [RCV_L_ASTADR] = .ASTADR;
+    	RCV [RCV_L_ASTPRM] = .ASTPRM;
+    END
+    ELSE
+    	RCV [RCV_L_USRIOSB] = RCV [RCV_L_ASTADR] = RCV [RCV_L_ASTPRM] = 0;
+
+    CH$MOVE (8, CTX [CTX_Q_EXPTIME], RCV [RCV_Q_TMO]);
+    IF ACTUALCOUNT () GTR 5 THEN
+    	IF .TMO_A NEQA 0 THEN CH$MOVE (8, .TMO_A, RCV [RCV_Q_TMO]);
+
+    $SETIMR (DAYTIM=RCV [RCV_Q_TMO], ASTADR=DECNET_TMO_AST, REQIDT=.RCV);
+    STATUS = $QIO (CHAN=.CHN, FUNC=IO$_READVBLK OR IO$M_MULTIPLE,
+    	IOSB=RCV [RCV_Q_IOSB], ASTADR=DECNET_RCV_AST, ASTPRM=.RCV,
+    	P1=RCV [RCV_T_BUF], P2=RCV_S_BUF);
+    IF NOT .STATUS THEN
+    BEGIN
+    	$CANTIM (REQIDT=.RCV);
+    	INSQUE (.RCV, .FREEQ [QUE_L_TAIL]);
+    END
+    ELSE
+    	IF .RCV [RCV_L_ASTADR] EQLA 0 THEN
+    	    STATUS = $SYNCH (IOSB=RCV [RCV_Q_IOSB]);
+
+    .STATUS
+
+END; ! DECNET_GET_LINE
+
+%SBTTL 'DECNET_RCV_AST'
+ROUTINE DECNET_RCV_AST (RCV : REF RCVDEF) =
+BEGIN
+!++
+! FUNCTIONAL DESCRIPTION:
+!
+!   This AST routine is invoked when a network read completes.
+!   It queues up the buffer block for processing by the mainline
+!   thread, which will also handle I/O errors.  Then a new block
+!   is allocated and, barring any errors, a read is reQIO'd.
+!
+! RETURNS:  	cond_value, longword (unsigned), write only, by value
+!
+! PROTOTYPE:
+!
+!   DECNET_RCV_AST buf
+!
+! IMPLICIT INPUTS:  None.
+!
+! IMPLICIT OUTPUTS: None.
+!
+! COMPLETION CODES:
+!
+!   SS$_NORMAL:	    	normal successful completion.
+!
+! SIDE EFFECTS:
+!
+!   None.
+!--
+
+    BIND
+    	IOSB	= RCV [RCV_Q_IOSB]  : IOSBDEF,
+    	STR 	= .RCV [RCV_L_STRPTR] : BLOCK [,BYTE],
+    	BUF 	= RCV [RCV_T_BUF]   : BLOCK [,BYTE],
+    	BUFPTR	= RCV [RCV_L_BUFPTR]: REF BLOCK [,BYTE],
+    	CTX 	= RCV [RCV_L_CTX]   : REF CTXDEF,
+    	CHN 	= CTX [CTX_W_CHAN]  : WORD,
+    	UIOSB	= RCV [RCV_L_USRIOSB] : REF IOSBDEF;
+
+    LOCAL
+    	LEN,
+    	STATUS,
+    	EOPTR,
+    	LFPOS,
+    	SDSC	: BLOCK [DSC$K_S_BLN,BYTE];
+
+    $CANTIM (REQIDT=.RCV);
+    IF NOT .IOSB [IOSB_W_STATUS] THEN
+    BEGIN
+    	IF .UIOSB NEQA 0 THEN
+    	BEGIN
+    	    CH$MOVE (8, IOSB, .RCV [RCV_L_USRIOSB]);
+    	    UIOSB [IOSB_W_COUNT] = .STR [DSC$W_LENGTH];
+    	END;
+    	INSQUE (.RCV, .FREEQ [QUE_L_TAIL]);
+    	IF .RCV [RCV_L_ASTADR] NEQA 0 THEN
+    	    RETURN (.RCV [RCV_L_ASTADR]) (.RCV [RCV_L_ASTPRM])
+    	ELSE
+    	    RETURN SS$_NORMAL;
+    END;
+
+    IF .CTX [CTX_V_IGNORELF] THEN
+    BEGIN
+    	CTX [CTX_V_IGNORELF] = 0;
+    	IF CH$RCHAR (.BUFPTR) EQL %CHAR (10) THEN
+    	BEGIN
+    	    BUFPTR = CH$PLUS (.BUFPTR, 1);
+    	    IOSB [IOSB_W_COUNT] = .IOSB [IOSB_W_COUNT] - 1;
+    	END;
+    END;
+
+    SDSC [DSC$B_DTYPE] = DSC$K_DTYPE_T;
+    SDSC [DSC$B_CLASS] = DSC$K_CLASS_S;
+    EOPTR = CH$FIND_CH (.IOSB [IOSB_W_COUNT], .BUFPTR, %CHAR (13));
+    LFPOS = CH$FIND_CH (.IOSB [IOSB_W_COUNT], .BUFPTR, %CHAR (10));
+
+    IF CH$FAIL (.EOPTR) THEN EOPTR = .LFPOS
+    ELSE IF NOT CH$FAIL (.LFPOS) THEN
+    	IF .LFPOS LSSA .EOPTR THEN EOPTR = .LFPOS;
+
+    IF CH$FAIL (.EOPTR) THEN
+    BEGIN
+    	SDSC [DSC$W_LENGTH] = MINU (.IOSB [IOSB_W_COUNT],
+    	    	    	    	    STR_MAX-.STR [DSC$W_LENGTH]);
+    	SDSC [DSC$A_POINTER] = .BUFPTR;
+    	STR$APPEND (STR, SDSC);
+    	BUFPTR = RCV [RCV_T_BUF];
+    	$SETIMR (DAYTIM=RCV [RCV_Q_TMO], ASTADR=DECNET_TMO_AST, REQIDT=.RCV);
+    	STATUS = $QIO (CHAN=.CHN, FUNC=IO$_READVBLK OR IO$M_MULTIPLE,
+    	    IOSB=RCV [RCV_Q_IOSB],
+    	    ASTADR=DECNET_RCV_AST, ASTPRM=.RCV, P1=.BUFPTR,
+    	    P2=RCV_S_BUF);
+    	IF NOT .STATUS THEN
+    	BEGIN
+    	    $CANTIM (REQIDT=.RCV);
+    	    IF .UIOSB NEQA 0 THEN
+    	    BEGIN
+    	    	CH$MOVE (8, IOSB, .RCV [RCV_L_USRIOSB]);
+    	    	UIOSB [IOSB_W_COUNT] = .STR [DSC$W_LENGTH];
+    	    	UIOSB [IOSB_W_STATUS] = .STATUS;
+    	    END;
+    	    INSQUE (.RCV, .FREEQ [QUE_L_TAIL]);
+    	    IF .RCV [RCV_L_ASTADR] NEQA 0 THEN
+    	    	RETURN (.RCV [RCV_L_ASTADR]) (.RCV [RCV_L_ASTPRM])
+    	    ELSE
+    	    	RETURN SS$_NORMAL;
+    	END;
+    	RETURN SS$_NORMAL
+    END;
+
+    LEN = CH$DIFF (.EOPTR, .BUFPTR);
+    SDSC [DSC$W_LENGTH] = MINU (.LEN, STR_MAX-.STR [DSC$W_LENGTH]);
+    SDSC [DSC$A_POINTER] = .BUFPTR;
+    STR$APPEND (STR, SDSC);
+    IF CH$RCHAR (.EOPTR) EQL %CHAR (13) THEN
+    BEGIN
+    	IF .LEN GEQ .IOSB [IOSB_W_COUNT]-2 THEN
+    	BEGIN
+    	    IF .LEN EQL .IOSB [IOSB_W_COUNT]-1 THEN
+    	    	CTX [CTX_V_IGNORELF] = 1;
+    	    INSQUE (.RCV, .FREEQ [QUE_L_TAIL]);
+    	END
+    	ELSE
+    	BEGIN
+    	    LOCAL DELTA;
+    	    DELTA = (IF CH$RCHAR (.EOPTR+1) EQL %CHAR (10) THEN 2 ELSE 1);
+    	    BUFPTR = CH$PLUS (.EOPTR, .DELTA);
+    	    IOSB [IOSB_W_COUNT] = .IOSB [IOSB_W_COUNT] - .LEN - .DELTA;
+    	    INSQUE (.RCV, CTX [CTX_Q_BUFQ]);
+    	END;
+    END
+    ELSE
+    BEGIN
+    	IF .LEN GEQ .IOSB [IOSB_W_COUNT]-1 THEN
+    	    INSQUE (.RCV, .FREEQ [QUE_L_TAIL])
+    	ELSE
+    	BEGIN
+    	    BUFPTR = CH$PLUS (.EOPTR, 1);
+    	    IOSB [IOSB_W_COUNT] = .IOSB [IOSB_W_COUNT] - .LEN - 1;
+    	    INSQUE (.RCV, CTX [CTX_Q_BUFQ]);
+    	END;
+    END;
+
+    IF .UIOSB NEQA 0 THEN
+    BEGIN
+    	UIOSB [IOSB_W_STATUS] = SS$_NORMAL;
+    	UIOSB [IOSB_W_COUNT] = .STR [DSC$W_LENGTH];
+    END;
+    IF .RCV [RCV_L_ASTADR] NEQA 0 THEN
+    	(.RCV [RCV_L_ASTADR]) (.RCV [RCV_L_ASTPRM])
+    ELSE
+    	SS$_NORMAL
+
+END; ! DECNET_RCV_AST
+
+%SBTTL 'DECNET_TMO_AST'
+ROUTINE DECNET_TMO_AST (RCV : REF RCVDEF) = 
+BEGIN
+!++
+! FUNCTIONAL DESCRIPTION:
+!
+!   Delivered when a receive takes longer than EXPTIME.
+!   Just cancels the I/O, to trigger the I/O completion AST with
+!   status SS$_CANCEL.
+!
+! RETURNS:  	cond_value, longword (unsigned), write only, by value
+!
+! PROTOTYPE:
+!
+!   DECNET_TMO_AST  rcv
+!
+! IMPLICIT INPUTS:  None.
+!
+! IMPLICIT OUTPUTS: None.
+!
+! COMPLETION CODES:
+!
+!   SS$_NORMAL:	    	normal successful completion.
+!
+! SIDE EFFECTS:
+!
+!   None.
+!--
+    BIND
+    	CTX = .RCV [RCV_L_CTX] : CTXDEF;
+
+    $CANCEL (CHAN=.CTX [CTX_W_CHAN])
+
+END; ! DECNET_TMO_AST
+
+END
+ELUDOM

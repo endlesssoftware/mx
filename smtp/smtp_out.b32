@@ -1,0 +1,1695 @@
+%TITLE 'SMTP_OUT'
+MODULE SMTP_OUT (IDENT='V4.2', ADDRESSING_MODE (EXTERNAL=LONG_RELATIVE,NONEXTERNAL=LONG_RELATIVE)) =
+BEGIN
+!++
+! FACILITY: 	    MX_SMTP
+!
+! ABSTRACT: 	    SMTP protocol module.
+!
+! MODULE DESCRIPTION:
+!
+!   This module contains all of the SMTP protocol routines.
+!
+! AUTHOR:   	    M. Madison
+!
+! Copyright (c) 2008, Matthew Madison.
+! 
+! All rights reserved.
+! 
+! Redistribution and use in source and binary forms, with or without
+! modification, are permitted provided that the following conditions
+! are met:
+! 
+!     * Redistributions of source code must retain the above
+!       copyright notice, this list of conditions and the following
+!       disclaimer.
+!     * Redistributions in binary form must reproduce the above
+!       copyright notice, this list of conditions and the following
+!       disclaimer in the documentation and/or other materials provided
+!       with the distribution.
+!     * Neither the name of the copyright owner nor the names of any
+!       other contributors may be used to endorse or promote products
+!       derived from this software without specific prior written
+!       permission.
+! 
+! THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
+! "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
+! LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
+! A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
+! OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
+! SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
+! LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
+! DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
+! THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
+! (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
+! OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+!
+! CREATION DATE:    11-DEC-1989
+!
+! MODIFICATION HISTORY:
+!
+!   11-DEC-1989	V1.0	Madison	    Initial coding.
+!   30-JAN-1990	V1.0-1	Madison	    Fix '.' bug.
+!   03-APR-1990	V1.1-2	Madison	    Generalized TCP support.
+!   04-APR-1990	V1.2-3	Madison	    Added debug/trace.
+!   10-APR-1990	V1.2-4	Madison	    Add length check to GET_REPLY.
+!   17-MAY-1990	V1.2-5	Madison	    Add file opening status check.
+!   28-JUN-1990	V1.3-6	Madison	    Split up long header lines.
+!   04-OCT-1990	V1.4	Madison	    Add accounting, shutdown support.
+!   12-OCT-1990	V1.4-1	Madison	    Fix dot check/null line problem.
+!   05-DEC-1990	V1.5	Madison	    Add Kanji support.
+!   30-JAN-1991	V1.6	Madison	    Use NETLIB routines.
+!   07-FEB-1991	V1.6-1	Madison	    If can't open msg text, don't send.
+!   11-FEB-1991	V1.7	Madison	    Accounting now optional.
+!   20-MAR-1991	V1.8	Madison	    Use MEM routines.
+!   06-JUN-1991	V1.8-1	Madison	    Don't use MX RR's that point to us.
+!   20-JUN-1991	V1.9	Madison	    Use timeouts that comply with RFC 1123.
+!   22-OCT-1991	V2.0	Madison	    Specify connect by address; improve xscrpts.
+!   20-NOV-1991	V2.0-1	Madison	    Multiple-address stuff wasn't working right.
+!   08-JAN-1992	V2.0-2	Madison	    Potential for units left open.
+!   07-FEB-1992	V2.0-3	Madison	    Fix 0-length address list bug.
+!   21-FEB-1992	V2.0-4	Madison	    Always set PUSH bit.
+!   16-MAR-1992	V2.0-5	Madison	    Fix MX RR loopback check.
+!   14-DEC-1993 V2.1    Allebrandi  Recode MX RR loopback check
+!   10-JAN-1994 V2.1-1	Goatley     Added relay to accounting record.
+!   16-MAR-1994 V2.1-2	Goatley     Added generic success/fail SMTP response.
+!    3-JUN-1994 V2.2	Goatley     Handle no response from DNS specially.
+!   15-JUN-1994 V2.2-1	Goatley     Fix accvio by verifying route exists!
+!    1-DEC-1995 V2.3	Goatley     Fix accvio in PRUNE by initing *CNT vars.
+!   12-DEC-1995 V2.3-1	Goatley     Add MX_SMTP_OUT_PORT logical.
+!   29-SEP-1996 V2.4	Mizoguchi   Modify Kanji support.
+!   04-JAN-1997	V3.0	Madison	    Update to NETLIB V2, eliminate dynamic
+!   	    	    	    	    	strings, simplify pruning of MX RRs.
+!   11-MAR-1997	V3.0-1	Madison	    Integrate host lock support.
+!   06-APR-1997	V3.1	Madison	    Support SIZE, PIPELINING SMTP extensions.
+!   26-APR-1997	V3.2	Madison	    Support DSN on outbound messages from MLF.
+!   01-MAY-1997	V3.2-1	Madison	    Fix handling of errors from RCPT command.
+!   08-MAY-1997	V3.2-2	Madison	    Fall back to host tables; lock hosts only
+!   	    	    	    	    on connection attempt failures.
+!   14-MAY-1997	V3.2-3	Madison	    Fall out of connect loop when we run out
+!   	    	    	    	    of MXRs.
+!   09-JUN-1997	V3.2-4	Madison	    Deassign network channel on finding host lock.
+!   22-JUN-1997	V3.2-5	Madison	    Generic retries.
+!   17-JUL-1997	V3.2-6	Madison	    Minimize severity of network errors.
+!   07-OCT-1997	V3.2-7	Madison	    Delete transcript when retrying after failed EHLO.
+!   17-DEC-1997 V3.2-8	Goatley	    Allow alternate SMTP port in forced route.
+!   31-JAN-1998	V3.2-9	Madison	    Another pipelining RCPT TO status code fix.
+!   24-APR-1998	V3.3	Madison	    Per-recipient accounting.
+!   28-JUN-1998	V3.4	Madison	    More DSN support.
+!   02-JUL-1998	V4.0	Madison	    Major restructuring to fully support DSNs.
+!   18-JUL-1998	V4.0-1	Madison	    Remove obsolete 'Rcvd:' init in GET_REPLY.
+!   20-JUL-1998	V4.0-2	Madison	    Fix ORCPT= formation.
+!   21-JUL-1998	V4.0-3	Madison	    Separate "actualhost" from remote MTA for DSN reports.
+!   30-JUL-1998	V4.0-4	Madison	    Just check for any 5xx reply from EHLO.
+!   29-AUG-1998	V4.1	Madison	    Add support for holding queues.
+!   24-OCT-1998	V4.1-1	Madison	    Add per-destination recipient limits.
+!   02-DEC-1998	V4.1-2	Madison	    Add logical name to disable PIPELINING use.
+!   01-JUL-1999	V4.1-3	Madison	    Fix channel leak.
+!   17-APR-2005 V4.2    Madison     Fix DATA error reply handling.
+!--
+    LIBRARY 'SYS$LIBRARY:STARLET';
+    LIBRARY 'MX_SRC_COMMON:FLQ';
+    LIBRARY 'MX_SRC_COMMON:MX';
+    LIBRARY 'MX_SRC_COMMON:MX_LCLDEFS';
+    LIBRARY 'MX_SRC_COMMON:FIELDS';
+    LIBRARY 'MX_SRC_COMMON:ACCOUNTING';
+    LIBRARY 'SMTP';
+    LIBRARY 'SMTP_CODES';
+
+    FORWARD ROUTINE
+    	SMTP_SEND,
+    	do_send_cmd,
+    	GET_REPLY,
+    	get_hello_reply,
+    	format_dsn_args	    	: NOVALUE,
+    	SMTP_ROUTE_ADDRESS,
+    	SMTP_FORCE_DEST,
+    	SMTP_FREE_DEST,
+    	SMTP_CLOSE_FORCED_DEST,
+    	SMTP_SEND_ETRN,
+    	dsn_lookup_code,
+    	dest_rcptque_full;
+
+    EXTERNAL ROUTINE
+    	SMTP_CONNECT,
+    	SMTP_RECONNECT,
+    	SMTP_DISCONNECT,
+    	SMTP_WRITELINE,
+    	SMTP_WRITE,
+    	SMTP_READLINE,
+    	G_HAT (MX_FILE_OPEN, MX_FILE_CLOSE, MX_FILE_GETMAXREC,
+    	       MX_FILE_WRITE, MX_FILE_READ),
+    	G_HAT (DSN_SET_RCPT_STATUS),
+    	G_HAT (FORMAT_HDR, MEM_GETTXT, OPEN_MSG_TEXT, PARSE821),
+    	G_HAT (STR$FREE1_DX, STR$CASE_BLIND_COMPARE, STR$APPEND, STR$COPY_R,
+    	       STR$COPY_DX, STR$CONCAT, LIB$CVT_DTB, LIB$GET_VM, LIB$FREE_VM,
+    	       LIB$SYS_FAO, LIB$SCOPY_DXDX);
+
+    EXTERNAL LITERAL
+    	MX__NOHOST, MX__PROTOERR, MX__NODNSRESPONSE, MX__SHUTDOWN, MX__NOCONTACT,
+    	MX__INTERNAL_ERROR;
+
+    LITERAL
+    	CMDBUF_TRAIL_OVERHEAD 	= 2,  ! for CRLF
+    	CMDBUF_OVERHEAD	    	= CMDBUF_TRAIL_OVERHEAD;
+
+    MACRO
+    	SEND_CMD (_ctrstr) [] =
+    	    BEGIN
+    	    	BIND cmdbuf = dest [DEST_T_CMDBUF]  : VECTOR [,BYTE];
+    	    	LOCAL
+    	    	    len	    : WORD,
+    	    	    dsc	    : BLOCK [DSC$K_S_BLN,BYTE],
+    	    	    count,
+    	    	    status;
+    	    	INIT_SDESC (dsc, (DEST_S_CMDBUF-CMDBUF_OVERHEAD), cmdbuf);
+    	    	%IF %NULL (%REMAINING) %THEN
+    	    	   len = %CHARCOUNT (_ctrstr);
+    	    	   IF .len GTRU (DEST_S_CMDBUF - CMDBUF_OVERHEAD) THEN
+    	    	    	len = DEST_S_CMDBUF - CMDBUF_OVERHEAD;
+    	    	   CH$MOVE (.len, UPLIT (_ctrstr), cmdbuf);
+    	    	%ELSE
+    	    	   $FAO (%ASCID %STRING (_ctrstr), len, dsc, %REMAINING);
+    	    	%FI
+    	    	TRACE ('  SMTP_Send: !AD', .len, cmdbuf);
+    	    	CH$WCHAR (%CHAR (13), CH$PLUS(cmdbuf, .len));
+    	    	CH$WCHAR (%CHAR (10), CH$PLUS(cmdbuf, .len + 1));
+    	    	dsc [DSC$W_LENGTH] = .len + 2;
+    	    	IF .ext [ESMTP_V_PIPELINING] THEN ext [ESMTP_L_CMDCOUNT] = .ext [ESMTP_L_CMDCOUNT] + 1;
+    	    	status = do_send_cmd (dest, dsc, count);
+    	    	IF .status THEN dest [DEST_L_BSENT] = .dest [DEST_L_BSENT] + .count;
+    	    	.status
+    	    END%,
+
+    	return_error (__status) =
+    	    BEGIN
+    	    	LOCAL __txt : REF TXTDEF;
+    	    	IF .tcpctx NEQA 0 THEN SMTP_DISCONNECT (tcpctx);
+    	    	FREE_STRINGS (cmd, rmtmtadsc);
+    	    	WHILE NOT REMQUE_HEAD (replyque, __txt) DO FREETXT (__txt);
+    	    	RETURN __status;
+    	    END%,
+    	bad_connection (__status, __msgque) =
+    	    BEGIN
+    	    	IF __status EQL MX__PROTOERR THEN
+    	    	    DSN_SET_RCPT_STATUS (drque, MX__DSN_FP_OTHER, __status, __msgque, 1)
+    	    	ELSE
+    	    	    DSN_SET_RCPT_STATUS (drque, MX__DSN_WR_BADCON, __status, 0, 1);
+    	    	return_error (__status);
+    	    END%,
+    	shutdown_connection (__status) =
+    	    BEGIN
+    	    	ext [ESMTP_V_PIPELINING] = 0;
+    	    	SEND_CMD ('QUIT');
+    	    	%IF %IDENTICAL (__status, MX__SHUTDOWN) %THEN DSN_SET_RCPT_STATUS (drque, MX__DSN_WS_OTHER, __status, 0, 1); %FI
+    	    	return_error (__status);
+    	    END%;
+
+    EXTERNAL
+    	IPHOSTNM    : BLOCK [DSC$K_S_BLN,BYTE],
+    	SHUTDOWN_FLAG;
+
+    TRACE_DECLARATIONS (EXTERNAL);
+
+    OWN
+    	forced_dest 	: INITIAL (0),
+    	saved_dest  	: REF DESTDEF INITIAL (0),
+    	saved_rmtmta	: BLOCK [DSC$K_S_BLN,BYTE],
+    	saved_acthost	: BLOCK [DSC$K_S_BLN,BYTE];
+
+    BIND
+    	notify_never = %ASCID' NOTIFY=NEVER'	    : BLOCK [,BYTE],
+    	notify_eqls  = %ASCID' NOTIFY='	    	    : BLOCK [,BYTE],
+    	notify_success = %ASCID',SUCCESS'    	    : BLOCK [,BYTE],
+    	notify_failure = %ASCID',FAILURE'   	    : BLOCK [,BYTE],
+    	notify_delay = %ASCID',DELAY'	    	    : BLOCK [,BYTE];
+
+
+%SBTTL 'SMTP_SEND'
+GLOBAL ROUTINE SMTP_SEND (dest_a_a, qent_a, envl_a, hdrq_a, msg_size, actualhost_a, defrtr_a) = 
+BEGIN
+!++
+! FUNCTIONAL DESCRIPTION:
+!
+!   Performs an outgoing SMTP transaction.
+!
+! RETURNS:  	cond_value, longword (unsigned), write only, by value
+!
+! PROTOTYPE:
+!
+!   SMTP_SEND
+!
+! IMPLICIT INPUTS:  None.
+!
+! IMPLICIT OUTPUTS: None.
+!
+! COMPLETION CODES:
+!
+!   SS$_NORMAL:	    	normal successful completion.
+!
+! SIDE EFFECTS:
+!
+!   None.
+!--
+    BIND
+    	dest	    = .dest_a_a   	    	: REF DESTDEF,
+    	qent	    = .qent_a   	    	: QENTDEF,
+    	envl	    = .envl_a   	    	: ENVLDEF,
+    	hdrq	    = .hdrq_a   	    	: QUEDEF,
+    	actualhost  = .actualhost_a	    	: BLOCK [,BYTE],
+    	ext 	    = dest [DEST_X_ESMTP]   	: ESMTPDEF,
+    	drque	    = dest [DEST_Q_RCPTQUE]	: QUEDEF,
+    	hostname    = dest [DEST_A_HOSTNAME]	: REF TXTDEF,
+    	tcpctx	    = dest [DEST_L_TCPCTX],
+    	send_len    = dest [DEST_L_SENDLEN],
+    	cmd_count   = ext [ESMTP_L_CMDCOUNT];
+    BIND_ENVL_FIELDS (envl);
+
+    BUILTIN
+    	EMUL;
+
+    LOCAL
+    	sdsc	    : BLOCK [DSC$K_S_BLN,BYTE],
+    	hostnm	    : BLOCK [DSC$K_S_BLN,BYTE],
+    	cmd 	    : BLOCK [DSC$K_S_BLN,BYTE],
+    	rmtmtadsc   : BLOCK [DSC$K_S_BLN,BYTE],
+    	rcpt	    : REF RCPTDEF,
+    	txt 	    : REF TXTDEF,
+    	txtq	    : QUEDEF,
+    	replyque    : QUEDEF,
+    	hdr 	    : REF TXTDEF,
+    	tmo 	    : VECTOR [2,LONG],
+    	unit,
+    	count,
+    	mxrcnt,
+    	real_mxrcnt,
+    	valid_recipients,
+    	pipeline_save,
+    	tmo_seconds,
+	smtp_port,
+    	smtp_status,
+    	dsn_status,
+    	status;
+
+
+    INIT_SDESC (hostnm, .hostname [TXT_W_LEN], hostname [TXT_T_TEXT]);
+    INIT_DYNDESC (cmd, rmtmtadsc);
+    INIT_QUEUE (replyque, txtq);
+
+    cmd_count = 0;
+    send_len = 0;
+    dest [DEST_L_BSENT] = 0;
+
+    IF NOT .forced_dest OR (.dest [DEST_L_TCPCTX] EQLA 0) THEN
+    BEGIN
+    	status = SMTP_CONNECT (dest, actualhost, dsn_status, .defrtr_a, rmtmtadsc);
+    	IF NOT .status THEN
+    	BEGIN
+    	    DSN_SET_RCPT_STATUS (drque, .dsn_status, .status, 0, 0);
+    	    RETURN .status;
+    	END;
+
+    ! Try EHLO.  Some SMTP servers drop the connection if the first
+    ! command is unrecognized; if that happens here, reconnect before
+    ! trying HELO.
+
+    	CH$FILL (%CHAR (0), ESMTP_S_ESMTPDEF, ext);
+
+    	status = SEND_CMD ('EHLO !AS', iphostnm);
+    	IF .status THEN
+    	BEGIN
+    	    BIND smtp_status_fields = smtp_status : BLOCK [,BYTE];
+    	    status = get_hello_reply (dest, 1, smtp_status, cmd);
+    	    IF NOT .status THEN
+    	    BEGIN
+    	    	SMTP_DISCONNECT (dest [DEST_L_TCPCTX]);
+    	    	status = SMTP_RECONNECT (dest, actualhost, dsn_status, rmtmtadsc);
+    	    	IF .status THEN
+    	    	BEGIN
+    	    	    status = SEND_CMD ('HELO !AS', iphostnm);
+    	    	    IF .status THEN status = get_hello_reply (dest, 0, smtp_status, cmd);
+    	    	END;
+    	    END
+            ELSE IF .smtp_status_fields [STS$V_SEVERITY] EQL STS$K_SEVERE THEN  ! any 5xx-series response
+            BEGIN
+            	CH$FILL (%CHAR (0), ESMTP_S_ESMTPDEF, ext);
+            	status = SEND_CMD ('HELO !AS', iphostnm);
+            	IF .status THEN status = get_hello_reply (dest, 0, smtp_status, cmd);
+            END;
+    	END;
+ 
+    	IF NOT .status OR NOT .smtp_status THEN
+    	BEGIN
+            DSN_SET_RCPT_STATUS (drque, MX__DSN_WR_UNARTE, (IF .status THEN .smtp_status ELSE .status), 0, 0);
+            return_error (.status);
+    	END;
+
+    	IF .forced_dest THEN
+    	BEGIN
+    	    LIB$SCOPY_DXDX (rmtmtadsc, saved_rmtmta);
+    	    LIB$SCOPY_DXDX (actualhost, saved_acthost);
+    	END;
+
+    END
+    ELSE
+    BEGIN
+    	LIB$SCOPY_DXDX (saved_rmtmta, rmtmtadsc);
+    	LIB$SCOPY_DXDX (saved_acthost, actualhost);
+    END;
+
+    IF .shutdown_flag THEN shutdown_connection (MX__SHUTDOWN);
+
+    ! Set the Remote-MTA field for each recipient
+
+    rcpt = .drque [QUE_L_HEAD];
+    WHILE .rcpt NEQA drque DO
+    BEGIN
+    	FREETXT (rcpt [RCPT_A_REMOTEMTA]);
+    	rcpt [RCPT_A_REMOTEMTA] = MEM_GETTXT (.rmtmtadsc [DSC$W_LENGTH], .rmtmtadsc [DSC$A_POINTER]);
+    	rcpt = .rcpt [RCPT_L_FLINK];
+    END;
+
+    IF .ext [ESMTP_V_ESMTP] THEN
+    BEGIN
+    	LOCAL did_one;
+    	did_one = 0;
+    	TRACE ('  This is an ESMTP server.  Recognized extensions:');
+    	IF .ext [ESMTP_V_SIZE] 	    	THEN ( did_one = 1; TRACE ('    SIZE'););
+    	IF .ext [ESMTP_V_DSN] 	    	THEN ( did_one = 1; TRACE ('    DSN'););
+    	IF .ext [ESMTP_V_PIPELINING]	THEN ( did_one = 1; TRACE ('    PIPELINING'););
+    	IF .ext [ESMTP_V_ENHSTATUS] 	THEN ( did_one = 1; TRACE ('    ENHANCEDSTATUSCODES'););
+    	IF .ext [ESMTP_V_ETRN] 	    	THEN ( did_one = 1; TRACE ('    ETRN'););
+    	IF NOT .did_one     	    	THEN   	    	    TRACE ('    (None)');
+    END;
+
+!+
+! Format the MAIL command
+!-
+
+    LIB$SYS_FAO (%ASCID'MAIL FROM:!AD', 0, cmd, .fromadr [TXT_W_LEN], fromadr [TXT_T_TEXT]);
+
+! SIZE extension
+
+    IF .ext [ESMTP_V_SIZE] THEN
+    BEGIN
+    	LOCAL
+    	    szdsc 	: BLOCK [DSC$K_S_BLN,BYTE],
+    	    szbuf 	: VECTOR [32,BYTE],
+    	    totsize,
+    	    hdr 	: REF TXTDEF;
+    	totsize = .msg_size;
+    	hdr = .HDRQ [QUE_L_HEAD];
+    	WHILE .hdr NEQA HDRQ DO
+    	BEGIN
+    	    totsize = .totsize + .hdr [TXT_W_LEN] + 2;
+    	    hdr = .hdr [TXT_L_FLINK];
+    	END;
+    	INIT_SDESC (szdsc, %ALLOCATION (szbuf), szbuf);
+    	IF .totsize LSS 100 THEN totsize = 100
+    	ELSE IF .totsize LSS 1000 THEN totsize = ((.totsize + 50) / 100) * 100
+    	ELSE IF .totsize LSS 10000 THEN totsize = ((.totsize + 500) / 1000) * 1000
+    	ELSE totsize = ((.totsize + 5000) / 10000) * 10000;
+    	IF $FAO (%ASCID' SIZE=!UL', szdsc [DSC$W_LENGTH], szdsc, .totsize) THEN STR$APPEND (cmd, szdsc);
+    END;
+
+! DSN information
+
+    IF .ext [ESMTP_V_DSN] THEN
+    BEGIN
+    	IF .envl [ENVL_V_DSN_HDRSONLY] THEN
+    	    STR$APPEND (cmd, %ASCID' RET=HDRS')
+    	ELSE IF .envl [ENVL_V_DSN_FULL] THEN
+    	    STR$APPEND (cmd, %ASCID' RET=FULL');
+
+    	IF .dsn_envid NEQA 0 THEN
+    	BEGIN
+    	    LOCAL dsc : BLOCK [DSC$K_S_BLN,BYTE];
+    	    INIT_SDESC (dsc, .dsn_envid [TXT_W_LEN], dsn_envid [TXT_T_TEXT]);
+    	    STR$APPEND (cmd, %ASCID' ENVID=');
+    	    STR$APPEND (cmd, dsc);
+    	END;
+    END;
+
+    status = SEND_CMD ('!AS', cmd);
+    IF .status AND NOT .ext [ESMTP_V_PIPELINING] THEN
+    	status = GET_REPLY (dest, smtp_status, dsn_status, replyque);
+    IF NOT .status THEN bad_connection (.status, replyque);
+    IF NOT .ext [ESMTP_V_PIPELINING] AND NOT.smtp_status THEN
+    BEGIN
+    	DSN_SET_RCPT_STATUS (drque, .dsn_status, .smtp_status, replyque, 0);
+    	shutdown_connection (.smtp_status);
+    END;
+    IF .shutdown_flag THEN shutdown_connection (MX__SHUTDOWN);
+!+
+! Send recipient information
+!-
+    valid_recipients = 0;
+    rcpt = .drque [QUE_L_HEAD];
+    WHILE .rcpt NEQA drque DO
+    BEGIN
+    	BIND_RCPT_FIELDS (rcpt);
+    	IF .ext [ESMTP_V_DSN] THEN format_dsn_args (cmd, rcpt);
+    	status = SEND_CMD ('RCPT TO:!AD!AS', .addr [TXT_W_LEN], addr [TXT_T_TEXT],
+    	    	    	    (IF .ext [ESMTP_V_DSN] THEN cmd ELSE %ASCID''));
+
+    	IF .status AND NOT .ext [ESMTP_V_PIPELINING] THEN
+    	BEGIN
+    	    status = GET_REPLY (dest, rcpt [RCPT_L_STATUS], rcpt [RCPT_L_DSN_STATUS], rcpt [RCPT_Q_DIAGTXTQUE]);
+    	    IF NOT .status THEN EXITLOOP;
+    	    IF .rcpt [RCPT_L_STATUS] THEN valid_recipients = .valid_recipients + 1;
+    	END;
+    	rcpt = .rcpt [RCPT_L_FLINK];
+    END;
+
+    IF NOT .ext [ESMTP_V_PIPELINING] THEN
+    BEGIN
+    	IF NOT .status THEN bad_connection (.status, (IF .rcpt NEQA 0 THEN rcpt [RCPT_Q_DIAGTXTQUE] ELSE 0));
+    	IF .valid_recipients EQL 0 THEN shutdown_connection (SS$_NORMAL);
+    END;
+
+    IF .shutdown_flag THEN shutdown_connection (MX__SHUTDOWN);
+
+! Message data
+
+    status = OPEN_MSG_TEXT (qent, MX__FILE_READ, unit);
+    IF NOT .status THEN
+    BEGIN
+    	BIND s = status : BLOCK [,BYTE];
+    	LOCAL xstat;
+    	SEND_CMD ('QUIT');
+    	IF .ext [ESMTP_V_PIPELINING] THEN
+    	BEGIN
+    	    IF do_send_cmd (dest, 0, count) THEN
+    	    	dest [DEST_L_BSENT] = .dest [DEST_L_BSENT] + .count;
+    	    WHILE .ext [ESMTP_L_CMDCOUNT] GTR 0 DO
+    	    BEGIN
+    	    	xstat = GET_REPLY (dest);
+    	    	IF NOT .xstat THEN EXITLOOP;
+    	    	ext [ESMTP_L_CMDCOUNT] = .ext [ESMTP_L_CMDCOUNT] - 1;
+    	    END;
+    	END
+    	ELSE GET_REPLY (dest);
+    	s [STS$V_SEVERITY] = STS$K_SEVERE;
+    	DSN_SET_RCPT_STATUS (drque, MX__DSN_FS_OTHER, .status, 0, 1);
+    	shutdown_connection (.status);
+    END;
+
+    status = SEND_CMD ('DATA');
+    IF .status THEN
+    BEGIN
+    	IF .ext [ESMTP_V_PIPELINING] THEN
+    	BEGIN
+
+    	    IF do_send_cmd (dest, 0, count) THEN
+    	    	dest [DEST_L_BSENT] = .dest [DEST_L_BSENT] + .count;
+    	    status = GET_REPLY (dest, smtp_status, dsn_status, replyque);   ! status for MAIL FROM:
+
+    	    TRACE ('SMTP_SEND: MAIL FROM status was: !XL', (IF .status THEN .smtp_status ELSE .status));
+    	    TRACE_PUTMSG ('           -- !AS', (IF .status THEN .smtp_status ELSE .status));
+
+    	    cmd_count = .cmd_count - 1;
+    	    IF .status THEN
+    	    BEGIN
+
+    	    	IF NOT .smtp_status THEN
+    	    	    DSN_SET_RCPT_STATUS (drque, .dsn_status, .smtp_status, replyque, 0);
+
+    	    	rcpt = .drque [QUE_L_HEAD];
+    	    	WHILE .rcpt NEQA drque [QUE_L_HEAD] DO
+    	    	BEGIN
+    	    	    BIND_RCPT_FIELDS (rcpt);
+    	    	    IF .smtp_status THEN
+    	    	    	status = GET_REPLY (dest, rcpt [RCPT_L_STATUS], rcpt [RCPT_L_DSN_STATUS], rcpt [RCPT_Q_DIAGTXTQUE])
+    	    	    ELSE
+    	    	    	status = GET_REPLY (dest);  ! don't set recipient status if MAIL failed
+    	    	    TRACE ('SMTP_SEND: RCPT TO   status was: !XL for !AD',
+    	    	    	    (IF .status THEN .rcpt [RCPT_L_STATUS] ELSE .status),
+    	    	    	    .addr [TXT_W_LEN], addr [TXT_T_TEXT]);
+    	    	    IF .status THEN
+    	    	    BEGIN
+    	    	    	IF .rcpt [RCPT_L_DSN_STATUS] THEN valid_recipients = .valid_recipients + 1;
+    	    	    END
+    	    	    ELSE
+    	    	    BEGIN
+    	     	    	TRACE_PUTMSG ('           -- !AS', .status);
+    	    	    	TRACE ('SMTP_SEND:        ... non-SMTP error, exiting loop');
+    	    	    	EXITLOOP;
+    	    	    END;
+    	    	    cmd_count = .cmd_count - 1;
+    	    	    rcpt = .rcpt [RCPT_L_FLINK];
+    	    	END;
+
+    	    	IF .status THEN
+    	    	BEGIN
+    	    	    status = GET_REPLY (dest, smtp_status, dsn_status, replyque); ! status for DATA command
+    	    	    TRACE ('SMTP_SEND: DATA status was: !XL', (IF .status THEN .smtp_status ELSE .status));
+    	     	    TRACE_PUTMSG ('           -- !AS', (IF .status THEN .smtp_status ELSE .status));
+    	    	    cmd_count = .cmd_count - 1;
+    	    	    IF .cmd_count NEQ 0 THEN TRACE ('Internal error: pipeline reply count < command count (remain=!UL)', .cmd_count);
+    	    	END;
+    	    	TRACE ('SMTP_SEND: final status reported is: !XL', (IF NOT .status THEN .status ELSE .smtp_status));
+    	    	TRACE_PUTMSG ('           -- !AS', (IF NOT .status THEN .status ELSE .smtp_status));
+    	    END;
+    	END
+    	ELSE status = GET_REPLY (dest, smtp_status, dsn_status, replyque); ! not pipelining - DATA status
+    END;
+
+    IF NOT .status THEN
+    BEGIN
+    	MX_FILE_CLOSE (.unit);
+    	bad_connection (.status, replyque);
+    END;
+
+    pipeline_save = .ext [ESMTP_V_PIPELINING];
+    ext [ESMTP_V_PIPELINING] = 0;  ! no need for pipelining after this point
+
+    IF .smtp_status NEQ MX_SMTP__SEND_DATA THEN
+    BEGIN
+    	MX_FILE_CLOSE (.unit);
+    	DSN_SET_RCPT_STATUS (drque, .dsn_status, .smtp_status, replyque, 1);
+    	shutdown_connection (.smtp_status);
+    END;
+
+    hdr = .hdrq [QUE_L_HEAD];
+    WHILE .hdr NEQA hdrq [QUE_L_HEAD] DO
+    BEGIN
+    	BIND bytes_sent = dest [DEST_L_BSENT];
+
+    	FORMAT_HDR (.hdr, txtq, 80);
+    	WHILE NOT REMQUE (.txtq [QUE_L_HEAD], txt) DO
+    	BEGIN
+    	    INIT_SDESC (sdsc, .txt [TXT_W_LEN], txt [TXT_T_TEXT]);
+
+    	    status = SMTP_WRITELINE (tcpctx, sdsc, count);
+    	    IF .status THEN bytes_sent = .bytes_sent + .count;
+
+    	    TRACE ('  SMTP_Send: Sent: !AD', .TXT [TXT_W_LEN], TXT [TXT_T_TEXT]);
+    	    FREETXT (TXT);
+    	END;
+    	IF NOT .status THEN EXITLOOP;
+    	hdr = .hdr [TXT_L_FLINK];
+    END;
+
+    IF NOT .status THEN
+    BEGIN
+    	MX_FILE_CLOSE (.unit);
+    	bad_connection (.status, 0);
+    END;
+
+    status = SMTP_WRITE (tcpctx, %ASCID %STRING (%CHAR (13), %CHAR (10)), count);
+    IF NOT .status THEN
+    BEGIN
+    	MX_FILE_CLOSE (.unit);
+    	bad_connection (.status, 0);
+    END;
+    TRACE ('  SMTP_Send: Sent:');
+
+    BEGIN
+    	BIND bytes_sent = dest [DEST_L_BSENT];
+    	LOCAL
+    	    str1 : BLOCK [DSC$K_S_BLN,BYTE],
+    	    str2 : BLOCK [DSC$K_S_BLN,BYTE],
+    	    bufp,
+    	    bufsize,
+    	    buflen : WORD;
+
+    	MX_FILE_GETMAXREC (.unit, bufsize);
+    	bufsize = .bufsize + 3;  ! for leading '.' and trailing cr/lf
+    	status = LIB$GET_VM (bufsize, bufp);
+    	IF NOT .status THEN
+    	BEGIN
+    	    MX_FILE_CLOSE (.unit);
+    	    DSN_SET_RCPT_STATUS (drque, MX__DSN_WS_OTHER, .status, 0, 1);
+    	    return_error (.status);
+    	END;
+
+    	CH$WCHAR (%C'.', .bufp);
+    	INIT_SDESC (str1, .bufsize-3, CH$PLUS (.bufp, 1));
+    	WHILE MX_FILE_READ (.unit, str1, buflen) DO
+    	BEGIN
+    	    IF .buflen GTRU 0 AND CH$RCHAR (CH$PLUS (.bufp, 1)) EQL %C'.' THEN
+    	    	INIT_SDESC (str2, .buflen + 1, .bufp)
+    	    ELSE
+    	    	INIT_SDESC (str2, .buflen, CH$PLUS (.bufp, 1));
+    	    CH$WCHAR (%CHAR (13), CH$PLUS (.str2 [DSC$A_POINTER], .str2 [DSC$W_LENGTH]));
+    	    CH$WCHAR (%CHAR (10), CH$PLUS (.str2 [DSC$A_POINTER], .str2 [DSC$W_LENGTH]+1));
+    	    str2 [DSC$W_LENGTH] = .str2 [DSC$W_LENGTH] + 2;
+    	    status = SMTP_WRITE (tcpctx, str2, count);
+    	    IF .status THEN bytes_sent = .bytes_sent + .count;
+    	    str2 [DSC$W_LENGTH] = .str2 [DSC$W_LENGTH] - 2;
+
+    	    TRACE ('  SMTP_SEND: Sent: !AS', str2);
+    	    IF NOT .status THEN
+    	    BEGIN
+    	    	MX_FILE_CLOSE (.unit);
+    	    	LIB$FREE_VM (bufsize, bufp);
+    	    	bad_connection (.status, 0);
+    	    END;
+    	END;
+
+    	LIB$FREE_VM (bufsize, bufp);
+
+    END;
+
+    MX_FILE_CLOSE (.unit);
+
+    status = SMTP_WRITE (tcpctx, %ASCID %STRING ('.', %CHAR (13), %CHAR (10)), count);
+    IF .status THEN dest [DEST_L_BSENT] = .dest [DEST_L_BSENT] + .count;
+    IF NOT .status THEN bad_connection (.status, 0);
+
+    TRACE ('  SMTP_SEND: Sent: .');
+
+    tmo_seconds = .valid_recipients * 30 + 600;   ! 10 minutes + 30 sec/rcpt
+    EMUL (UPLIT (-10000000), tmo_seconds, UPLIT (0), tmo);
+
+    status = GET_REPLY (dest, smtp_status, dsn_status, replyque, tmo);
+    IF NOT .status THEN bad_connection (.status, replyque);
+    IF NOT .smtp_status THEN
+    BEGIN
+    	DSN_SET_RCPT_STATUS (drque, .dsn_status, .smtp_status, replyque, 1);
+    	shutdown_connection (.smtp_status);
+    END;
+
+! QUIT
+
+    WHILE NOT REMQUE_HEAD (replyque, txt) DO FREETXT (txt);
+
+    IF .forced_dest THEN
+    	ext [ESMTP_V_PIPELINING] = .pipeline_save
+    ELSE
+    BEGIN
+    	SEND_CMD ('QUIT');
+    	GET_REPLY (dest);
+    	SMTP_DISCONNECT (tcpctx);
+    END;
+
+    FREE_STRINGS (cmd, rmtmtadsc);
+
+    SS$_NORMAL
+
+END; ! SMTP_SEND
+
+%SBTTL 'do_send_cmd'
+ROUTINE do_send_cmd (dest_a_a, cmd_a, count_a) = 
+BEGIN
+!++
+! FUNCTIONAL DESCRIPTION:
+!
+!   description
+!
+! RETURNS:  	cond_value, longword (unsigned), write only, by value
+!
+! PROTOTYPE:
+!
+!   x
+!
+! IMPLICIT INPUTS:  None.
+!
+! IMPLICIT OUTPUTS: None.
+!
+! COMPLETION CODES:
+!
+!   SS$_NORMAL:	    	normal successful completion.
+!
+! SIDE EFFECTS:
+!
+!   None.
+!--
+    BIND
+    	dest	    = .dest_a_a	    	    : REF DESTDEF,
+    	ext 	    = dest [DEST_X_ESMTP]   : ESMTPDEF,
+    	tcpctx	    = dest [DEST_L_TCPCTX],
+    	send_len    = dest [DEST_L_SENDLEN],
+    	sendbuf	    = dest [DEST_T_SENDBUF] : VECTOR [,BYTE],
+    	cmd 	    = .cmd_a    	    : BLOCK [DSC$K_S_BLN,BYTE],
+    	count	    = .count_a;
+
+    LOCAL
+    	dsc 	: BLOCK [DSC$K_S_BLN,BYTE],
+    	status;
+
+    IF NOT .ext [ESMTP_V_PIPELINING] THEN
+    BEGIN
+    	status = SMTP_WRITE (tcpctx, .cmd_a, .count_a);
+    	return .status;
+    END;
+
+    IF .cmd_a EQLA 0 OR .send_len + .cmd [DSC$W_LENGTH] GTR DEST_S_SENDBUF THEN
+    BEGIN
+    	INIT_SDESC (dsc, .send_len, sendbuf);
+    	status = SMTP_WRITE (tcpctx, dsc, .count_a);
+    	IF NOT .status THEN RETURN .status;
+    	send_len = 0;
+    END;
+
+    IF .cmd_a NEQA 0 THEN
+    BEGIN
+    	CH$MOVE (.cmd [DSC$W_LENGTH], .cmd [DSC$A_POINTER], CH$PLUS (sendbuf, .send_len));
+    	send_len = .send_len + .cmd [DSC$W_LENGTH];
+    	count = 0;
+    END;
+
+    RETURN SS$_NORMAL;
+
+END; ! do_send_cmd
+
+%SBTTL 'GET_REPLY'
+GLOBAL ROUTINE GET_REPLY (dest_a_a, smtp_status_a, dsn_status_a, replyque_a, tmo_a) = 
+BEGIN
+!++
+! FUNCTIONAL DESCRIPTION:
+!
+!   Gets an SMTP reply message, and converts the SMTP code to a condition value.
+!
+! RETURNS:  	cond_value, longword (unsigned), write only, by value
+!
+! PROTOTYPE:
+!
+!   GET_REPLY
+!
+! IMPLICIT INPUTS:  None.
+!
+! IMPLICIT OUTPUTS: None.
+!
+! COMPLETION CODES:
+!
+!   SS$_NORMAL:	    	normal successful completion.
+!
+! SIDE EFFECTS:	    None.
+!
+!--
+    BIND
+    	dest	= .dest_a_a   	    	: REF DESTDEF,
+    	ext 	= dest [DEST_X_ESMTP]	: ESMTPDEF,
+    	rcvbuf	= dest [DEST_T_RCVBUF]	: VECTOR [,BYTE];
+
+    BUILTIN
+    	ACTUALCOUNT;
+
+    OWN
+    	DEFTMO	: VECTOR [2,LONG] INITIAL (-10000000 * 300, -1);  ! 5-minute default timeout
+
+    LOCAL
+    	rdsc	    : BLOCK [DSC$K_S_BLN,BYTE],
+    	txt 	    : REF TXTDEF,
+    	queptr	    : REF QUEDEF,
+    	rlen	    : WORD,
+    	tmo 	    : REF VECTOR [,LONG],
+    	code,
+    	cont,
+    	linecount,
+    	status;
+
+    IF ACTUALCOUNT () GTR 4 THEN
+    	tmo = (IF .tmo_a EQLA 0 THEN deftmo ELSE .tmo_a)
+    ELSE
+    	tmo = deftmo;
+
+    queptr = 0;
+    IF ACTUALCOUNT () GTR 3 THEN
+    BEGIN
+    	queptr = .replyque_a;
+    	IF .queptr NEQA 0 THEN WHILE NOT REMQUE_HEAD (.queptr, txt) DO FREETXT (txt);
+    END;
+
+    TRACE ('  SMTP_SEND: will wait !%T for reply.', .tmo);
+
+    linecount = 0;
+
+    CONT = 1;
+    INIT_SDESC (rdsc, DEST_S_RCVBUF, dest [DEST_T_RCVBUF]);
+
+    WHILE .CONT DO
+    BEGIN
+    	status = SMTP_READLINE (dest [DEST_L_TCPCTX], rdsc, rlen, .tmo);
+    	IF NOT .status THEN EXITLOOP;
+    	TRACE ('  SMTP_SEND: Rcvd: !AD', .rlen, rcvbuf);
+    	IF .queptr NEQA 0 THEN
+    	BEGIN
+    	    txt = MEM_GETTXT (.rlen, rcvbuf);
+    	    INSQUE_TAIL (.txt, .queptr);
+    	END;
+    	status = MX__PROTOERR;
+    	IF .rlen GTRU 3 THEN
+    	BEGIN
+    	    IF LIB$CVT_DTB (3, rcvbuf, code) THEN
+    	    BEGIN
+    	    	cont = (IF .rlen LSSU 4 THEN 0 ELSE
+    	    	    	(CH$RCHAR (CH$PLUS (rcvbuf, 3)) EQL %C'-'));
+    	    	linecount = .linecount + 1;
+    	    	status = SS$_NORMAL;
+    	    END;
+    	END;
+    	IF NOT .status THEN EXITLOOP;
+    END;
+
+    IF NOT .status THEN RETURN .status;
+
+    IF ACTUALCOUNT () GTR 1 AND .smtp_status_a NEQA 0 THEN
+    BEGIN
+    	.smtp_status_a = (SELECTONE .CODE OF
+    	    SET
+    	    	[SMTP__ACTION_OKAY] 	: MX_SMTP__ACTION_OKAY;
+    	    	[SMTP__SEND_DATA]   	: MX_SMTP__SEND_DATA;
+    	    	[SMTP__SERVICE_READY]	: MX_SMTP__SERVICE_READY;
+    	    	[SMTP__SERVICE_CLOSING]	: MX_SMTP__SERVICE_CLOSING;
+    	    	[SMTP__WILL_FORWARD]	: MX_SMTP__WILL_FORWARD;
+    	    	[SMTP__USER_NOT_LOCAL]	: MX_SMTP__USER_NOT_LOCAL;
+    	    	[SMTP__MSG_TOO_LARGE]	: MX_SMTP__MSG_TOO_LARGE;
+    	    	[SMTP__MBX_SYNTAX_ERROR]: MX_SMTP__MBX_SYNTAX_ERROR;
+    	    	[SMTP__MBX_UNAVAILABLE]	: MX_SMTP__MBX_UNAVAILABLE;
+    	    	[SMTP__MAILBOX_BUSY]	: MX_SMTP__MAILBOX_BUSY;
+    	    	[SMTP__SYSTEM_STATUS]	: MX_SMTP__SYSTEM_STATUS;
+    	    	[SMTP__HELP_MESSAGE]	: MX_SMTP__HELP_MESSAGE;
+    	    	[SMTP__SERVICE_NOT_AVAIL] : MX_SMTP__SERVICE_NOT_AVAIL;
+    	    	[SMTP__LOCAL_ERROR] 	: MX_SMTP__LOCAL_ERROR;
+    	    	[SMTP__INSUFF_STORAGE]	: MX_SMTP__INSUFF_STORAGE;
+    	    	[SMTP__CMD_UNRECOGNIZED]: MX_SMTP__CMD_UNRECOGNIZED;
+    	    	[SMTP__ARGUMENT_ERROR]	: MX_SMTP__ARGUMENT_ERROR;
+    	    	[SMTP__CMD_NOT_IMPLEM]	: MX_SMTP__CMD_NOT_IMPLEM;
+    	    	[SMTP__BAD_CMD_SEQUENCE]: MX_SMTP__BAD_CMD_SEQUENCE;
+    	    	[SMTP__ARG_UNRECOGNIZED]: MX_SMTP__ARG_UNRECOGNIZED;
+    	    	[SMTP__TRANSACTION_FAIL]: MX_SMTP__TRANSACTION_FAIL;
+    	    	[OTHERWISE] 	    	:
+    	    	    BEGIN
+    	    	    	LOCAL firstdigit;
+    	    	    	firstdigit = .code / 100;
+    	    	    	SELECTONE .firstdigit OF
+    	    	    	SET
+    	    	    	    [2]	: MX_SMTP__GENERIC_SUCCESS;
+    	    	    	    [4] : MX_SMTP__GENERIC_RETRY;
+    	    	    	    [5] : MX_SMTP__GENERIC_FAILURE;
+    	    	    	    [OTHERWISE] : MX_SMTP__UNKNOWN_REPLY_CODE
+    	    	    	TES
+    	    	    END
+    	    TES);
+    END;
+
+    IF ACTUALCOUNT () GTR 2 AND .dsn_status_a NEQA 0 THEN
+    BEGIN
+    	LOCAL dsncode	: VECTOR [3,LONG];
+    	dsncode [0] = .code / 100;
+    	dsncode [1] = dsncode [2] = 0;
+    	IF .ext [ESMTP_V_ENHSTATUS] THEN
+    	BEGIN
+    	    LOCAL cp, dp;
+    	    cp = CH$PLUS (rcvbuf, 4);
+    	    WHILE CH$RCHAR (.cp) EQL %C' ' OR CH$RCHAR (.cp) EQL %CHAR (9) DO cp = CH$PLUS (.cp, 1);
+    	    IF CH$RCHAR (.cp) GEQU %C'0' AND CH$RCHAR (.cp) LEQU %C'9' THEN
+    	    BEGIN
+    	    	INCR i FROM 0 TO 2 DO
+    	    	BEGIN
+    	    	    dp = CH$PLUS (.cp, 1);
+    	    	    WHILE CH$RCHAR (.dp) GEQU %C'0' AND CH$RCHAR (.dp) LEQU %C'9' DO dp = CH$PLUS (.dp, 1);
+    	    	    LIB$CVT_DTB (CH$DIFF (.dp, .cp), .cp, dsncode [.i]);
+    	    	    cp = CH$PLUS (.dp, 1);
+    	    	END;
+    	    END;
+    	END;
+    	.dsn_status_a = dsn_lookup_code (dsncode);
+    END;
+
+    SS$_NORMAL
+
+END; ! GET_REPLY
+
+%SBTTL 'get_hello_reply'
+ROUTINE get_hello_reply (dest_a_a, EHLO_reply, smtp_status_a, mta_a) = 
+BEGIN
+!++
+! FUNCTIONAL DESCRIPTION:
+!
+!   Gets an SMTP reply to HELO/EHLO, and fills in ESMTPDEF
+!   block to describe server's supported extensions.
+!
+! RETURNS:  	cond_value, longword (unsigned), write only, by value
+!
+! PROTOTYPE:
+!
+!   get_hello_reply
+!
+! IMPLICIT INPUTS:  None.
+!
+! IMPLICIT OUTPUTS: None.
+!
+! COMPLETION CODES:
+!
+!   SS$_NORMAL:	    	normal successful completion.
+!
+! SIDE EFFECTS:	    None.
+!
+!--
+    BIND
+    	dest	= .dest_a_a	    	    : REF DESTDEF,
+    	ext 	= dest [DEST_X_ESMTP]	    : ESMTPDEF,
+    	hostnm	= dest [DEST_A_HOSTNAME]    : REF TXTDEF,
+    	sstat	= .smtp_status_a,
+    	mta 	= .mta_a    	    	    : BLOCK [,BYTE];
+
+    LOCAL
+    	replyque    : QUEDEF,
+    	txt 	    : REF TXTDEF,
+    	sdsc	    : BLOCK [DSC$K_S_BLN,BYTE],
+    	cp,
+    	remain,
+    	word_ptr,
+    	word_size,
+    	status;
+
+    INIT_QUEUE (replyque);
+    status = GET_REPLY (dest, sstat, 0, replyque);
+    IF NOT .status OR NOT .sstat THEN
+    BEGIN
+    	WHILE NOT REMQUE (.replyque [QUE_L_HEAD], txt) DO FREETXT (txt);
+    	RETURN .status;
+    END;
+
+    IF QUEUE_EMPTY (replyque) OR NOT .EHLO_reply THEN
+    BEGIN
+    	ext [ESMTP_V_ESMTP] = 0;
+    	INIT_SDESC (sdsc, .hostnm [TXT_W_LEN], hostnm [TXT_T_TEXT]);
+    	IF .mta_a NEQA 0 THEN STR$CONCAT (mta, %ASCID'dns;', sdsc);
+    END
+    ELSE
+    BEGIN
+    	REMQUE (.replyque [QUE_L_HEAD], txt);
+    	remain = .txt [TXT_W_LEN];
+    	cp = CH$PLUS (txt [TXT_T_TEXT], 4);
+    	WHILE .remain GTRU 0 AND (CH$RCHAR (.cp) EQL %C' '  OR CH$RCHAR (.cp) EQL %CHAR (9)) DO
+    	BEGIN
+    	    cp = CH$PLUS (.cp, 1);
+    	    remain = .remain - 1;
+    	END;
+    	INIT_SDESC (sdsc, .remain, .cp);
+    	IF .mta_a NEQA 0 THEN STR$CONCAT (mta, %ASCID'smtp;', sdsc);
+    	FREETXT (txt);
+    	ext [ESMTP_V_ESMTP] = 1;
+    END;
+
+    WHILE NOT REMQUE (.replyque [QUE_L_HEAD], txt) DO
+    BEGIN
+    	IF .ext [ESMTP_V_ESMTP] THEN
+    	BEGIN
+    	    remain = .txt [TXT_W_LEN] - 4;
+    	    cp = CH$PLUS (txt [TXT_T_TEXT], 4);
+    	    WHILE .remain NEQ 0 AND (CH$RCHAR (.cp) EQL %CHAR(9) OR
+    	    	    	    	    	 CH$RCHAR (.cp) EQL %C' ') DO
+    	    BEGIN
+    	    	cp = CH$PLUS (.cp, 1);
+    	    	remain = .remain - 1;
+    	    END;
+    	    IF .remain GTR 0 THEN
+    	    BEGIN
+    	    	word_ptr = .cp;
+    	    	word_size = 1;
+    	    	WHILE .word_size LSSU .remain AND CH$RCHAR (.cp) NEQ %CHAR(9) AND CH$RCHAR (.cp) NEQ %C' ' DO
+    	    	BEGIN
+    	    	    cp = CH$PLUS (.cp, 1);
+    	    	    word_size = .word_size + 1;
+    	    	END;
+    	    	INIT_SDESC (sdsc, .word_size, .word_ptr);
+    	    	IF NOT $TRNLNM (TABNAM=%ASCID'LNM$FILE_DEV', LOGNAM=%ASCID'MX_SMTP_IGNORE_PIPELINING') AND
+    	    	       STR$CASE_BLIND_COMPARE (sdsc, %ASCID'PIPELINING') EQL 0 THEN
+    	    	BEGIN
+    	    	    ext [ESMTP_V_PIPELINING] = 1;
+    	    	    ext [ESMTP_L_CMDCOUNT] = 0;
+    	    	END
+    	    	ELSE IF STR$CASE_BLIND_COMPARE (sdsc, %ASCID'SIZE') EQL 0 THEN
+    	    	BEGIN
+    	    	    ext [ESMTP_V_SIZE] = 1;
+    	    	    WHILE .remain GTRU 0 AND (CH$RCHAR (.cp) EQL %C' ' OR CH$RCHAR (.cp) EQL %CHAR (9)) DO
+    	    	    BEGIN
+    	    	    	cp = CH$PLUS (.cp, 1);
+    	    	    	remain = .remain - 1;
+    	    	    END;
+    	    	    IF .remain NEQ 0 THEN
+    	    	    	LIB$CVT_DTB (.remain, .cp, ext [ESMTP_L_MAXSIZE]);
+    	    	END
+    	    	ELSE IF STR$CASE_BLIND_COMPARE (sdsc, %ASCID'DSN') EQL 0 THEN
+    	    	    ext [ESMTP_V_DSN] = 1
+    	    	ELSE IF STR$CASE_BLIND_COMPARE (sdsc, %ASCID'ENHANCEDSTATUSCODES') EQL 0 THEN
+    	    	    ext [ESMTP_V_ENHSTATUS] = 1
+    	    	ELSE IF STR$CASE_BLIND_COMPARE (sdsc, %ASCID'ETRN') EQL 0 THEN
+    	    	    ext [ESMTP_V_ETRN] = 1
+    	    END;
+    	END;
+    	FREETXT (txt);
+    END;
+
+    .status
+
+END; ! get_hello_reply
+
+%SBTTL 'format_dsn_args'
+ROUTINE format_dsn_args (args_a, rcpt_a_a) : NOVALUE = 
+BEGIN
+!++
+! FUNCTIONAL DESCRIPTION:
+!
+!   description
+!
+! RETURNS:  	cond_value, longword (unsigned), write only, by value
+!
+! PROTOTYPE:
+!
+!   x
+!
+! IMPLICIT INPUTS:  None.
+!
+! IMPLICIT OUTPUTS: None.
+!
+! COMPLETION CODES:
+!
+!   SS$_NORMAL:	    	normal successful completion.
+!
+! SIDE EFFECTS:	    None.
+!--
+    BIND
+    	args	= .args_a   	: BLOCK [,BYTE],
+    	rcpt	= .rcpt_a_a 	: REF RCPTDEF;
+
+    BIND_RCPT_FIELDS (rcpt);
+
+    IF .rcpt [RCPT_V_DSN_NEVER] OR .rcpt [RCPT_V_DSN_SUCCESS] OR .rcpt [RCPT_V_DSN_FAILURE] OR .rcpt [RCPT_V_DSN_DELAY] THEN
+    BEGIN
+    	IF .rcpt [RCPT_V_DSN_NEVER] THEN
+    	    STR$COPY_DX (args, notify_never)
+    	ELSE
+    	BEGIN
+    	    LOCAL i, elen, ebuf : VECTOR [256,BYTE];
+    	    CH$MOVE (.notify_eqls [DSC$W_LENGTH], .notify_eqls [DSC$A_POINTER], ebuf);
+    	    elen = .notify_eqls [DSC$W_LENGTH];
+    	    i = 1;  ! offset into keyword string, to remove leading comma
+    	    IF .rcpt [RCPT_V_DSN_SUCCESS] THEN
+    	    BEGIN
+    	    	CH$MOVE (.notify_success [DSC$W_LENGTH]-.i, CH$PLUS(.notify_success [DSC$A_POINTER],.i), CH$PLUS (ebuf, .elen));
+    	    	elen = .elen + (.notify_success [DSC$W_LENGTH]-.i);
+    	    	i = 0;
+    	    END;
+    	    IF .rcpt [RCPT_V_DSN_FAILURE] THEN
+    	    BEGIN
+    	    	CH$MOVE (.notify_failure [DSC$W_LENGTH]-.i, CH$PLUS(.notify_failure [DSC$A_POINTER],.i), CH$PLUS (ebuf, .elen));
+    	    	elen = .elen + (.notify_failure [DSC$W_LENGTH]-.i);
+    	    	i = 0;
+    	    END;
+    	    IF .rcpt [RCPT_V_DSN_DELAY] THEN
+    	    BEGIN
+    	    	CH$MOVE (.notify_delay [DSC$W_LENGTH]-.i, CH$PLUS(.notify_delay [DSC$A_POINTER],.i), CH$PLUS (ebuf, .elen));
+    	    	elen = .elen + (.notify_delay [DSC$W_LENGTH]-.i);
+    	    	i = 0;
+    	    END;
+    	    IF .i NEQ 0 THEN elen = 0;  ! should never happen, but just in case
+    	    STR$COPY_R (args, elen, ebuf);
+    	    IF .oraddr NEQA 0 THEN
+    	    BEGIN
+    	    	STR$APPEND (args, %ASCID' ORCPT=');
+    	    	IF .ortype EQLA 0 THEN
+    	    	    STR$APPEND (args, %ASCID'rfc822;')
+    	    	ELSE
+    	    	BEGIN
+    	    	    txt_append (args, ortype);
+    	    	    STR$APPEND (args, %ASCID';');
+    	    	END;
+    	    	txt_append (args, oraddr);
+    	    END;
+    	END;
+    END
+    ELSE STR$COPY_DX (args, %ASCID'');
+
+END; ! format_dsn_args
+
+%SBTTL 'SMTP_ROUTE_ADDRESS'
+GLOBAL ROUTINE SMTP_ROUTE_ADDRESS (rcpt_a_a, destq_a) = 
+BEGIN
+!++
+! FUNCTIONAL DESCRIPTION:
+!
+!   description
+!
+! RETURNS:  	cond_value, longword (unsigned), write only, by value
+!
+! PROTOTYPE:
+!
+!   x
+!
+! IMPLICIT INPUTS:  None.
+!
+! IMPLICIT OUTPUTS: None.
+!
+! COMPLETION CODES:
+!
+!   SS$_NORMAL:	    	normal successful completion.
+!
+! SIDE EFFECTS:	    None.
+!--
+    BIND
+    	rcpt	= .rcpt_a_a 	    	    : REF RCPTDEF,
+    	destq	= .destq_a  	    	    : QUEDEF;
+    BIND_RCPT_FIELDS (rcpt);
+
+    LOCAL
+    	status;
+
+    IF .forced_dest THEN
+    BEGIN
+    	IF QUEUE_EMPTY (destq) THEN INSQUE (.saved_dest, .destq [QUE_L_TAIL]);
+    	INSQUE_TAIL (.rcpt, saved_dest [DEST_Q_RCPTQUE]);
+    	RETURN SS$_NORMAL;
+    END;
+
+    status = SS$_NORMAL;
+
+!+
+!   Find the destination host for this recipient, if one
+!   has not already been set.
+!-
+    IF NOT .rcpt [RCPT_V_FORCEDROUTE] THEN
+    BEGIN
+    	LOCAL
+    	    rteq	: QUEDEF,
+    	    txt 	: REF TXTDEF,
+    	    s   	: BLOCK [DSC$K_S_BLN,BYTE],
+    	    lclp	: BLOCK [DSC$K_S_BLN,BYTE],
+    	    domp	: BLOCK [DSC$K_S_BLN,BYTE];
+
+    	INIT_QUEUE (rteq);
+    	INIT_SDESC (s, .addr [TXT_W_LEN], addr [TXT_T_TEXT]);
+    	INIT_DYNDESC (lclp, domp);
+    	status = PARSE821 (s, rteq, lclp, domp);
+    	IF NOT .status THEN
+    	    rcpt [RCPT_L_DSN_STATUS] = MX__DSN_FA_DSTSYN
+    	ELSE
+    	BEGIN
+    	    IF .route NEQA 0 THEN FREETXT (route);
+    	    IF .rteq [QUE_L_HEAD] EQLA rteq THEN
+    	    	route = MEM_GETTXT (.domp [DSC$W_LENGTH], .domp [DSC$A_POINTER])
+    	    ELSE
+    	    	REMQUE (.rteq [QUE_L_HEAD], route);
+    	    WHILE NOT REMQUE (.rteq [QUE_L_HEAD], txt) DO FREETXT (txt);
+    	END;
+    	FREE_STRINGS (lclp, domp);
+    END;
+
+!+
+!   Now add the recipient to the destination host's queue,
+!   creating a new destination structure if there isn't one yet.
+!-
+    IF .status THEN
+    BEGIN
+    	LOCAL
+    	    dest    : REF DESTDEF;
+
+    	dest = .destq [QUE_L_HEAD];
+    	WHILE .dest NEQA destq [QUE_L_HEAD] DO
+    	BEGIN
+    	    IF .rcpt [RCPT_V_FORCEDROUTE] EQL .dest [DEST_V_FORCEDROUTE] AND
+    	    	txt_case_blind_compare (route, dest [DEST_A_HOSTNAME]) EQL 0 AND
+    	    	NOT dest_rcptque_full (dest) THEN EXITLOOP;
+    	    dest = .dest [DEST_L_FLINK];
+    	END;
+
+    	IF .dest EQLA destq [QUE_L_HEAD] THEN
+    	BEGIN
+    	    status = LIB$GET_VM (%REF (DEST_S_DESTDEF), dest);
+    	    IF NOT .status THEN
+    	    	rcpt [RCPT_L_DSN_STATUS] = MX__DSN_WS_OTHER
+    	    ELSE
+    	    BEGIN
+    	    	CH$FILL (%CHAR (0), DEST_S_DESTDEF, .dest);
+    	    	INIT_QUEUE (dest [DEST_Q_RCPTQUE]);
+    	    	dest [DEST_A_HOSTNAME] = MEM_GETTXT (.route [TXT_W_LEN], route [TXT_T_TEXT]);
+    	    	dest [DEST_V_FORCEDROUTE] = .rcpt [RCPT_V_FORCEDROUTE];
+    	    	INSQUE (.dest, .destq [QUE_L_TAIL]);
+    	    END;
+    	END;
+
+    	IF .status THEN
+    	    INSQUE_TAIL (.rcpt, dest [DEST_Q_RCPTQUE]);
+    END;
+
+    IF NOT .status THEN rcpt [RCPT_L_STATUS] = .status;
+
+    .status
+
+END; ! SMTP_ROUTE_ADDRESS
+
+%SBTTL 'SMTP_FORCE_DEST'
+GLOBAL ROUTINE SMTP_FORCE_DEST (hostlen, hostptr) = 
+BEGIN
+!++
+! FUNCTIONAL DESCRIPTION:
+!
+!   description
+!
+! RETURNS:  	cond_value, longword (unsigned), write only, by value
+!
+! PROTOTYPE:
+!
+!   x
+!
+! IMPLICIT INPUTS:  None.
+!
+! IMPLICIT OUTPUTS: None.
+!
+! COMPLETION CODES:
+!
+!   SS$_NORMAL:	    	normal successful completion.
+!
+! SIDE EFFECTS:	    None.
+!--
+    LOCAL
+    	dest	    : REF DESTDEF,
+    	status;
+
+    status = LIB$GET_VM (%REF (DEST_S_DESTDEF), dest);
+    IF NOT .status THEN RETURN .status;
+    CH$FILL (%CHAR (0), DEST_S_DESTDEF, .dest);
+    INIT_QUEUE (dest [DEST_Q_RCPTQUE]);
+    dest [DEST_A_HOSTNAME] = MEM_GETTXT (.hostlen, .hostptr);
+    dest [DEST_V_FORCEDROUTE] = 1;
+
+    forced_dest = 1;
+    saved_dest = .dest;
+    INIT_DYNDESC (saved_rmtmta, saved_acthost);
+
+    .status
+
+END; ! SMTP_FORCE_DEST
+
+%SBTTL 'SMTP_FREE_DEST'
+GLOBAL ROUTINE SMTP_FREE_DEST (dest_a_a) = 
+BEGIN
+!++
+! FUNCTIONAL DESCRIPTION:
+!
+!   description
+!
+! RETURNS:  	cond_value, longword (unsigned), write only, by value
+!
+! PROTOTYPE:
+!
+!   x
+!
+! IMPLICIT INPUTS:  None.
+!
+! IMPLICIT OUTPUTS: None.
+!
+! COMPLETION CODES:
+!
+!   SS$_NORMAL:	    	normal successful completion.
+!
+! SIDE EFFECTS:	    None.
+!--
+    BIND
+    	dest	= .dest_a_a 	: REF DESTDEF;
+
+    IF .forced_dest AND .dest EQLA .saved_dest THEN RETURN SS$_NORMAL;
+
+    FREETXT (dest [DEST_A_HOSTNAME]);
+    LIB$FREE_VM (%REF (DEST_S_DESTDEF), dest)
+
+END; ! SMTP_FREE_DEST
+
+%SBTTL 'SMTP_CLOSE_FORCED_DEST'
+GLOBAL ROUTINE SMTP_CLOSE_FORCED_DEST (final) = 
+BEGIN
+!++
+! FUNCTIONAL DESCRIPTION:
+!
+!   Cleans up after a forced destination.
+!
+! RETURNS:  	cond_value, longword (unsigned), write only, by value
+!
+! PROTOTYPE:
+!
+!   x
+!
+! IMPLICIT INPUTS:  None.
+!
+! IMPLICIT OUTPUTS: None.
+!
+! COMPLETION CODES:
+!
+!   SS$_NORMAL:	    	normal successful completion.
+!
+! SIDE EFFECTS:	    None.
+!--
+    LOCAL
+    	txt 	: REF TXTDEF,
+    	junk,
+    	status;
+
+    IF .forced_dest AND (.saved_dest NEQA 0) THEN
+    BEGIN
+    	BIND
+    	    ext	    = saved_dest [DEST_X_ESMTP] : ESMTPDEF;
+
+    	IF .saved_dest [DEST_L_TCPCTX] NEQU 0 THEN
+    	BEGIN
+    	    ext [ESMTP_V_PIPELINING] = 0;
+    	    junk = 0;
+    	    status = do_send_cmd (saved_dest, %ASCID %STRING ('QUIT', %CHAR (13), %CHAR (10)), junk);
+    	    IF .status THEN get_reply (saved_dest, junk, junk);
+    	    SMTP_DISCONNECT (saved_dest [DEST_L_TCPCTX]);
+    	    FREE_STRINGS (saved_rmtmta, saved_acthost);
+    	END;
+
+    	IF .final THEN
+    	BEGIN
+    	    FREETXT (saved_dest [DEST_A_HOSTNAME]);
+    	    LIB$FREE_VM (%REF (DEST_S_DESTDEF), saved_dest);
+    	    saved_dest = 0;
+    	    forced_dest = 0;
+    	END;
+    END;
+
+    SS$_NORMAL
+
+END; ! SMTP_CLOSE_FORCED_DEST
+
+%SBTTL 'SMTP_SEND_ETRN'
+GLOBAL ROUTINE SMTP_SEND_ETRN (hostlen, hostptr, queuename) = 
+BEGIN
+!++
+! FUNCTIONAL DESCRIPTION:
+!
+!   description
+!
+! RETURNS:  	cond_value, longword (unsigned), write only, by value
+!
+! PROTOTYPE:
+!
+!   x
+!
+! IMPLICIT INPUTS:  None.
+!
+! IMPLICIT OUTPUTS: None.
+!
+! COMPLETION CODES:
+!
+!   SS$_NORMAL:	    	normal successful completion.
+!
+! SIDE EFFECTS:	    None.
+!--
+    BIND
+    	ext 	    = saved_dest [DEST_X_ESMTP]	: ESMTPDEF;
+
+    LOCAL
+    	pipeline,
+    	status,
+    	junk,
+    	do_disconnect,
+    	dest	    : REF DESTDEF;
+
+    IF NOT .forced_dest OR .saved_dest EQLA 0 THEN RETURN SS$_NORMAL;
+
+    do_disconnect = 0;
+    dest = .saved_dest;
+
+    IF .saved_dest [DEST_L_TCPCTX] EQLA 0 THEN
+    BEGIN
+    	LOCAL
+    	    str1 : BLOCK [DSC$K_S_BLN,BYTE],
+    	    str2 : BLOCK [DSC$K_S_BLN,BYTE];
+
+    	INIT_DYNDESC (str1, str2);
+    	status = SMTP_CONNECT (saved_dest, str1, junk, 0, str2);
+    	FREE_STRINGS (str1, str2);
+    	IF NOT .status THEN RETURN .status;
+    	CH$FILL (%CHAR (0), ESMTP_S_ESMTPDEF, ext);
+    	status = send_cmd ('EHLO !AS', iphostnm);
+    	IF .status THEN
+    	BEGIN
+    	    status = get_hello_reply (saved_dest, 1, junk, 0);
+    	    IF .status THEN status = .junk;
+    	    IF .status THEN status = .ext [ESMTP_V_ETRN];
+    	END;
+
+    	IF .status THEN
+    	    do_disconnect = 1
+    	ELSE
+    	    SMTP_DISCONNECT (saved_dest [DEST_L_TCPCTX]);
+    END;
+    IF .saved_dest [DEST_L_TCPCTX] EQLA 0 THEN RETURN SS$_NORMAL;
+
+    BEGIN
+    	BIND ext = dest [DEST_X_ESMTP] : ESMTPDEF;
+    	IF NOT .ext [ESMTP_V_ETRN] THEN RETURN SS$_NORMAL;
+    	pipeline = .ext [ESMTP_V_PIPELINING];
+    	ext [ESMTP_V_PIPELINING] = 0;
+    	IF .queuename THEN
+    	    status = send_cmd ('ETRN #!AD', .hostlen, .hostptr)
+    	ELSE
+    	BEGIN
+    	    IF .hostlen GTR 2 AND CH$RCHAR (.hostptr) EQL %C'*' AND CH$RCHAR (CH$PLUS (.hostptr, 1)) EQL %C'.' THEN
+    	    	status = send_cmd ('ETRN @!AD', .hostlen-2, CH$PLUS (.hostptr, 2))
+    	    ELSE
+    	    	status = send_cmd ('ETRN !AD', .hostlen, .hostptr);
+    	END;
+    	IF .status THEN get_reply (dest, junk, junk);
+    	ext [ESMTP_V_PIPELINING] = .pipeline;
+    END;
+
+    IF .do_disconnect THEN
+    	SMTP_DISCONNECT (saved_dest [DEST_L_TCPCTX]);
+
+    SS$_NORMAL
+
+END;  ! SMTP_SEND_ETRN
+
+%SBTTL 'dsn_lookup_code'
+ROUTINE dsn_lookup_code (enhcode_a) = 
+BEGIN
+!++
+! FUNCTIONAL DESCRIPTION:
+!
+!   description
+!
+! RETURNS:  	cond_value, longword (unsigned), write only, by value
+!
+! PROTOTYPE:
+!
+!   x
+!
+! IMPLICIT INPUTS:  None.
+!
+! IMPLICIT OUTPUTS: None.
+!
+! COMPLETION CODES:
+!
+!   SS$_NORMAL:	    	normal successful completion.
+!
+! SIDE EFFECTS:	    None.
+!--
+    BIND
+    	enhcode	    = .enhcode_a    : VECTOR [3,LONG];
+
+    SELECTONE .enhcode [0] OF
+    SET
+    [2] :   CASE .enhcode [1] FROM 0 TO 7 OF
+    	    SET
+    	    [0] :   	    	    MX__DSN_S__OTHER;
+    	    [1] :   SELECTONE .enhcode [2] OF
+    	    	    SET
+    	    	    [5]	:   	    MX__DSN_SA_DSTVAL;
+    	    	    [OTHERWISE] :   MX__DSN_SA_OTHER
+    	    	    TES;
+    	    [2]	:   	    	    MX__DSN_SM_OTHER;
+    	    [3]	:   	    	    MX__DSN_SS_OTHER;
+    	    [4]	:   	    	    MX__DSN_SR_OTHER;
+    	    [5]	:   	    	    MX__DSN_SP_OTHER;
+    	    [6] :   SELECTONE .enhcode [2] OF
+    	    	    SET
+    	    	    [4]	:   	    MX__DSN_SC_CNVLOS;
+    	    	    [OTHERWISE] :   MX__DSN_SC_OTHER
+    	    	    TES;
+    	    [7] :   SELECTONE .enhcode [2] OF
+    	    	    SET
+    	    	    [7]	:   	    MX__DSN_SY_INTFAI;
+    	    	    [OTHERWISE] :   MX__DSN_SY_OTHER
+    	    	    TES;
+    	    [OUTRANGE] :    	    MX__DSN_S__OTHER
+    	    TES;
+    [4] :   CASE .enhcode [1] FROM 0 TO 7 OF
+    	    SET
+    	    [0] :   	    	    MX__DSN_W__OTHER;
+    	    [1]	:   SELECTONE .enhcode [2] OF
+    	    	    SET
+    	    	    [4]	:   	    MX__DSN_WA_DSTAMB;
+    	    	    [OTHERWISE] :   MX__DSN_WA_OTHER
+    	    	    TES;
+    	    [2] :   SELECTONE .enhcode [2] OF
+    	    	    SET
+    	    	    [1]	:   	    MX__DSN_WM_DISABL;
+    	    	    [2]	:   	    MX__DSN_WM_MBXFUL;
+    	    	    [4] :   	    MX__DSN_WM_EXPANS;
+    	    	    [OTHERWISE] :   MX__DSN_WM_OTHER
+    	    	    TES;
+    	    [3]	:   SELECTONE .enhcode [2] OF
+    	    	    SET
+    	    	    [1] :   	    MX__DSN_WS_SYSFUL;
+    	    	    [2] :   	    MX__DSN_WS_NOTACC;
+    	    	    [OTHERWISE] :   MX__DSN_WS_OTHER
+    	    	    TES;
+    	    [4] :   CASE .enhcode [2] FROM 1 TO 7 OF
+    	    	    SET
+    	    	    [1] :   	    MX__DSN_WR_NOANSR;
+    	    	    [2] :   	    MX__DSN_WR_BADCON;
+    	    	    [3] :   	    MX__DSN_WR_DSFAIL;
+    	    	    [4] :   	    MX__DSN_WR_UNARTE;
+    	    	    [5] :   	    MX__DSN_WR_CONGES;
+    	    	    [6] :   	    MX__DSN_WR_RTLOOP;
+    	    	    [7] :   	    MX__DSN_WR_EXPIRE;
+    	    	    [OUTRANGE] :    MX__DSN_WR_OTHER
+    	    	    TES;
+    	    [5] :   	    	    MX__DSN_SP_OTHER;
+    	    [6] :   SELECTONE .enhcode [2] OF
+    	    	    SET
+    	    	    [5] :   	    MX__DSN_WC_CNVFAI;
+    	    	    [OTHERWISE] :   MX__DSN_WC_OTHER
+    	    	    TES;
+    	    [7] :   SELECTONE .enhcode [2] OF
+    	    	    SET
+    	    	    [5] :   	    MX__DSN_WY_CRPFAI;
+    	    	    [7] :   	    MX__DSN_WY_INTFAI;
+    	    	    [OTHERWISE] :   MX__DSN_WY_OTHER
+    	    	    TES;
+    	    [OUTRANGE] :    	    MX__DSN_W__OTHER
+    	    TES;
+    [5] :   CASE .enhcode [1] FROM 0 TO 7 OF
+    	    SET
+    	    [0] :   	    	    MX__DSN_F__OTHER;
+    	    [1] :   CASE .enhcode [2] FROM 0 TO 8 OF
+    	    	    SET
+    	    	    [0]	:   	    MX__DSN_FA_OTHER;
+    	    	    [1] :   	    MX__DSN_FA_BADMBX;
+    	    	    [2] :   	    MX__DSN_FA_BADSYS;
+    	    	    [3] :   	    MX__DSN_FA_DSTSYN;
+    	    	    [6] :   	    MX__DSN_WA_MBXMOV;
+    	    	    [7] :   	    MX__DSN_FA_SNDSYN;
+    	    	    [8] :   	    MX__DSN_FA_SNDSYS;
+    	    	    [INRANGE] :	    MX__DSN_FA_OTHER;
+    	    	    [OUTRANGE] :    MX__DSN_FA_OTHER
+    	    	    TES;
+    	    [2] :   CASE .enhcode [2] FROM 0 TO 4 OF
+    	    	    SET
+    	    	    [0] :   	    MX__DSN_FM_OTHER;
+    	    	    [1] :   	    MX__DSN_FM_DISABL;
+    	    	    [3] :   	    MX__DSN_FM_ADMLIM;
+    	    	    [4] :   	    MX__DSN_FM_EXPANS;
+    	    	    [INRANGE] :	    MX__DSN_FM_OTHER;
+    	    	    [OUTRANGE] :    MX__DSN_FM_OTHER
+    	    	    TES;
+    	    [3] :   CASE .enhcode [2] FROM 0 TO 5 OF
+    	    	    SET
+    	    	    [0] :   	    MX__DSN_FS_OTHER;
+    	    	    [2] :   	    MX__DSN_FS_NOTACC;
+    	    	    [3] :   	    MX__DSN_FS_CAPABL;
+    	    	    [4] :   	    MX__DSN_FS_TOOBIG;
+    	    	    [5] :   	    MX__DSN_FS_CONFIG;
+    	    	    [INRANGE] :	    MX__DSN_FS_OTHER;
+    	    	    [OUTRANGE] :    MX__DSN_FS_OTHER
+    	    	    TES;
+    	    [4] :   SELECTONE .enhcode [2] OF
+    	    	    SET
+    	    	    [4] :   	    MX__DSN_FR_UNARTE;
+    	    	    [OTHERWISE] :   MX__DSN_FR_OTHER
+    	    	    TES;
+    	    [5] :   CASE .enhcode [2] FROM 0 TO 5 OF
+    	    	    SET
+    	    	    [0] :   	    MX__DSN_FP_OTHER;
+    	    	    [1] :   	    MX__DSN_FP_INVCMD;
+    	    	    [2] :   	    MX__DSN_FP_SYNERR;
+    	    	    [3] :   	    MX__DSN_FP_TOMANY;
+    	    	    [4] :   	    MX__DSN_FP_INVARG;
+    	    	    [5] :   	    MX__DSN_FP_MISMAT;
+    	    	    [OUTRANGE] :    MX__DSN_FP_OTHER
+    	    	    TES;
+    	    [6] :   CASE .enhcode [2] FROM 0 TO 4 OF
+    	    	    SET
+    	    	    [0] :   	    MX__DSN_FC_OTHER;
+    	    	    [1] :   	    MX__DSN_FC_MNOSUP;
+    	    	    [2] :   	    MX__DSN_FC_CNVPRO;
+    	    	    [3] :   	    MX__DSN_FC_CNVUNS;
+    	    	    [4] :   	    MX__DSN_FC_CNVLOS;
+    	    	    [OUTRANGE] :    MX__DSN_FC_OTHER
+    	    	    TES;
+    	    [7] :   CASE .enhcode [2] FROM 0 TO 7 OF
+    	    	    SET
+    	    	    [0] :   	    MX__DSN_FY_OTHER;
+    	    	    [1] :   	    MX__DSN_FY_NOAUTH;
+    	    	    [2] :   	    MX__DSN_FY_NOEXPN;
+    	    	    [3] :   	    MX__DSN_FY_NOCONV;
+    	    	    [4] :   	    MX__DSN_FY_NOSUPP;
+    	    	    [5] :   	    MX__DSN_FY_CRPFAI;
+    	    	    [6] :   	    MX__DSN_FY_ALGUNS;
+    	    	    [7] :   	    MX__DSN_FY_INTFAI;
+    	    	    [OUTRANGE] :    MX__DSN_FY_OTHER
+    	    	    TES;
+    	    [OUTRANGE] :    	    MX__DSN_F__OTHER
+    	    TES;
+    [OTHERWISE] : MX__PROTOERR
+    TES
+
+END; ! dsn_lookup_code
+
+%SBTTL 'dest_rcptque_full'
+ROUTINE dest_rcptque_full (dest_a_a) = 
+BEGIN
+!++
+! FUNCTIONAL DESCRIPTION:
+!
+!   If the logical name MX_SMTP_MAX_RECIPIENTS_PER_SESSION is defined,
+!   checks to see if the recipient queue for this destination is
+!   at that maximum level.
+!
+! RETURNS:  	cond_value, longword (unsigned), write only, by value
+!
+! PROTOTYPE:
+!
+!   DEST_RCPTQUE_FULL  dest
+!
+! IMPLICIT INPUTS:  None.
+!
+! IMPLICIT OUTPUTS: None.
+!
+! COMPLETION CODES:
+!
+!   SS$_NORMAL:	    	normal successful completion.
+!
+! SIDE EFFECTS:	    None.
+!--
+    BIND
+    	dest	= .dest_a_a 	    	: REF DESTDEF,
+    	rcptque	= dest [DEST_Q_RCPTQUE]	: QUEDEF;
+
+    LOCAL
+    	lnmlst	    : $ITMLST_DECL (ITEMS=1),
+    	lnmbuf	    : VECTOR [64,BYTE],
+    	lnmlen	    : WORD,
+    	maxrcpt,
+    	rcpt	    : REF RCPTDEF,
+    	count,
+    	status;
+
+    $ITMLST_INIT (ITMLST=lnmlst,
+    	(ITMCOD=LNM$_STRING, BUFADR=lnmbuf, BUFSIZ=%ALLOCATION (lnmbuf), RETLEN=lnmlen));
+    status = $TRNLNM (TABNAM=%ASCID'LNM$FILE_DEV', LOGNAM=%ASCID'MX_SMTP_MAX_RECIPIENTS_PER_SESSION', ITMLST=lnmlst);
+    IF NOT .status THEN RETURN 0;  ! no maximum
+    status = LIB$CVT_DTB (.lnmlen, lnmbuf, maxrcpt);
+    IF NOT .status OR .maxrcpt EQLU 0 THEN RETURN 0;
+
+    rcpt = .rcptque [QUE_L_HEAD];
+    count = 0;
+    WHILE .rcpt NEQA rcptque [QUE_L_HEAD] DO
+    BEGIN
+    	count = .count + 1;
+    	rcpt = .rcpt [RCPT_L_FLINK];
+    END;
+
+    .count GEQU .maxrcpt
+
+END; ! dest_rcptque_full
+
+END
+ELUDOM

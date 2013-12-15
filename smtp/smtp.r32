@@ -1,0 +1,82 @@
+!+
+!  SMTP.R32
+!
+! Copyright (c) 2008, Matthew Madison.
+! 
+! All rights reserved.
+! 
+! Redistribution and use in source and binary forms, with or without
+! modification, are permitted provided that the following conditions
+! are met:
+! 
+!     * Redistributions of source code must retain the above
+!       copyright notice, this list of conditions and the following
+!       disclaimer.
+!     * Redistributions in binary form must reproduce the above
+!       copyright notice, this list of conditions and the following
+!       disclaimer in the documentation and/or other materials provided
+!       with the distribution.
+!     * Neither the name of the copyright owner nor the names of any
+!       other contributors may be used to endorse or promote products
+!       derived from this software without specific prior written
+!       permission.
+! 
+! THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
+! "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
+! LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
+! A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
+! OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
+! SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
+! LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
+! DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
+! THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
+! (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
+! OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+!
+!   Declarations specific to SMTP agent.
+!-
+
+    LIBRARY 'MX_SRC_COMMON:FIELDS';
+    LIBRARY 'SYS$LIBRARY:STARLET';
+
+    _DEF (ESMTP)
+    	ESMTP_L_FLAGS	    = _LONG,
+    	_OVERLAY (ESMTP_L_FLAGS)
+    	    ESMTP_V_ESMTP   	= _BIT, ! is an ESMTP server
+    	    ESMTP_V_SIZE    	= _BIT, ! supports SIZE
+    	    ESMTP_V_DSN	    	= _BIT, ! supports DSN
+    	    ESMTP_V_PIPELINING	= _BIT, ! supports PIPELINING
+    	    ESMTP_V_ENHSTATUS	= _BIT,	! supports ENHANCEDSTATUSCODES
+    	    ESMTP_V_ETRN    	= _BIT, ! supports ETRN
+	    ESMTP_V_STARTTLS	= _BIT, ! supports STARTTLS
+    	_ENDOVERLAY 
+    	ESMTP_L_MAXSIZE	    = _LONG,
+    	ESMTP_L_CMDCOUNT    = _LONG 	! for use with PIPELINING
+    _ENDDEF (ESMTP);
+
+    LITERAL
+    	DEST_S_HOSTBUF	= 512,
+    	DEST_S_TFILBUF	= 256,
+    	DEST_S_CMDBUF	= 1024,
+    	DEST_S_RCVBUF	= 1024,
+    	DEST_S_SENDBUF	= 4096;
+
+    _DEF (DEST)
+    	DEST_L_FLINK	= _LONG,
+    	DEST_L_BLINK	= _LONG,
+    	DEST_Q_RCPTQUE	= _QUAD,
+    	DEST_L_FLAGS	= _LONG,
+    	_OVERLAY (DEST_L_FLAGS)
+    	    DEST_V_FORCEDROUTE = _BIT,
+    	_ENDOVERLAY
+    	DEST_L_TCPCTX	= _LONG,
+    	DEST_L_SENDLEN	= _LONG,
+    	DEST_L_BSENT	= _LONG,
+    	DEST_L_CMDCOUNT	= _LONG,
+    	DEST_A_HOSTNAME	= _LONG,
+    	_ALIGN (QUAD)
+    	DEST_X_ESMTP	= _BYTES (ESMTP_S_ESMTPDEF),
+    	DEST_T_CMDBUF	= _BYTES (DEST_S_CMDBUF),
+    	DEST_T_RCVBUF	= _BYTES (DEST_S_RCVBUF),
+    	DEST_T_SENDBUF	= _BYTES (DEST_S_SENDBUF)
+    _ENDDEF (DEST);

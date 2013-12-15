@@ -1,0 +1,422 @@
+%TITLE 'SMTP_DECNET'
+MODULE SMTP_DECNET (IDENT='V1.0-3', ADDRESSING_MODE (EXTERNAL=LONG_RELATIVE,NONEXTERNAL=LONG_RELATIVE)) =
+BEGIN
+!++
+! FACILITY: 	    MX_DNSMTP
+!
+! ABSTRACT: 	    SMTP DECnet support routines.
+!
+! MODULE DESCRIPTION:
+!
+!   This modules binds SMTP to the DECnet transport protocol.
+!
+! AUTHOR:   	    M. Madison
+!
+! Copyright (c) 2008, Matthew Madison.
+! Copyright (c) 2011, Endless Software Solutions.
+! 
+! All rights reserved.
+! 
+! Redistribution and use in source and binary forms, with or without
+! modification, are permitted provided that the following conditions
+! are met:
+! 
+!     * Redistributions of source code must retain the above
+!       copyright notice, this list of conditions and the following
+!       disclaimer.
+!     * Redistributions in binary form must reproduce the above
+!       copyright notice, this list of conditions and the following
+!       disclaimer in the documentation and/or other materials provided
+!       with the distribution.
+!     * Neither the name of the copyright owner nor the names of any
+!       other contributors may be used to endorse or promote products
+!       derived from this software without specific prior written
+!       permission.
+! 
+! THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
+! "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
+! LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
+! A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
+! OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
+! SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
+! LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
+! DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
+! THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
+! (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
+! OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+!
+! CREATION DATE:    05-JUL-1998
+!
+! MODIFICATION HISTORY:
+!
+!   10-JUL-1998	V1.0	Madison	    Initial coding (from DNSMTP_OUT).
+!   18-JUL-1998	V1.0-1	Madison	    Fix readline copy problem.
+!   21-JUL-1998	V1.0-2	Madison	    New remote-MTA argument.
+!   06-MAY-2010 V1.0-3  Sneddon     Now dragging NETLIB from NETLIB_DIR.
+!--
+    LIBRARY 'SYS$LIBRARY:STARLET';
+    LIBRARY 'NETLIB_DIR:NETLIBDEF';
+    LIBRARY 'MX_SRC_COMMON:MX';
+    LIBRARY 'MX_SRC_COMMON:FIELDS';
+    LIBRARY 'SMTP';
+
+    FORWARD ROUTINE
+    	SMTP_CONNECT,
+    	SMTP_RECONNECT,
+    	SMTP_DISCONNECT,
+    	SMTP_WRITELINE,
+    	SMTP_WRITE,
+    	SMTP_READLINE;
+
+    EXTERNAL ROUTINE
+    	GET_REPLY,
+    	DECNET_INIT_CTX,
+    	DECNET_FREE_CTX,
+    	DECNET_GET_LINE,
+    	G_HAT (LIB$SCOPY_DXDX, LIB$ANALYZE_SDESC, LIB$GET_VM, LIB$FREE_VM);
+
+    LITERAL
+    	CTX_S_BUF   	    	= 32767;
+
+    _DEF (CTX)
+    	CTX_L_LNCTX 	    	= _LONG,
+    	CTX_W_CHAN  	    	= _WORD,
+    	CTX_T_BUF   	    	= _BYTES (CTX_S_BUF)
+    _ENDDEF (CTX);
+
+
+    TRACE_DECLARATIONS (EXTERNAL);
+
+    BIND
+    	taskname    = %ASCID'"DECSMTP="'    	: BLOCK [,BYTE];
+
+
+%SBTTL 'SMTP_CONNECT'
+GLOBAL ROUTINE SMTP_CONNECT (dest_a_a, actualhost_a, dsn_status_a, defrtr_a, rmtmta_a) = 
+BEGIN
+!++
+! FUNCTIONAL DESCRIPTION:
+!
+!   Attempts to establish a connection to an SMTP server.
+!
+! RETURNS:  	cond_value, longword (unsigned), write only, by value
+!
+! PROTOTYPE:
+!
+!   SMTP_SEND
+!
+! IMPLICIT INPUTS:  None.
+!
+! IMPLICIT OUTPUTS: None.
+!
+! COMPLETION CODES:
+!
+!   SS$_NORMAL:	    	normal successful completion.
+!
+! SIDE EFFECTS:
+!
+!   None.
+!--
+    BIND
+    	dest	    = .dest_a_a   	    	: REF DESTDEF,
+    	hostname    = dest [DEST_A_HOSTNAME]	: REF TXTDEF,
+    	actualhost  = .actualhost_a 	    	: BLOCK [,BYTE];
+
+    LOCAL
+    	hostnm	    : BLOCK [DSC$K_S_BLN,BYTE],
+    	cp,
+    	status;
+
+    INIT_SDESC (hostnm, .hostname [TXT_W_LEN], hostname [TXT_T_TEXT]);
+    cp = CH$FIND_CH (.hostname [TXT_W_LEN], hostname [TXT_T_TEXT], %C'.');
+    IF NOT CH$FAIL (.cp) THEN
+    	hostnm [DSC$W_LENGTH] = CH$DIFF (.cp, hostname [TXT_T_TEXT]);
+
+    status = SMTP_RECONNECT (.dest_a_a, hostnm, .dsn_status_a, .rmtmta_a);
+    IF .status THEN LIB$SCOPY_DXDX (hostnm, actualhost);
+
+    .status
+
+END; ! SMTP_CONNECT
+
+%SBTTL 'SMTP_RECONNECT'
+GLOBAL ROUTINE SMTP_RECONNECT (dest_a_a, hostnm_a, dsn_status_a, rmtmta_a) = 
+BEGIN
+!++
+! FUNCTIONAL DESCRIPTION:
+!
+!   description
+!
+! RETURNS:  	cond_value, longword (unsigned), write only, by value
+!
+! PROTOTYPE:
+!
+!   x
+!
+! IMPLICIT INPUTS:  None.
+!
+! IMPLICIT OUTPUTS: None.
+!
+! COMPLETION CODES:
+!
+!   SS$_NORMAL:	    	normal successful completion.
+!
+! SIDE EFFECTS:	    None.
+!--
+    BIND
+    	dest	    = .dest_a_a	    	    : REF DESTDEF,
+    	tcpctx	    = dest [DEST_L_TCPCTX]  : REF CTXDEF,
+    	hostnm	    = .hostnm_a	    	    : BLOCK [,BYTE],
+    	dsn_status  = .dsn_status_a;
+
+    LOCAL
+    	sdsc	    : BLOCK [DSC$K_S_BLN,BYTE],
+    	lnmlst	    : $ITMLST_DECL (ITEMS=1),
+    	buf 	    : VECTOR [256,BYTE],
+    	cp,
+    	len 	    : WORD,
+    	acthostlen  : WORD,
+    	smtp_status,
+    	status;
+
+    len = .hostnm [DSC$W_LENGTH];
+    CH$MOVE (.len, .hostnm [DSC$A_POINTER], buf);
+
+    CH$WCHAR (%C':', CH$PLUS (buf, .len));
+    CH$WCHAR (%C':', CH$PLUS (buf, .len+1));
+    len = .len + 2;
+    INIT_SDESC (sdsc, .len, buf);
+
+    $ITMLST_INIT (ITMLST=lnmlst,
+    	    	  (ITMCOD=LNM$_STRING, BUFSIZ=%ALLOCATION (buf)-.len,
+    	    	   BUFADR=CH$PLUS (buf, .len), RETLEN=len));
+    IF $TRNLNM (LOGNAM=%ASCID'MX_DNSMTP_TASK_SPEC', TABNAM=%ASCID'LNM$FILE_DEV', ITMLST=lnmlst) THEN
+    	sdsc [DSC$W_LENGTH] = .sdsc [DSC$W_LENGTH] + .len
+    ELSE
+    BEGIN
+    	CH$MOVE (.taskname [DSC$W_LENGTH], .taskname [DSC$A_POINTER], CH$PLUS (buf, .sdsc [DSC$W_LENGTH]));
+    	sdsc [DSC$W_LENGTH] = .sdsc [DSC$W_LENGTH] + .taskname [DSC$W_LENGTH];
+    END;
+
+    status = LIB$GET_VM (%REF (CTX_S_CTXDEF), tcpctx);
+    IF NOT .status THEN
+    BEGIN
+    	dsn_status = MX__DSN_WS_OTHER;
+    	RETURN .status;
+    END;
+
+    status = $ASSIGN (CHAN=tcpctx [CTX_W_CHAN], DEVNAM=sdsc);
+    IF NOT .status THEN
+    BEGIN
+    	dsn_status = (IF .status EQL SS$_NOSUCHNODE THEN MX__DSN_FR_UNARTE ELSE MX__DSN_WR_OTHER);
+    	LIB$FREE_VM (%REF (CTX_S_CTXDEF), tcpctx);
+    	tcpctx = 0;
+    	RETURN .status;
+    END;
+
+    tcpctx [CTX_L_LNCTX] = DECNET_INIT_CTX (.tcpctx [CTX_W_CHAN]);
+    IF .tcpctx [CTX_L_LNCTX] EQL 0 THEN
+    BEGIN
+    	dsn_status = MX__DSN_WS_OTHER;
+    	$DASSGN (CHAN=.tcpctx [CTX_W_CHAN]);
+    	LIB$FREE_VM (%REF (CTX_S_CTXDEF), tcpctx);
+    	tcpctx = 0;
+    	RETURN .status;
+    END;
+
+    status = GET_REPLY (dest, smtp_status);  ! get 220 banner
+    IF .status THEN status = .smtp_status;
+    IF .status THEN
+    	LIB$SCOPY_DXDX (hostnm, .rmtmta_a)
+    ELSE
+    BEGIN
+    	dsn_status = MX__DSN_WR_NOANSR;
+    	$DASSGN (CHAN=.tcpctx [CTX_W_CHAN]);
+    	LIB$FREE_VM (%REF (CTX_S_CTXDEF), tcpctx);
+    	tcpctx = 0;
+    END;
+
+    .status
+
+END; ! SMTP_RECONNECT
+
+%SBTTL 'SMTP_DISCONNECT'
+GLOBAL ROUTINE SMTP_DISCONNECT (ctx_a_a) = 
+BEGIN
+!++
+! FUNCTIONAL DESCRIPTION:
+!
+!   description
+!
+! RETURNS:  	cond_value, longword (unsigned), write only, by value
+!
+! PROTOTYPE:
+!
+!   x
+!
+! IMPLICIT INPUTS:  None.
+!
+! IMPLICIT OUTPUTS: None.
+!
+! COMPLETION CODES:
+!
+!   SS$_NORMAL:	    	normal successful completion.
+!
+! SIDE EFFECTS:	    None.
+!--
+    BIND
+    	ctx 	= .ctx_a_a  	: REF CTXDEF;
+
+    DECNET_FREE_CTX (ctx [CTX_L_LNCTX]);
+    $DASSGN (CHAN=.ctx [CTX_W_CHAN]);
+    LIB$FREE_VM (%REF (CTX_S_CTXDEF), ctx);
+    ctx = 0;
+
+    SS$_NORMAL
+
+END; ! SMTP_DISCONNECT
+
+%SBTTL 'SMTP_WRITELINE'
+GLOBAL ROUTINE SMTP_WRITELINE (ctx_a_a, dsc_a, count_a) = 
+BEGIN
+!++
+! FUNCTIONAL DESCRIPTION:
+!
+!   description
+!
+! RETURNS:  	cond_value, longword (unsigned), write only, by value
+!
+! PROTOTYPE:
+!
+!   x
+!
+! IMPLICIT INPUTS:  None.
+!
+! IMPLICIT OUTPUTS: None.
+!
+! COMPLETION CODES:
+!
+!   SS$_NORMAL:	    	normal successful completion.
+!
+! SIDE EFFECTS:	    None.
+!--
+    BIND
+    	ctx 	    = .ctx_a_a	: REF CTXDEF;
+
+    LOCAL
+    	len	    : WORD,
+    	ptr,
+    	status,
+    	iosb	    : IOSBDEF;
+
+    status = LIB$ANALYZE_SDESC (.dsc_a, len, ptr);
+    IF .len GTRU CTX_S_BUF-2 THEN len = CTX_S_BUF-2;
+    CH$MOVE (.len, .ptr, ctx [CTX_T_BUF]);
+    CH$WCHAR (%CHAR (13), CH$PLUS (ctx [CTX_T_BUF], .len));
+    CH$WCHAR (%CHAR (10), CH$PLUS (ctx [CTX_T_BUF], .len+1));
+    status = $QIOW (CHAN=.ctx [CTX_W_CHAN], FUNC=IO$_WRITEVBLK, IOSB=iosb, P1=ctx [CTX_T_BUF], P2=.len+2);
+    IF .status THEN status = .iosb [IOSB_W_STATUS];
+    IF .status THEN .count_a = .iosb [IOSB_W_COUNT];
+
+    .status
+
+END; ! SMTP_WRITELINE
+
+%SBTTL 'SMTP_WRITE'
+GLOBAL ROUTINE SMTP_WRITE (ctx_a_a, dsc_a, count_a) = 
+BEGIN
+!++
+! FUNCTIONAL DESCRIPTION:
+!
+!   description
+!
+! RETURNS:  	cond_value, longword (unsigned), write only, by value
+!
+! PROTOTYPE:
+!
+!   x
+!
+! IMPLICIT INPUTS:  None.
+!
+! IMPLICIT OUTPUTS: None.
+!
+! COMPLETION CODES:
+!
+!   SS$_NORMAL:	    	normal successful completion.
+!
+! SIDE EFFECTS:	    None.
+!--
+    BIND
+    	ctx 	    = .ctx_a_a	: REF CTXDEF;
+
+    LOCAL
+    	len	    : WORD,
+    	ptr,
+    	status,
+    	iosb	    : IOSBDEF;
+
+    status = LIB$ANALYZE_SDESC (.dsc_a, len, ptr);
+    status = $QIOW (CHAN=.ctx [CTX_W_CHAN], FUNC=IO$_WRITEVBLK, IOSB=iosb, P1=.ptr, P2=.len);
+    IF .status THEN status = .iosb [IOSB_W_STATUS];
+    IF .status THEN .count_a = .iosb [IOSB_W_COUNT];
+
+    .status
+
+END; ! SMTP_WRITE
+
+%SBTTL 'SMTP_READLINE'
+GLOBAL ROUTINE SMTP_READLINE (ctx_a_a, dsc_a, len_a, tmo_a) = 
+BEGIN
+!++
+! FUNCTIONAL DESCRIPTION:
+!
+!   description
+!
+! RETURNS:  	cond_value, longword (unsigned), write only, by value
+!
+! PROTOTYPE:
+!
+!   x
+!
+! IMPLICIT INPUTS:  None.
+!
+! IMPLICIT OUTPUTS: None.
+!
+! COMPLETION CODES:
+!
+!   SS$_NORMAL:	    	normal successful completion.
+!
+! SIDE EFFECTS:	    None.
+!--
+    BIND
+    	ctx 	    = .ctx_a_a	: REF CTXDEF,
+    	dsc 	    = .dsc_a	: BLOCK [,BYTE],
+    	len 	    = .len_a	: WORD;
+
+    LOCAL
+    	status,
+    	str 	    : BLOCK [DSC$K_S_BLN,BYTE],
+    	dynamic,
+    	iosb	    : IOSBDEF;
+
+    dynamic = .dsc [DSC$B_CLASS] EQL DSC$K_CLASS_D AND .len_a EQL 0;
+
+    INIT_DYNDESC (str);
+    IF .dynamic THEN
+    	status = DECNET_GET_LINE (ctx [CTX_L_LNCTX], dsc, iosb, 0, 0, .tmo_a)
+    ELSE
+    	status = DECNET_GET_LINE (ctx [CTX_L_LNCTX], str, iosb, 0, 0, .tmo_a);
+    IF .status THEN status = .iosb [IOSB_W_STATUS];
+    IF .status AND NOT .dynamic THEN
+    BEGIN
+    	len = MINU (.dsc [DSC$W_LENGTH], .str [DSC$W_LENGTH]);
+    	CH$MOVE (.len, .str [DSC$A_POINTER], .dsc [DSC$A_POINTER]);
+    	FREE_STRINGS (str);
+    END;
+
+    .status
+
+END; ! SMTP_READLINE
+
+END
+ELUDOM

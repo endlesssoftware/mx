@@ -1,0 +1,710 @@
+%TITLE 'PARSE_SMTP_CMD'
+MODULE PARSE_SMTP_CMD (IDENT='V2.2', ADDRESSING_MODE (EXTERNAL=LONG_RELATIVE, NONEXTERNAL=LONG_RELATIVE)) =
+BEGIN
+!++
+! FACILITY: 	    MX SMTP_SERVER
+!
+! ABSTRACT: 	    Parses SMTP commands.
+!
+! MODULE DESCRIPTION:
+!
+!
+! AUTHOR:   	    M. Madison
+!
+! Copyright (c) 2008, Matthew Madison.
+! Copyright (c) 2012, Endless Software Solutions.
+! 
+! All rights reserved.
+! 
+! Redistribution and use in source and binary forms, with or without
+! modification, are permitted provided that the following conditions
+! are met:
+! 
+!     * Redistributions of source code must retain the above
+!       copyright notice, this list of conditions and the following
+!       disclaimer.
+!     * Redistributions in binary form must reproduce the above
+!       copyright notice, this list of conditions and the following
+!       disclaimer in the documentation and/or other materials provided
+!       with the distribution.
+!     * Neither the name of the copyright owner nor the names of any
+!       other contributors may be used to endorse or promote products
+!       derived from this software without specific prior written
+!       permission.
+! 
+! THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
+! "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
+! LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
+! A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
+! OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
+! SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
+! LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
+! DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
+! THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
+! (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
+! OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+!
+! CREATION DATE:    18-DEC-1989
+!
+! MODIFICATION HISTORY:
+!
+!   18-DEC-1989	V1.0	Madison	    Initial coding.
+!   20-MAR-1991	V1.1	Madison	    Use MEM routines.
+!   10-MAR-1993 V1.2	Goatley     Modified for AXP.
+!   27-MAR-1993 V1.2-1	Goatley     Modifed to allow space after MAIL & RCPT.
+!   25-JAN-1994 V1.3	Goatley     Not only allow the space, but get rid of it.
+!   28-JAN-1997	V1.4	Madison	    Integrate Hunter's EHLO changes.
+!   30-SEP-1997 V1.5	Goatley     Trim trailing blanks in PSC_STORE.
+!   12-JUL-1998	V2.0	Madison	    Handle more extensions.
+!   16-JUL-1998	V2.0-1	Madison	    Fix <> handling on MAIL FROM.
+!   21-JUL-1998	V2.0-2	Madison	    Optionally return starting point of syntax errors.
+!   29-AUG-1998	V2.1	Madison	    Support ETRN.
+!   01-MAY-1999	V2.1-1	Madison	    Fix for relaxed syntax on addresses.
+!   13-Mar-2012 V2.2	Sneddon	    STARTTLS.
+!--
+
+    LIBRARY 'SYS$LIBRARY:STARLET';
+    LIBRARY 'SYS$LIBRARY:TPAMAC';
+    LIBRARY 'MX_SRC_COMMON:MX';
+    LIBRARY 'SMTP_CMDS';
+
+    LITERAL
+    	extra_params_start  	= SMTP_CMD_HI  + 1,
+    	SMTP_MAIL_ADDRESS   	= SMTP_CMD_HI  + 1,
+    	SMTP_MAIL_SIZE	    	= SMTP_CMD_HI  + 2,
+    	SMTP_MAIL_RET_FULL  	= SMTP_CMD_HI  + 3,
+    	SMTP_MAIL_RET_HDRS  	= SMTP_CMD_HI  + 4,
+    	SMTP_MAIL_ENVID	    	= SMTP_CMD_HI  + 5,
+    	SMTP_RCPT_ADDRESS   	= SMTP_CMD_HI  + 6,
+    	SMTP_RCPT_NTFY_NEVER	= SMTP_CMD_HI  + 7,
+    	SMTP_RCPT_NTFY_SUCCESS	= SMTP_CMD_HI  + 8,  ! these
+    	SMTP_RCPT_NTFY_FAILURE	= SMTP_CMD_HI  + 9,  ! must be
+    	SMTP_RCPT_NTFY_DELAY	= SMTP_CMD_HI  + 10, ! in order
+    	SMTP_RCPT_ORCPT_ADDRTYPE= SMTP_CMD_HI  + 11,
+    	SMTP_RCPT_ORCPT_ADDRESS	= SMTP_CMD_HI  + 12,
+    	SMTP_MAIL_GOT_COMMAND	= SMTP_CMD_HI  + 13,
+    	SMTP_RCPT_GOT_COMMAND   = SMTP_CMD_HI  + 14,
+    	SMTP_MAIL_AUTH	    	= SMTP_CMD_HI  + 15,
+    	extra_params_end    	= SMTP_CMD_HI  + 15;
+
+    FORWARD ROUTINE
+    	PARSE_SMTP_CMD,
+    	PSC_STORE,
+    	PSC_SET_BLANKS;
+
+    EXTERNAL ROUTINE
+    	G_HAT (LIB$TPARSE, STR$UPCASE, MEM_GETTXT, LIB$CVT_DTB);
+
+    MACRO
+    	TPA_A_P1    	=   TPA$C_LENGTH0+00,0,32,0%,
+    	TPA_A_P2    	=   TPA$C_LENGTH0+04,0,32,0%,
+    	TPA_A_P3    	=   TPA$C_LENGTH0+08,0,32,0%,
+    	TPA_A_P4    	=   TPA$C_LENGTH0+12,0,32,0%,
+    	TPA_A_P5    	=   TPA$C_LENGTH0+16,0,32,0%,
+    	TPA_A_P6    	=   TPA$C_LENGTH0+20,0,32,0%,
+    	TPA_A_P7    	=   TPA$C_LENGTH0+24,0,32,0%;
+
+%SBTTL 'State table for PARSE_SMTP_CMD'
+
+    $INIT_STATE (PARSE_SMTP_CMD_STATE, PARSE_SMTP_CMD_KEY);
+
+    $STATE (START,
+    	('HELO', HELO1, PSC_SET_BLANKS),
+    	('EHLO', EHLO1, PSC_SET_BLANKS),
+    	('MAIL', MAIL1, PSC_STORE,,, SMTP_MAIL_GOT_COMMAND),
+    	('RCPT', RCPT1, PSC_STORE,,, SMTP_RCPT_GOT_COMMAND),
+    	('ETRN', ETRN1, PSC_SET_BLANKS),
+    	('DATA', DATA1, PSC_SET_BLANKS),
+    	('RSET', RSET1, PSC_SET_BLANKS),
+    	('QUIT', QUIT1, PSC_SET_BLANKS),
+    	('NOOP', NOOP1, PSC_SET_BLANKS),
+    	('AUTH', AUTH1, PSC_SET_BLANKS),
+    	('VRFY', VRFY1, PSC_SET_BLANKS),
+	('STARTTLS', STLS1, PSC_SET_BLANKS));
+    $STATE (HELO1,
+    	(' ', HELO1),
+    	(%CHAR (9), HELO1),
+    	(TPA$_LAMBDA, TPA$_EXIT, PSC_STORE,,, SMTP_CMD_HELO));
+    $STATE (EHLO1,
+    	(' ', EHLO1),
+    	(%CHAR (9), EHLO1),
+    	(TPA$_LAMBDA, TPA$_EXIT, PSC_STORE,,, SMTP_CMD_EHLO));
+    $STATE (ETRN1,
+    	(' ', ETRN1),
+    	(%CHAR (9), ETRN1),
+    	(TPA$_LAMBDA, TPA$_EXIT, PSC_STORE,,, SMTP_CMD_ETRN));
+    $STATE (MAIL1,
+    	('FROM', MAIL2, PSC_SET_BLANKS));
+    $STATE (RCPT1,
+    	('TO', RCPT2, PSC_SET_BLANKS));
+    $STATE (DATA1,
+    	(TPA$_BLANK, DATA1),
+    	(TPA$_LAMBDA, TPA$_EXIT, PSC_STORE,,, SMTP_CMD_DATA));
+    $STATE (RSET1,
+    	(TPA$_BLANK, RSET1),
+    	(TPA$_LAMBDA, TPA$_EXIT, PSC_STORE,,, SMTP_CMD_RSET));
+    $STATE (QUIT1,
+    	(TPA$_BLANK, QUIT1),
+    	(TPA$_LAMBDA, TPA$_EXIT, PSC_STORE,,, SMTP_CMD_QUIT));
+    $STATE (NOOP1,
+    	(TPA$_BLANK, NOOP1),
+    	(TPA$_LAMBDA, TPA$_EXIT, PSC_STORE,,, SMTP_CMD_NOOP));
+    $STATE (VRFY1,
+    	(TPA$_BLANK, VRFY1),
+    	(TPA$_LAMBDA, TPA$_EXIT, PSC_STORE,,, SMTP_CMD_VRFY));
+    $STATE (STLS1,
+	(TPA$_BLANK, STLS1),
+	(TPA$_LAMBDA, TPA$_EXIT, PSC_STORE,,, SMTP_CMD_STARTTLS));
+    $STATE (AUTH1,
+    	(TPA$_BLANK, AUTH1),
+    	(TPA$_LAMBDA, TPA$_EXIT, PSC_STORE,,, SMTP_CMD_AUTH));
+    $STATE (MAIL2,
+    	(':', MAIL3));
+    $STATE (RCPT2,
+    	(':', RCPT3));
+    $STATE (MAIL3,
+	(TPA$_BLANK, MAIL3),
+    	(TPA$_LAMBDA, MAIL4, PSC_STORE,,, SMTP_CMD_MAIL));
+    $STATE (MAIL4,
+    	((ROUTEADR), MAILPARAMS, PSC_STORE,,, SMTP_MAIL_ADDRESS),
+    	(TPA$_LAMBDA, TPA$_EXIT));  ! caller traps syntax errors here
+    $STATE (MAILPARAMS,
+    	(TPA$_BLANK, MAILPARAMS),
+    	('SIZE', MAILSIZE),
+    	('RET', MAILRET),
+    	('ENVID', MAILENVID),
+    	('AUTH', MAILAUTH),
+    	(TPA$_EOS, TPA$_EXIT));
+    $STATE (MAILSIZE,
+    	('=', MAILSIZEVAL));
+    $STATE (MAILSIZEVAL,
+    	((DECIMALNUMBER), MAILPARAMS, PSC_STORE,,, SMTP_MAIL_SIZE));
+    $STATE (MAILRET,
+    	('=', MAILRETVAL));
+    $STATE (MAILRETVAL,
+    	('FULL', MAILPARAMS, PSC_STORE,,, SMTP_MAIL_RET_FULL),
+    	('HDRS', MAILPARAMS, PSC_STORE,,, SMTP_MAIL_RET_HDRS));
+    $STATE (MAILENVID,
+    	('=', MAILENVIDVAL));
+    $STATE (MAILENVIDVAL,
+    	((XTEXT), MAILPARAMS, PSC_STORE,,, SMTP_MAIL_ENVID));
+    $STATE (MAILAUTH,
+    	('=', MAILAUTHVAL));
+    $STATE (MAILAUTHVAL,
+    	((XTEXT), MAILPARAMS, PSC_STORE,,, SMTP_MAIL_AUTH));
+
+    $STATE (RCPT3,
+	(TPA$_BLANK, RCPT3),
+    	(TPA$_LAMBDA, RCPT4, PSC_STORE,,, SMTP_CMD_RCPT));
+    $STATE (RCPT4,
+    	((ROUTEADR), RCPTPARAMS, PSC_STORE,,, SMTP_RCPT_ADDRESS),
+    	((DNRTADR), RCPTPARAMS, PSC_STORE,,, SMTP_RCPT_ADDRESS),
+    	((USRADR), RCPTPARAMS, PSC_STORE,,, SMTP_RCPT_ADDRESS),
+    	(TPA$_LAMBDA, TPA$_EXIT));  ! caller handles syntactic errors here
+    $STATE (RCPTPARAMS,
+    	(TPA$_BLANK, RCPTPARAMS),
+    	(TPA$_EOS, TPA$_EXIT),
+    	('NOTIFY', RCPTNTFY),
+    	('ORCPT', RCPTORCPT));
+    $STATE (RCPTNTFY,
+    	('=', RCPTNTFYVAL));
+    $STATE (RCPTNTFYVAL,
+    	('NEVER', RCPTPARAMS, PSC_STORE,,, SMTP_RCPT_NTFY_NEVER),
+    	(TPA$_LAMBDA, NTFYVAL2));
+    $STATE (NTFYVAL2,
+    	('SUCCESS', NTFYVAL3, PSC_STORE,,, SMTP_RCPT_NTFY_SUCCESS),
+    	('FAILURE', NTFYVAL3, PSC_STORE,,, SMTP_RCPT_NTFY_FAILURE),
+    	('DELAY',   NTFYVAL3, PSC_STORE,,, SMTP_RCPT_NTFY_DELAY));
+    $STATE (NTFYVAL3,
+    	(',', NTFYVAL2),
+    	(TPA$_LAMBDA, RCPTPARAMS));
+
+    $STATE (RCPTORCPT,
+    	('=', ORCPTVAL));
+    $STATE (ORCPTVAL,
+    	((ATOM), ORCPTVAL2, PSC_STORE,,, SMTP_RCPT_ORCPT_ADDRTYPE));
+    $STATE (ORCPTVAL2,
+    	(';', ORCPTVAL3));
+    $STATE (ORCPTVAL3,
+    	((XTEXT), RCPTPARAMS, PSC_STORE,,, SMTP_RCPT_ORCPT_ADDRESS));
+
+    $STATE (ROUTEADR,
+    	('<', RTADR1),
+	(TPA$_BLANK, ROUTEADR));
+    $STATE (RTADR1,
+    	('>', TPA$_EXIT),
+    	('@', RTADR2),
+	(TPA$_LAMBDA, RTADR4));
+    $STATE (RTADR2,
+	((DOMAIN), RTADR3));
+    $STATE (RTADR3,
+    	(',', RTADR1),
+    	(':', RTADR4),
+	(TPA$_BLANK, RTADR3));
+    $STATE (RTADR4,
+	(TPA$_BLANK, RTADR4),
+	((COMMENT), RTADR4),
+	((LCLPART), ADRS1));
+    $STATE (RTADR5,
+	(TPA$_BLANK, RTADR5),
+    	('>', TPA$_EXIT));
+
+!+
+!   This sub-parser handles the relaxed address syntax
+!
+!   	<node::user@domain>  or
+!   	<node::user>
+!-
+    $STATE (DNRTADR,
+    	('<', DNR1),
+    	(TPA$_BLANK, DNRTADR));
+    $STATE (DNR1,
+    	((DNLCLPART), DNR2));
+    $STATE (DNR2,
+    	('>', TPA$_EXIT),
+    	('@', DNR3),
+    	(TPA$_BLANK, DNR2));
+    $STATE (DNR3,
+    	((DOMAIN), DNR4));
+    $STATE (DNR4,
+    	(TPA$_BLANK, DNR4),
+    	('>', TPA$_EXIT));
+
+    $STATE (DNLCLPART,
+	((_WORD), DNLP1));
+    $STATE (DNLP1,
+    	('.', DNLP2),
+    	(':', DNLP1A),
+	(TPA$_LAMBDA, TPA$_EXIT));
+    $STATE (DNLP1A,
+    	(':', DNLP2));
+    $STATE (DNLP2,
+	((_WORD), DNLP1),
+	(TPA$_LAMBDA, TPA$_EXIT));
+
+!+
+!   This sub-parser handles the relaxed address syntax
+!
+!   	<username>
+!-
+    $STATE (USRADR,
+    	('<', USRADR1),
+    	(TPA$_BLANK, USRADR));
+    $STATE (USRADR1,
+    	((LCLPART), USRADR2));
+    $STATE (USRADR2,
+    	(TPA$_BLANK, USRADR2),
+    	('>', TPA$_EXIT));
+
+    $STATE (ADRS1,
+    	('@', ADRS2),
+	(TPA$_BLANK, ADRS1),
+	((COMMENT), ADRS1));
+    $STATE (ADRS2,
+	(TPA$_BLANK, ADRS2),
+	((COMMENT), ADRS2),
+	((DOMAIN), RTADR5));
+
+    $STATE (LCLPART,
+	((_WORD), LCLP1));
+    $STATE (LCLP1,
+    	('.', LCLP2),
+	(TPA$_LAMBDA, TPA$_EXIT));
+    $STATE (LCLP2,
+	((_WORD), LCLP1),
+	(TPA$_LAMBDA, TPA$_EXIT));
+
+    $STATE (COMMENT,
+    	('(', COM1),
+	(TPA$_ANY, TPA$_FAIL));
+    $STATE (COM1,
+	((COMMENT), COM1),
+	(TPA$_BLANK, COM1),
+    	('\', COMLIT),
+    	(')', TPA$_EXIT),
+	(TPA$_EOS, TPA$_FAIL),
+	(TPA$_ANY, COM1));
+    $STATE (COMLIT,
+	(TPA$_ANY, COM1));
+
+    $STATE (PHRASE,
+	((_WORD), PHR1));
+    $STATE (PHR1,
+	(TPA$_BLANK, PHR2),
+	(TPA$_LAMBDA, TPA$_EXIT));
+    $STATE (PHR2,
+	(TPA$_BLANK, PHR2),
+	((_WORD), PHR1),
+	(TPA$_LAMBDA, TPA$_EXIT));
+
+    $STATE (_WORD,
+    	('"', WORDQ),
+	(TPA$_ALPHA, WORD1),
+	(TPA$_DIGIT, WORD1),
+    	('`', WORD1), ('~', WORD1), ('!', WORD1), ('#', WORD1),
+    	('$', WORD1), ('%', WORD1), ('^', WORD1), ('&', WORD1),
+    	('*', WORD1), ('-', WORD1), ('_', WORD1), ('=', WORD1),
+    	('+', WORD1), ('{', WORD1), ('}', WORD1), ('''', WORD1),
+    	('|', WORD1), ('/', WORD1), ('?', WORD1), ('\', WORD1Q));
+    $STATE (WORDQ,
+    	('\', WORDQ1),
+    	('"', WORD1),
+	(TPA$_ANY, WORDQ));
+    $STATE (WORDQ1,
+	(TPA$_ANY, WORDQ));
+    $STATE (WORD1,
+    	('"', WORDQ),
+	(TPA$_ALPHA, WORD1),
+	(TPA$_DIGIT, WORD1),
+    	('`', WORD1), ('~', WORD1), ('!', WORD1), ('#', WORD1),
+    	('$', WORD1), ('%', WORD1), ('^', WORD1), ('&', WORD1),
+    	('*', WORD1), ('-', WORD1), ('_', WORD1), ('=', WORD1),
+    	('+', WORD1), ('{', WORD1), ('}', WORD1), ('''', WORD1),
+    	('|', WORD1), ('/', WORD1), ('?', WORD1), ('\', WORD1Q),
+	(TPA$_LAMBDA, TPA$_EXIT));
+    $STATE (WORD1Q,
+	(TPA$_ANY, WORD1));
+
+    $STATE (DOMAIN,
+	((SUBDOMAIN), DOM1));
+    $STATE (DOM1,
+    	('.', DOM2),
+	(TPA$_LAMBDA, TPA$_EXIT));
+    $STATE (DOM2,
+	((SUBDOMAIN), DOM1),
+	(TPA$_LAMBDA, TPA$_EXIT));
+
+    $STATE (SUBDOMAIN,
+    	('[', SUBDLIT),
+    	('`', SUBD1), ('~', SUBD1), ('!', SUBD1), ('#', SUBD1),
+    	('$', SUBD1), ('%', SUBD1), ('^', SUBD1), ('&', SUBD1),
+    	('*', SUBD1), ('-', SUBD1), ('_', SUBD1), ('=', SUBD1),
+    	('+', SUBD1), ('{', SUBD1), ('}', SUBD1), ('''', SUBD1),
+    	('|', SUBD1), ('/', SUBD1), ('?', SUBD1),
+	(TPA$_ALPHA, SUBD1),
+	(TPA$_DIGIT, SUBD1));
+    $STATE (SUBDLIT,
+    	('\', SUBDLQ),
+    	(']', TPA$_EXIT),
+	(TPA$_ANY, SUBDLIT));
+    $STATE (SUBDLQ,
+	(TPA$_ANY, SUBDLIT));
+    $STATE (SUBD1,
+    	('`', SUBD1), ('~', SUBD1), ('!', SUBD1), ('#', SUBD1),
+    	('$', SUBD1), ('%', SUBD1), ('^', SUBD1), ('&', SUBD1),
+    	('*', SUBD1), ('-', SUBD1), ('_', SUBD1), ('=', SUBD1),
+    	('+', SUBD1), ('{', SUBD1), ('}', SUBD1), ('''', SUBD1),
+    	('|', SUBD1), ('/', SUBD1), ('?', SUBD1),
+	(TPA$_ALPHA, SUBD1),
+	(TPA$_DIGIT, SUBD1),
+	(TPA$_LAMBDA, TPA$_EXIT));
+
+    $STATE (ATOM,
+	(TPA$_ALPHA, ATOM1),
+	(TPA$_DIGIT, ATOM1),
+    	('`', ATOM1), ('~', ATOM1), ('!', ATOM1), ('#', ATOM1),
+    	('$', ATOM1), ('%', ATOM1), ('^', ATOM1), ('&', ATOM1),
+    	('*', ATOM1), ('-', ATOM1), ('_', ATOM1), ('=', ATOM1),
+    	('+', ATOM1), ('{', ATOM1), ('}', ATOM1), ('''', ATOM1),
+    	('|', ATOM1), ('/', ATOM1), ('?', ATOM1));
+    $STATE (ATOM1,
+	(TPA$_ALPHA, ATOM1),
+	(TPA$_DIGIT, ATOM1),
+    	('`', ATOM1), ('~', ATOM1), ('!', ATOM1), ('#', ATOM1),
+    	('$', ATOM1), ('%', ATOM1), ('^', ATOM1), ('&', ATOM1),
+    	('*', ATOM1), ('-', ATOM1), ('_', ATOM1), ('=', ATOM1),
+    	('+', ATOM1), ('{', ATOM1), ('}', ATOM1), ('''', ATOM1),
+    	('|', ATOM1), ('/', ATOM1), ('?', ATOM1),
+	(TPA$_LAMBDA, TPA$_EXIT));
+
+    $STATE (XTEXT,
+	(TPA$_ALPHA, XTEXT1),
+	(TPA$_DIGIT, XTEXT1),
+    	('`', XTEXT1), ('~', XTEXT1), ('!', XTEXT1), ('#', XTEXT1),
+    	('$', XTEXT1), ('%', XTEXT1), ('^', XTEXT1), ('&', XTEXT1),
+    	('*', XTEXT1), ('-', XTEXT1), ('_', XTEXT1), ('"', XTEXT1),
+    	('+', XTEXTQ), ('{', XTEXT1), ('}', XTEXT1), ('''', XTEXT1),
+    	('|', XTEXT1), ('/', XTEXT1), ('?', XTEXT1), ('(', XTEXT1),
+    	(')', XTEXT1), (',', XTEXT1), ('.', XTEXT1), (':', XTEXT1),
+    	(';', XTEXT1), ('<', XTEXT1), ('>', XTEXT1), ('@', XTEXT1),
+    	('[', XTEXT1), ('\', XTEXT1), (']', XTEXT1));
+    $STATE (XTEXT1,
+	(TPA$_ALPHA, XTEXT1),
+	(TPA$_DIGIT, XTEXT1),
+    	('`', XTEXT1), ('~', XTEXT1), ('!', XTEXT1), ('#', XTEXT1),
+    	('$', XTEXT1), ('%', XTEXT1), ('^', XTEXT1), ('&', XTEXT1),
+    	('*', XTEXT1), ('-', XTEXT1), ('_', XTEXT1), ('"', XTEXT1),
+    	('+', XTEXTQ), ('{', XTEXT1), ('}', XTEXT1), ('''', XTEXT1),
+    	('|', XTEXT1), ('/', XTEXT1), ('?', XTEXT1), ('(', XTEXT1),
+    	(')', XTEXT1), (',', XTEXT1), ('.', XTEXT1), (':', XTEXT1),
+    	(';', XTEXT1), ('<', XTEXT1), ('>', XTEXT1), ('@', XTEXT1),
+    	('[', XTEXT1), ('\', XTEXT1), (']', XTEXT1),
+	(TPA$_LAMBDA, TPA$_EXIT));
+    $STATE (XTEXTQ,
+    	(TPA$_DIGIT, XTEXTQ2),
+    	('A', XTEXTQ2), ('B', XTEXTQ2), ('C', XTEXTQ2),
+    	('D', XTEXTQ2), ('E', XTEXTQ2), ('F', XTEXTQ2));
+    $STATE (XTEXTQ2,
+    	(TPA$_DIGIT, XTEXT1),
+    	('A', XTEXT1), ('B', XTEXT1), ('C', XTEXT1),
+    	('D', XTEXT1), ('E', XTEXT1), ('F', XTEXT1));
+
+    $STATE (DECIMALNUMBER,
+    	(TPA$_DIGIT, DECNUM1));
+    $STATE (DECNUM1,
+    	(TPA$_DIGIT, DECNUM1),
+    	(TPA$_LAMBDA, TPA$_EXIT));
+
+%SBTTL 'PARSE_SMTP_CMD'
+GLOBAL ROUTINE PARSE_SMTP_CMD (STR_A, CODE_A, TXT_A_A, PI_A, ERRSTART_A) =
+BEGIN
+!++
+! FUNCTIONAL DESCRIPTION:
+!
+!   Parses an RFC821-compliant command.
+!
+! RETURNS:  	cond_value, longword (unsigned), write only, by value
+!
+! PROTOTYPE:
+!
+!   PARSE_SMTP_CMD  str, code, txt [,pi]
+!
+! IMPLICIT INPUTS:  None.
+!
+! IMPLICIT OUTPUTS: None.
+!
+! COMPLETION CODES:
+!
+!   SS$_NORMAL:	    	normal successful completion.
+!
+! SIDE EFFECTS:
+!
+!   None.
+!--
+    BUILTIN
+    	ACTUALCOUNT;
+
+    BIND
+    	STR 	= .STR_A    : BLOCK [DSC$K_S_BLN,BYTE];
+
+    LITERAL
+    	TPA_C_LENGTH	=   TPA$C_LENGTH0 + 24,
+    	TPA_K_COUNT 	=   TPA$K_COUNT0 + 6;
+
+    LOCAL
+    	TPABLK	: BLOCK [TPA_C_LENGTH,BYTE],
+    	TMP 	: BLOCK [DSC$K_S_BLN,BYTE],
+    	got_cmd,
+    	STATUS;
+
+    INIT_DYNDESC (TMP);
+    STR$UPCASE (TMP, STR);
+    TPABLK [TPA$L_COUNT] = TPA_K_COUNT;
+    TPABLK [TPA$L_OPTIONS] = 0;
+    TPABLK [TPA$L_STRINGCNT] = .TMP [DSC$W_LENGTH];
+    TPABLK [TPA$L_STRINGPTR] = .TMP [DSC$A_POINTER];
+    TPABLK [TPA_A_P1] = STR;
+    TPABLK [TPA_A_P2] = .CODE_A;
+    TPABLK [TPA_A_P3] = .TXT_A_A;
+    TPABLK [TPA_A_P4] = .TMP [DSC$A_POINTER];
+    TPABLK [TPA_A_P5] = (IF ACTUALCOUNT () GTR 3 THEN .PI_A ELSE 0);
+    TPABLK [TPA_A_P6] = got_cmd;
+
+    got_cmd = 0;
+    STATUS = LIB$TPARSE (TPABLK, PARSE_SMTP_CMD_STATE, PARSE_SMTP_CMD_KEY);
+
+    IF NOT .STATUS THEN
+    BEGIN
+    	.CODE_A = (IF .got_cmd THEN 0 ELSE SMTP_CMD_UNKNOWN);
+    	IF ACTUALCOUNT () GTR 4 AND .errstart_a NEQA 0 THEN
+    	    .errstart_a = CH$DIFF (.TPABLK [TPA$L_STRINGPTR], .TMP [DSC$A_POINTER]);
+    END;
+
+    FREE_STRINGS (TMP);
+
+    SS$_NORMAL
+
+END; ! PARSE_SMTP_CMD
+
+%SBTTL 'PSC_STORE'
+TPA_ROUTINE (PSC_STORE, (OPTIONS, STRINGCNT, STRINGPTR, TOKENCNT,
+    	    TOKENPTR, CHAR, NUMBER, PARAM, STR_A, CODE_A, TXT_A_A,
+    	    STRINGBASE, PI_A, got_cmd_a))
+!++
+! FUNCTIONAL DESCRIPTION:
+!
+!   Invoked by TPARSE to store a piece of a mail address.
+!
+! RETURNS:  	cond_value, longword (unsigned), write only, by value
+!
+! PROTOTYPE:
+!
+!   PSC_STORE opt, scnt, sptr, tcnt, tptr, chr, num, par, p1, p2, p3
+!
+! IMPLICIT INPUTS:  None.
+!
+! IMPLICIT OUTPUTS: None.
+!
+! COMPLETION CODES:
+!
+!   SS$_NORMAL:	    	normal successful completion.
+!
+! SIDE EFFECTS:
+!
+!   None.
+!--
+    BIND
+    	STR 	    = .STR_A	: BLOCK [,BYTE],
+    	CODE	    = .CODE_A,
+    	TXT 	    = .TXT_A_A  : REF TXTDEF,
+    	param_info  = .pi_a 	: SMTPPRMDEF,
+    	got_cmd	    = .got_cmd_a;
+
+    LOCAL
+    	ptr 	: REF BLOCK [,BYTE];
+
+    IF .pi_a NEQA 0 AND .param GTRU SMTP_CMD_HI THEN
+    BEGIN
+    	CASE .param FROM extra_params_start TO extra_params_end OF
+    	SET
+
+    	[SMTP_MAIL_GOT_COMMAND, SMTP_RCPT_GOT_COMMAND] :
+    	    got_cmd = 1;
+
+    	[SMTP_MAIL_ADDRESS, SMTP_RCPT_ADDRESS] :
+    	    BEGIN
+	    	ptr = CH$PLUS (.str [DSC$A_POINTER], CH$DIFF (.tokenptr, .stringbase));
+    	    	IF .TXT NEQA 0 THEN FREETXT (TXT);
+    	    	TXT = MEM_GETTXT (.tokencnt, .ptr);
+    	    END;
+
+    	[SMTP_MAIL_SIZE] :
+    	    BEGIN
+    	    	IF LIB$CVT_DTB (.tokencnt, .tokenptr, param_info [SMTPPRM_L_SIZE]) THEN
+    	    	    param_info [SMTPPRM_V_SIZE] = 1
+    	    	ELSE
+    	    	    RETURN SS$_BADPARAM;
+    	    END;
+
+    	[SMTP_MAIL_RET_FULL, SMTP_MAIL_RET_HDRS] :
+    	    BEGIN
+    	    	param_info [SMTPPRM_V_RET] = 1;
+    	    	param_info [SMTPPRM_L_RETURNTYPE] = 
+    	    	    (IF .param EQL SMTP_MAIL_RET_FULL THEN SMTPPRM_K_RET_FULL
+    	    	     ELSE SMTPPRM_K_RET_HDRS);
+    	    END;
+
+    	[SMTP_MAIL_ENVID] :
+    	    BEGIN
+	    	ptr = CH$PLUS (.str [DSC$A_POINTER], CH$DIFF (.tokenptr, .stringbase));
+    	    	param_info [SMTPPRM_V_ENVID] = 1;
+    	    	param_info [SMTPPRM_A_ENVID] = MEM_GETTXT (.tokencnt, .ptr);
+    	    END;
+
+    	[SMTP_RCPT_NTFY_NEVER] :
+    	    BEGIN
+    	    	param_info [SMTPPRM_V_NOTIFY] = 1;
+    	    	param_info [SMTPPRM_L_NTFYMSK] = SMTPPRM_M_NOTIFY_NEVER;
+    	    END;
+
+    	[SMTP_RCPT_NTFY_SUCCESS,SMTP_RCPT_NTFY_FAILURE,SMTP_RCPT_NTFY_DELAY] :
+    	    BEGIN
+    	    	OWN mask : VECTOR [3,LONG] INITIAL (SMTPPRM_M_NOTIFY_SUCCESS,
+    	    	    	    	    	    	    SMTPPRM_M_NOTIFY_FAILURE,
+    	    	    	    	    	    	    SMTPPRM_M_NOTIFY_DELAY);
+    	    	param_info [SMTPPRM_V_NOTIFY] = 1;
+    	    	param_info [SMTPPRM_L_NTFYMSK] = .param_info [SMTPPRM_L_NTFYMSK] OR
+    	    	    	    	    	    	 .mask [.param-SMTP_RCPT_NTFY_SUCCESS];
+    	    END;
+
+    	[SMTP_RCPT_ORCPT_ADDRTYPE,SMTP_RCPT_ORCPT_ADDRESS] :
+    	    BEGIN
+	    	ptr = CH$PLUS (.str [DSC$A_POINTER], CH$DIFF (.tokenptr, .stringbase));
+    	    	param_info [SMTPPRM_V_ORCPT] = 1;
+    	    	IF .param EQL SMTP_RCPT_ORCPT_ADDRTYPE THEN
+    	    	    param_info [SMTPPRM_A_ORTYPE] = MEM_GETTXT (.tokencnt, .ptr)
+    	    	ELSE
+    	    	    param_info [SMTPPRM_A_ORADDR] = MEM_GETTXT (.tokencnt, .ptr);
+    	    END;
+
+    	[SMTP_MAIL_AUTH] :
+    	    BEGIN
+	    	ptr = CH$PLUS (.str [DSC$A_POINTER], CH$DIFF (.tokenptr, .stringbase));
+    	    	param_info [SMTPPRM_V_AUTH] = 1;
+    	    	param_info [SMTPPRM_A_AUTHADDR] = MEM_GETTXT (.tokencnt, .ptr)
+    	    END;
+
+
+    	[INRANGE,OUTRANGE] :
+    	    RETURN SS$_BADPARAM;  ! should never happen
+    	TES;
+
+    	RETURN SS$_NORMAL;
+
+    END
+    ELSE IF .param GTRU SMTP_CMD_HI THEN RETURN SS$_BADPARAM;  ! non-EHLO session
+!
+! Reach here if one of the "normal" command codes
+!
+    CODE = .PARAM;
+    got_cmd = 1;
+    IF .STRINGCNT GTR 0 THEN
+    BEGIN
+    	LOCAL x : LONG;
+    	
+	!
+	!  Trim off any trailing blanks by decrementing the value of
+	!  STRINGCNT for each trailing blank (or tab).
+	!
+	ptr = CH$PLUS (.str [DSC$A_POINTER], CH$DIFF (.stringptr, .stringbase));
+	x = .stringcnt-1;			!Get offset of last character
+	WHILE (.x GEQ 0 AND
+    	    	(CH$RCHAR (CH$PLUS(.ptr,.x)) EQLU %CHAR(32)) OR
+	        (CH$RCHAR (CH$PLUS(.ptr,.x)) EQLU %CHAR(9))) DO
+	    x = .x - 1;				!Decrement x for each blank/tab
+
+	x = .x + 1;				!Offset -> actual length again
+    	TXT = MEM_GETTXT (.x, .ptr);		!Allocate a TXT structure
+    	TXT [TXT_W_CODE] = 0;
+    END;
+
+    SS$_NORMAL
+
+END; ! PSC_STORE
+
+%SBTTL 'PSC_SET_BLANKS'
+TPA_ROUTINE (PSC_SET_BLANKS, (OPTIONS, STRINGCNT, STRINGPTR, TOKENCNT,
+    	    TOKENPTR, CHAR, NUMBER, PARAM, STR_A, CODE_A, TXT_A_A,
+    	    STRINGBASE))
+!++
+! FUNCTIONAL DESCRIPTION:
+!
+!   Turns on blank-significance.
+!
+! RETURNS:  	cond_value, longword (unsigned), write only, by value
+!
+! PROTOTYPE:
+!
+!   PSC_SET_BLANKS opt, scnt, sptr, tcnt, tptr, chr, num, par, p1, p2, p3
+!
+! IMPLICIT INPUTS:  None.
+!
+! IMPLICIT OUTPUTS: None.
+!
+! COMPLETION CODES:
+!
+!   SS$_NORMAL:	    	normal successful completion.
+!
+! SIDE EFFECTS:
+!
+!   None.
+!--
+
+    OPTIONS = .OPTIONS OR TPA$M_BLANKS;
+
+    SS$_NORMAL
+
+END; ! PSC_SET_BLANKS
+
+END
+ELUDOM

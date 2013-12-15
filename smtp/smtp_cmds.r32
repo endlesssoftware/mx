@@ -1,0 +1,92 @@
+!
+! Copyright (c) 2008, Matthew Madison.
+! 
+! All rights reserved.
+! 
+! Redistribution and use in source and binary forms, with or without
+! modification, are permitted provided that the following conditions
+! are met:
+! 
+!     * Redistributions of source code must retain the above
+!       copyright notice, this list of conditions and the following
+!       disclaimer.
+!     * Redistributions in binary form must reproduce the above
+!       copyright notice, this list of conditions and the following
+!       disclaimer in the documentation and/or other materials provided
+!       with the distribution.
+!     * Neither the name of the copyright owner nor the names of any
+!       other contributors may be used to endorse or promote products
+!       derived from this software without specific prior written
+!       permission.
+! 
+! THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
+! "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
+! LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
+! A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
+! OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
+! SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
+! LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
+! DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
+! THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
+! (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
+! OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+
+    LIBRARY 'MX_SRC_COMMON:FIELDS';
+
+    LITERAL
+    	SMTP_CMD_LO 	 = 1,
+    	SMTP_CMD_HELO	 = 1,
+    	SMTP_CMD_MAIL	 = 2,
+    	SMTP_CMD_RCPT	 = 3,
+    	SMTP_CMD_DATA	 = 4,
+    	SMTP_CMD_RSET	 = 5,
+    	SMTP_CMD_SEND	 = 6,
+    	SMTP_CMD_SOML	 = 7,
+    	SMTP_CMD_SAML	 = 8,
+    	SMTP_CMD_VRFY	 = 9,
+    	SMTP_CMD_EXPN	 = 10,
+    	SMTP_CMD_HELP	 = 11,
+    	SMTP_CMD_NOOP	 = 12,
+    	SMTP_CMD_QUIT	 = 13,
+    	SMTP_CMD_TURN	 = 14,
+    	SMTP_CMD_EHLO	 = 15,
+    	SMTP_CMD_ETRN	 = 16,
+    	SMTP_CMD_AUTH	 = 17,
+    	SMTP_CMD_STARTTLS= 18,
+    	SMTP_CMD_UNKNOWN = 19,
+    	SMTP_CMD_HI 	 = 19;
+
+!
+!   Parameters for extended SMTP commands
+!
+    LITERAL
+    	SMTPPRM_K_RET_FULL  	    = 1,
+    	SMTPPRM_K_RET_HDRS  	    = 2,
+    	SMTPPRM_M_NOTIFY_NEVER	    = 0,
+    	SMTPPRM_M_NOTIFY_SUCCESS    = 1, ! must match field
+    	SMTPPRM_M_NOTIFY_FAILURE    = 2, ! definitions
+    	SMTPPRM_M_NOTIFY_DELAY	    = 4; ! below
+
+    _DEF (SMTPPRM)
+    	SMTPPRM_L_PRESENT   	= _LONG,
+    	_OVERLAY (SMTPPRM_L_PRESENT)
+    	    SMTPPRM_V_SIZE  	= _BIT,   ! MAIL
+    	    SMTPPRM_V_RET   	= _BIT,   ! MAIL
+    	    SMTPPRM_V_ENVID 	= _BIT,   ! MAIL
+    	    SMTPPRM_V_NOTIFY	= _BIT,   ! RCPT
+    	    SMTPPRM_V_ORCPT 	= _BIT,   ! RCPT
+    	    SMTPPRM_V_AUTH  	= _BIT,	  ! MAIL
+    	_ENDOVERLAY
+    	SMTPPRM_L_SIZE	    	= _LONG,
+    	SMTPPRM_L_RETURNTYPE	= _LONG,
+    	SMTPPRM_A_ENVID	    	= _LONG,
+    	SMTPPRM_L_NTFYMSK   	= _LONG,
+    	_OVERLAY (SMTPPRM_L_NTFYMSK)
+    	    SMTPPRM_V_NOTIFY_SUCCESS = _BIT,
+    	    SMTPPRM_V_NOTIFY_FAILURE = _BIT,
+    	    SMTPPRM_V_NOTIFY_DELAY   = _BIT,
+    	_ENDOVERLAY
+    	SMTPPRM_A_AUTHADDR  	= _LONG,
+    	SMTPPRM_A_ORTYPE    	= _LONG,
+    	SMTPPRM_A_ORADDR    	= _LONG
+    _ENDDEF (SMTPPRM);
