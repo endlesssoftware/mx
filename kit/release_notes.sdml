@@ -1,0 +1,323 @@
+<INCLUDE>(SYMBOLS.SDML)
+<FRONT_MATTER>
+
+<TITLE_PAGE>
+<TITLE>(Message Exchange Release Notes)
+<ABSTRACT>(<REFERENCE>(RELMONTH))
+<P>
+This file contains the release notes for Message Exchange <REFERENCE>(VER).
+It describes any features, restrictions, changes, or additions made
+to MX in this release, and includes information that is not provided
+elsewhere in the MX manual set.
+<ENDABSTRACT>
+<REVISION_INFO>(This is a revised manual.)
+<REVISION_INFO>(Operating System and Version:\OpenVMS VAX V6.2 or later)
+<REVISION_INFO>(\OpenVMS Alpha V6.2 or later)
+<REVISION_INFO>(\OpenVMS Industry Standard 64 V8.2 or later)
+<REVISION_INFO>(Software Version:\Message Exchange <REFERENCE>(VER))
+<ENDTITLE_PAGE>(Endless Software Solutions<LINE>Perth, Western Australia)
+
+<INCLUDE>(COPYRIGHT.SDML)
+
+<CONTENTS_FILE>
+<ENDFRONT_MATTER>
+
+
+<CHAPTER>(Installation Notes)
+<P>
+This chapter contains items of interest pertaining to the installation
+of MX.
+
+
+<HEAD1>(MX Must Be Shut Down)
+<P>
+If you are upgrading to MX <REFERENCE>(VER) from a previous version,
+all MX processes on the system or cluster <EMPHASIS>(must) be shut down
+using the MCP SHUTDOWN command.  Also, you should define the
+MX_SHUTDOWN logical (MX V4.0+) or deassign the MX_MAILSHR system
+logical to prevent users from sending mail via MX during the
+installation.
+
+<chapter>(Upgrade Information)
+<p>This chapter contains information of interest to sites upgrading from
+previous versions of MX.
+
+<head1>(Upgrade Restriction)
+<P>
+MX <reference>(ver) only supports upgrading MX installations of version
+V6.0 and later.
+<P>
+To upgrade from pre-V6.0 releases it is recommended that the following MCP
+commands are used to generate a human readable script.
+<INTERACTIVE>
+<S>($ )<U>(MCP SHOW ALL/COMMAND/OUTPUT=ddcu:[dir]file.MCP)
+<ENDINTERACTIVE>
+<P>
+This script can then can be edited appropriately and loaded into the new
+MX installation by using the @ input-indirection function.
+
+<CHAPTER>(New Features and Changes in MV V6.1)
+<P>
+This chapter notes the changes that were made in MX V6.1.
+
+<HEAD1>(VAX System Support Re-instated)
+<P>
+Support for systems running OpenVMS VAX has been resinstated in the V6.1
+release of Message Exchange.  MX is now available on all three OpenVMS
+supported architectures.
+
+<HEAD1>(New Anti-SPAM Heuristics)
+<P>
+There are now two new anti-SPAM heuristic filters.  These are
+FROM_BAD_LOCAL_USER and FROM_USER_MSGID_HOST.  See the REJMAN documentation
+for further information on how to use the heuristics and what they attempt
+to catch.
+
+<HEAD1>(MLF Supports Message-ID: Header)
+<P>
+Thanks to Hunter Goatley, former MX maintainer, for his contribution. MX
+MLF now adds the Message-ID: header to all generated message.
+
+<HEAD1>(Support for ESMTP STARTTLS command)
+<P>
+MX now supports secure communication using SSL as specified by RFC3207.
+
+<HEAD1>(Command Definition Procedure)
+<P>
+MX now ships with a DCL command procedure that can be used to define all
+foreign commands.  It can be called like so:
+<EXAMPLE>
+IF (F$SEARCH("MX_EXE:MX_UTILS.COM") .NES. "") THEN -
+    @MX_EXE:MX_UTILS
+<ENDEXAMPLE>
+
+<HEAD1>(/ACCEPT qualifier added to REJMAN ADD REJECTION/HEADER)
+<P>
+It is now possible to specify the /ACCEPT qualifier on the
+ADD REJECTION/HEADER command in REJMAN.  This now makes it possible to
+allow mail through the SPAM filter based on special headers and
+pre-shared keys.
+
+<CHAPTER>(New Features and Changes in MX V6.0)
+<P>
+This chapter notes the changes that were made in MX V6.0.
+
+<HEAD1>(Open Source Distribution)
+<P>
+Starting with V6.0, MX is now distributed as open source.
+
+<HEAD1>(VAX System Support Discontinued)
+<P>MX V6.0 supports only Alpha and IA64 systems.
+You may be able to build binaries for VAX from the source code,
+but some modifications may be required to get them to run.
+
+<CHAPTER>(New Features and Changes from V5.4 and Earlier Releases)
+<P>This chapter notes the changes that were introduced in MX V5.4
+and prior releases.
+
+<HEAD1>(Support for OpenVMS Industry Standard 64 Systems)
+<P>
+This version of MX support OpenVMS Industry Standard 64 systems, as
+well as Alpha and VAX systems.
+
+<HEAD1>(Message Queue Performance and Reliability Enhancements)
+<P>
+The MX message queuing subsystem, FLQ, has been modified to eliminate
+the linked-list structure that was used in previous versions of MX.
+This simplification improves performance by reducing the number of
+reads/writes to the queue control file and the number of locks that
+must be acquired for each queue update.  The changes should also
+improve reliability of the queue and reduce the likelihood of
+queue control file corruptions.
+
+<HEAD1>(SMTP Server: Client Check Enhancement)
+<P>The SMTP server access-check callout interface has been extended
+to add a check for the domain name presented by the client in the
+HELO or EHLO command at the start of an SMTP session.  This check can
+be used to reject sessions from clients that do not present a valid
+domain name on this command, or to cause all messages sent by such
+clients to be rejected as junk mail.
+<P>A kit that implements this additional callout is provided in
+the Examples subset, at MX_ROOT:[EXAMPLES]ACCESS_CHECK.ZIP.
+The README file provided with that kit describes how to install and
+configure it to either refuse or flag messages from hosts that
+falsify their identities.
+
+<HEAD1>(SMTP Server: Authentication Logging)
+<P>When using VMS SYSUAF authentication for the SMTP server, the
+server now generates an ID that is included in the Received: header
+of the incoming message and is also logged to the SMTP server's
+log file, when authentication succeeds.  By cross-matching the
+ID with the log files, you can trace a message to the VMS username
+used to authenticate the SMTP transaction.
+
+<HEAD1>(SMTP Server: Requiring Authentication)
+<P>The SMTP server has been changed to check a new logical name,
+MX_SMTP_SERVER_AUTHENTICATION_REQUIRED.  If that logical name
+translates to the string OUTSIDE, the server will require all
+<quote>(outside) clients to authenticate; if it translates to
+any other value, the server will require all clients (even
+<quote>(inside) ones) to authenticate.  When authentication is
+required, the SMTP MAIL command will be refused with an error
+until the client has successfully authenticated.
+<P>You could use this feature to establish a separate SMTP server
+for servicing your own client hosts (such as PCs running POP or
+IMAP clients), either running on a separate system or on a
+non-default port.  You should NOT enable this feature for the
+SMTP server that you configure for accepting incoming messages
+from the Internet or other non-authenticating hosts.
+
+<HEAD1>(SMTP Server: Junk Mail Rule ID Header)
+<P>The SMTP server now adds a new header, X-Junk-Mail-Rule-ID, to
+incoming messages that match a REJMAN header rule.  The contents
+of the header is the numeric ID of the matching rule.
+
+<HEAD1>(SMTP Server: Alternate Server Processes)
+<P>The MX startup procedure has been enhanced to provide for the
+startup of alternate SMTP server processes that include customizations
+for the logical names that control the server's behavior, such as
+the IP address, port number, and required authentication.  See
+the file MX_EXE:SMTP_SERVER.COM for more information.
+
+<HEAD1>(MX V5.3 ECO 12 Updates)
+<P>This version of MX includes all of the fixes provided in the
+ECO kits issued for MX V5.3 through ECO 12.
+<LIST>(UNNUMBERED)
+<LE>MLF subscription confirmation ACCVIO fix [ECO 1]
+<LE>Security fix for MX_DECODE, MX_LOCAL [ECO 2]
+<LE>Local forwarder relay fix [ECO 3]
+<LE>SET LOCAL/DISABLE_EXQUOTA and SMTP rejection database update fixes [ECO 4]
+<LE>MX_SITE_IN From: header generation fix [ECO 5]
+<LE>VMS MAIL From: header generation fix [ECO 6]
+<LE>MX_SMTP_SERVER_ADDRESS logical name support [ECO 7]
+<LE>MX_INVALID_DOMAIN_ADDRESSES logical name support [ECO 8]
+<LE>RBL lookup fixes [ECO 9]
+<LE>SMTP server queue entry handling fix [ECO 10]
+<LE>Authentication debug enhancements [ECO 11]
+<LE>Fix for DNSMTP_SERVER BADPARAM failure [ECO 12]
+<ENDLIST>
+
+<HEAD1>(Other Fixes and Enhancements)
+<P>MX V6.0 includes the following minor fixes and
+enhancements:
+<LIST>(unnumbered)
+<LE>
+In prior versions of MX, if you ran multiple instances of the
+MX FLQ Manager process, only the active process would show up
+in the MCP STATUS display and respond to the SHUTDOWN and RESET
+commands.  This problem has been fixed.
+<LE>
+The /WAIT qualifier on the MCP SHUTDOWN command could wait for
+longer than necessary when shutting down a subset of the agents
+running in an entire cluster.  This problem has been fixed.
+<ENDLIST>
+
+<chapter>(Known Bugs and Restrictions)
+<HEAD1>(X.25-SMTP Bug)
+<P>
+Messages received via X25_SMTP that contain very long lines may be
+rejected by the X.25 SMTP server.  Currently, the only fix is to wrap
+the long line before sending the message.
+
+<HEAD1>(MXALIAS and the MX% <quote>(@) Patch for VMS Mail)
+<P>
+If you have installed the VMS Mail patch that lets users leave off the
+MX% for addresses (found in the [.CONTRIB] directory), MXALIAS
+addresses must still be prefixed by MX% to be recognized.  MX_MAILSHR
+will try to lookup an ALIAS if the MX address does not include an
+<quote>(@) in the address received from VMS Mail.  With the VMS Mail <quote>(@)
+patch installed, MX aliases are not passed to MX unless they are first
+prefixed by MX%.
+
+<HEAD1>(Possible Forwarding Problems\fwdprob)
+<p>If, prior to installation of MX, you were running a different E-mail
+package on your system, and users made use of the SET FORWARD command in
+VMS MAIL to forward mail through that other package, those forwarding
+addresses may no longer work after MX is installed.
+<p>The system manager should review the forwarding addresses used on the
+system and modify them as needed to use the MX% prefix once MX is installed.
+The command SHOW FORWARD/USER=* and SET FORWARD/USER commands in VMS MAIL can
+be used to accomplish this.
+<HEAD1>(Remote Forwarding Problems)
+<p>Although MX will automatically detect forwarding on the local system,
+it cannot do so for messages delivered across DECnet.  If a remote DECnet
+user set his or her forwarding across DECnet back into MX, as, for
+example, with the following command,
+<interactive>
+<s>(MAIL> )<U>(SET FORWARD REMOTE::MX%"""user@host""")
+<endinteractive>
+<cp>
+and if MX delivers a message to that user via DECnet, the doubled DECnet
+reference will result in two sets of
+RFC 822 headers will appear in the message: one set for the original message
+and one set for the forwarded message.
+<p>There is no workaround or fix for this problem.
+<head1>(BYPASS Needed for UUCP Delivery)
+<p>If you intend to use MX with DECUS UUCP, and you elect to use a
+separate mailer account, the mailer account may need to have
+BYPASS privilege.
+
+<APPENDIX>(Other Copyright Notices)
+<P>
+The regular expression routines were adapted from NetBSD:
+<INTERACTIVE>(WIDE)
+$NetBSD: COPYRIGHT,v 1.4 1995/02/27 13:28:12 cgd Exp $
+
+Copyright 1992, 1993, 1994 Henry Spencer.  All rights reserved.
+This software is not subject to any license of the American Telephone
+and Telegraph Company or of the Regents of the University of California.
+
+Permission is granted to anyone to use this software for any purpose on
+any computer system, and to alter it and redistribute it, subject
+to the following restrictions:
+
+1. The author is not responsible for the consequences of use of this
+   software, no matter how awful, even if they arise from flaws in it.
+
+2. The origin of this software must not be misrepresented, either by
+   explicit claim or by omission.  Since few users ever read sources,
+   credits must appear in the documentation.
+
+3. Altered versions must be plainly marked as such, and must not be
+   misrepresented as being the original software.  Since few users
+   ever read sources, credits must appear in the documentation.
+
+4. This notice may not be removed or altered.
+
+=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=
+/*-
+ * Copyright (c) 1994
+ *	The Regents of the University of California.  All rights reserved.
+ *
+ * Redistribution and use in source and binary forms, with or without
+ * modification, are permitted provided that the following conditions
+ * are met:
+ * 1. Redistributions of source code must retain the above copyright
+ *    notice, this list of conditions and the following disclaimer.
+ * 2. Redistributions in binary form must reproduce the above copyright
+ *    notice, this list of conditions and the following disclaimer in the
+ *    documentation and/or other materials provided with the distribution.
+ * 3. All advertising materials mentioning features or use of this software
+ *    must display the following acknowledgement:
+ *	This product includes software developed by the University of
+ *	California, Berkeley and its contributors.
+ * 4. Neither the name of the University nor the names of its contributors
+ *    may be used to endorse or promote products derived from this software
+ *    without specific prior written permission.
+ *
+ * THIS SOFTWARE IS PROVIDED BY THE REGENTS AND CONTRIBUTORS ``AS IS'' AND
+ * ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
+ * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
+ * ARE DISCLAIMED.  IN NO EVENT SHALL THE REGENTS OR CONTRIBUTORS BE LIABLE
+ * FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
+ * DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS
+ * OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION)
+ * HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT
+ * LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
+ * OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
+ * SUCH DAMAGE.
+ *
+ *	@(#)COPYRIGHT	8.1 (Berkeley) 3/16/94
+ */
+<ENDINTERACTIVE>
+<ENDAPPENDIX>

@@ -1,0 +1,35 @@
+You have been added to mailing list {list-address}.
+
+Further administrative requests regarding this list should be sent to
+
+    Internet:   {request-address}
+    BITNET:     MXserver@bitnetnodename
+
+The following commands can be handled automatically by {request-address}:
+
+    SIGNOFF             - to remove yourself from the list
+    REVIEW              - to get a list of subscribers
+    QUERY               - to get the status of your entry on the list
+    SET NOMAIL          - to remain on the list but not receive mail
+    SET MAIL            - to reverse the NOMAIL setting
+    SET CONCEAL         - to conceal yourself from REVIEW listings
+    SET NOCONCEAL       - to reverse the CONCEAL setting
+    SET NOREPRO         - to prevent the list from sending you your own postings
+    SET REPRO           - to reverse the NOREPRO setting
+    LIST                - to get a list of mailing lists available on this host
+    HELP                - to receive a help file
+    QUIT                - to terminate processing (skipping signature, etc.)
+
+The syntax of these commands for use with the MXserver emulator is:
+
+    SIGNOFF {list-name}
+    REVIEW  {list-name}
+    QUERY   {list-name}
+    SET {list-name} [NO]MAIL
+    SET {list-name} [NO]CONCEAL
+    SET {list-name} [NO]REPRO
+    LIST
+    HELP
+    QUIT
+
+(This message was generated automatically.)

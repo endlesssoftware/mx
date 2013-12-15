@@ -1,0 +1,35 @@
+This mailing list processor supports both the Internet (listname)-request
+interface and a generic MXserver interface.
+
+The following commands can be handled automatically through the -Request
+interface:
+
+    SUBSCRIBE           - to subscribe to a mailing list
+    SIGNOFF             - to remove yourself from a mailing list
+    REVIEW [/BRIEF]     - to get a list of subscribers
+    QUERY               - to get the status of your entry on the list
+    SET NOMAIL          - to remain on the list but not receive mail
+    SET MAIL            - to reverse the NOMAIL setting
+    SET CONCEAL         - to conceal yourself from REVIEW listings
+    SET NOCONCEAL       - to reverse the CONCEAL setting
+    SET NOREPRO         - to prevent the list from sending you your own postings
+    SET REPRO           - to reverse the NOREPRO setting
+    LIST                - to get a list of mailing lists available on this host
+    HELP                - to receive a help file
+    QUIT                - to terminate processing (skipping signature, etc.)
+
+The syntax of these commands for use with the MXserver interface is:
+
+    SUBSCRIBE {list-name}
+    SIGNOFF {list-name}
+    REVIEW  [/BRIEF] {list-name}
+    QUERY   {list-name}
+    SET {list-name} [NO]MAIL
+    SET {list-name} [NO]CONCEAL
+    SET {list-name} [NO]REPRO
+    LIST
+    HELP
+    QUIT
+
+You must send your commands in the body of a mail message.
+Subject lines in mail messages are ignored.

@@ -1,0 +1,17 @@
+You have been removed from mailing list {list-address}.
+
+To resubscribe, send a mail message to:
+
+    Internet:   {request-address}
+    BITNET:     MXserver@bitnetnodename
+
+The message should contain exactly one line, containing the command:
+
+    SUBSCRIBE {list-name}
+
+You may omit the list name if you are using the Internet -Request address.
+If properly formatted, the subscription request will be handled automatically
+by the mailing list processor, unless the mailing list is protected; otherwise,
+the request will be forwarded to the list owner.
+
+(This message was generated automatically.)

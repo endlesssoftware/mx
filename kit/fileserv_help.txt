@@ -1,0 +1,50 @@
+---
+NOTE: This is a sample help file for the MX File Server.  The system
+manager should modify this file as appropriate for the local system.
+Minimal changes: for {fileserv}, substitute the file service username;
+for {host}, substitute the local host name; then delete this note.
+---
+
+FILESERV information
+--------------------
+
+FILESERV is a file distribution service that uses electronic mail
+facilities to deliver files.  To communicate with FILESERV, send an
+E-mail message to:
+                      {fileserv}@{host}
+
+Commands are sent in the body of the message you send to FILESERV.
+Several commands may be sent at one time; just put one command per line.
+
+FILESERV Commands:
+
+    SENDME package       Sends all parts of the specified package.
+    SENDME package.n     Sends part 'n' of the specified package.
+
+    LIST [pattern]       Gives brief description of all packages
+                         matching "pattern".  If pattern is omitted,
+                         a description of all packages is sent.
+
+    ADDRESS <addr>       Specifies a valid address that is to be
+                         used instead of the "From:" address for any
+                         files sent.  Useful when addresses arrive
+                         in an invalid format.  The output from any
+                         commands specified after the ADDRESS line
+                         is sent to that address.
+
+    QUIT                 Ignore all remaining lines following QUIT.
+                         Used to prevent interpretation of signatures.
+
+    HELP                 Sends this file.
+
+Commands may be abbreviated.  DIRECTORY is a synonym for LIST.
+
+For each request you make, a transaction log is returned to you
+indicating the status of the request.  The status report will indicate
+whether the request was successfully completed, and when the file was or
+will be sent.   Large files are sent only during off-peak hours.
+
+========================================================================
+
+Problems, questions, and comments about FILESERV service on this system
+should be directed to {fileserv}-Mgr@{host}.
