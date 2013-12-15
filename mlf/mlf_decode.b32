@@ -1,0 +1,383 @@
+%TITLE 'MLF_DECODE'
+MODULE MLF_DECODE (IDENT='V1.0', ADDRESSING_MODE(NONEXTERNAL=LONG_RELATIVE, EXTERNAL=LONG_RELATIVE)) =
+BEGIN
+!++
+! FACILITY: 	    MX MLF agent
+!
+! ABSTRACT: 	    Decodes MIME quoted-printable messages for MLF.
+!
+! MODULE DESCRIPTION:
+!
+!   This module contains the routines that decode quoted-printable
+!   messages for MLF.
+!
+! AUTHOR:   	    M. Madison
+!
+! Copyright (c) 2008, Matthew Madison.
+! 
+! All rights reserved.
+! 
+! Redistribution and use in source and binary forms, with or without
+! modification, are permitted provided that the following conditions
+! are met:
+! 
+!     * Redistributions of source code must retain the above
+!       copyright notice, this list of conditions and the following
+!       disclaimer.
+!     * Redistributions in binary form must reproduce the above
+!       copyright notice, this list of conditions and the following
+!       disclaimer in the documentation and/or other materials provided
+!       with the distribution.
+!     * Neither the name of the copyright owner nor the names of any
+!       other contributors may be used to endorse or promote products
+!       derived from this software without specific prior written
+!       permission.
+! 
+! THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
+! "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
+! LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
+! A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
+! OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
+! SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
+! LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
+! DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
+! THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
+! (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
+! OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+!
+! CREATION DATE:    13-NOV-1999
+!
+! MODIFICATION HISTORY:
+!
+!   13-NOV-1999	V1.0	Madison	    Initial coding (from [-.LOCAL]DECODE.B32).
+!--
+    LIBRARY 'SYS$LIBRARY:STARLET';
+    LIBRARY 'MX_SRC_COMMON:MX';
+    LIBRARY 'MX_SRC_COMMON:MX_LCLDEFS';
+
+    FORWARD ROUTINE
+    	MLF_OPEN_MSG_TEXT,
+	decode_qp_file;
+
+    EXTERNAL ROUTINE
+    	G_HAT (MX_FILE_OPEN, MX_FILE_READ, MX_FILE_WRITE, MX_FILE_CLOSE),
+    	G_HAT (OPEN_MSG_TEXT),
+	G_HAT (STR$COPY_DX, STR$CASE_BLIND_COMPARE, LIB$SYS_FAO, LIB$GETJPI);
+
+    TRACE_DECLARATIONS (EXTERNAL);
+
+    LITERAL
+	mime_c_version	= 1,
+	mime_c_applvms	= 2,
+	mime_c_base64	= 4,
+	mime_c_text	= 8,
+	mime_c_quotedp	= 16,
+	mime_c_uuencode	= 32,
+	mime_c_octet	= 64;
+
+    MACRO
+	mime_c_all_qp	= (mime_c_version OR mime_c_quotedp OR mime_c_text)%;
+
+%SBTTL 'MLF_OPEN_MSG_TEXT'
+GLOBAL ROUTINE MLF_OPEN_MSG_TEXT (qent_a, unit_a, hdrq_a, outfile_a) = 
+BEGIN
+!++
+! FUNCTIONAL DESCRIPTION:
+!
+!   description
+!
+! RETURNS:  	cond_value, longword (unsigned), write only, by value
+!
+! PROTOTYPE:
+!
+!   x
+!
+! IMPLICIT INPUTS:  None.
+!
+! IMPLICIT OUTPUTS: None.
+!
+! COMPLETION CODES:
+!
+!   SS$_NORMAL:	    	normal successful completion.
+!
+! SIDE EFFECTS:	    None.
+!--
+    BIND
+    	hdrq	= .hdrq_a   : QUEDEF;
+
+    LOCAL
+    	hdr 	: REF TXTDEF,
+    	dsc 	: BLOCK [DSC$K_S_BLN,BYTE],
+	mime_headers,
+    	status;
+
+    STR$COPY_DX (.outfile_a, %ASCID'');
+
+    status = OPEN_MSG_TEXT (.qent_a, MX__FILE_READ, .unit_a);
+    IF NOT .status THEN
+    	RETURN .status;
+
+    !
+    !  Loop through the headers looking for MIME stuff.
+    !
+    mime_headers = 0;			!Assume it's not a MIME message
+    HDR = .hdrq [QUE_L_HEAD];
+    WHILE .HDR NEQ hdrq [QUE_L_HEAD] DO
+    BEGIN
+    	CASE .HDR [TXT_W_CODE] FROM MX_K_HDR_FIRSTCODE TO MX_K_HDR_LASTCODE OF
+    	SET
+	    [MX_K_HDR_MIME_VERSION] :
+		mime_headers = .mime_headers OR mime_c_version;
+	    [MX_K_HDR_MIME_C_T_E] :
+		BEGIN
+		INIT_SDESC (dsc, .hdr [TXT_W_LEN], hdr [TXT_T_TEXT]);
+		IF STR$CASE_BLIND_COMPARE (dsc, %ASCID'QUOTED-PRINTABLE') EQLU 0 THEN
+		    mime_headers = .mime_headers OR mime_c_quotedp;
+    	    	END;
+	    [MX_K_HDR_MIME_C_TYPE] :
+		BEGIN
+    	    	    LOCAL cp;
+    	    	    cp = CH$FIND_CH (.hdr [TXT_W_LEN], hdr [TXT_T_TEXT], %C'/');
+    	    	    IF CH$FAIL (.cp) THEN
+    	    	    	INIT_SDESC (dsc, .hdr [TXT_W_LEN], hdr [TXT_T_TEXT])
+    	    	    ELSE
+    	    	    	INIT_SDESC (dsc, CH$DIFF (.cp, hdr [TXT_T_TEXT]), hdr [TXT_T_TEXT]);
+    	    	    IF STR$CASE_BLIND_COMPARE (dsc, %ASCID'TEXT') EQL 0 THEN
+			mime_headers = .mime_headers OR mime_c_text;
+		END;
+    	    [INRANGE,OUTRANGE] :;
+    	TES;
+    	HDR = .HDR [TXT_L_FLINK];
+    END;
+
+    IF .mime_headers EQLU mime_c_all_qp THEN
+    	status = decode_qp_file (.unit_a, .outfile_a);
+
+    .status
+
+END; ! MLF_OPEN_MSG_TEXT
+
+%SBTTL 'DECODE_QP_FILE'
+ROUTINE decode_qp_file (unit_a, outfile_a) =
+BEGIN
+!+
+!
+!  Routine:	DECODE_QP_FILE
+!
+!  Functional description:
+!
+!	This routine decodes a file encoded using QUOTED-PRINTABLE.
+!
+!  Formal parameters:
+!
+!	unit_a		- Address of a MX_FILEIO file context (modify).
+!   	outfile_a   	- Address of a descriptor with output file name (modify)
+!
+!  Side effects:
+!
+!	If the message is successfully decoded, the file unit is closed
+!   	and reopened to point to the new file.
+!
+!-
+    BIND
+    	unit	    = .unit_a;
+
+    BUILTIN
+    	ACTUALCOUNT;
+
+    LOCAL
+	tmpfile		: BLOCK [DSC$K_S_BLN,BYTE],
+    	instr	    	: BLOCK [DSC$K_S_BLN,BYTE],
+	sptr		: REF VECTOR [,BYTE],
+	dptr		: REF BLOCK [,BYTE],
+	big_buffer	: BLOCK [1024,BYTE],
+    	time	    	: VECTOR [2,LONG],
+	pid, len, status, soft_break, c, z, x, tunit;
+
+    INIT_DYNDESC (tmpfile, instr);
+    !
+    !  Construct a name for the temporary file.
+    !
+    $GETTIM (TIMADR=time);
+    LIB$GETJPI (%REF (JPI$_PID), 0, 0, pid);
+    LIB$SYS_FAO (%ASCID'MX_MLF_DIR:TMP_!XL_!XL_!XL.TMP', 0, tmpfile,
+    	    	 .time [1], .time [0], .pid);
+
+    TRACE ('  MLF: Attempting decode on quoted-printable file.');
+
+    status = MX_FILE_OPEN (MX__FILE_WRITE, tmpfile, tunit, 0, .outfile_a);
+
+    IF NOT(.status)
+    THEN
+	BEGIN
+    	    TRACE ('  MLF: Error opening qp temp file: !XL.', .STATUS);
+	FREE_STRINGS (tmpfile);			!Deallocate string memory
+	RETURN (.status);
+	END;
+
+    dptr = big_buffer;				!Set destination pointer
+    status = SS$_NORMAL;			!Assume success status
+
+    WHILE MX_FILE_READ (.unit, instr) DO 	!Read a record in
+	BEGIN
+
+	len = .instr [DSC$W_LENGTH];
+	sptr = .instr [DSC$A_POINTER];
+
+	IF (.len GTRU 0)			!If any characters were read
+	THEN
+	    BEGIN
+	    !
+	    !  According to RFC1341, any trailing blanks in the file
+	    !  were incorrectly added by a gateway, so remove any
+	    !  trailing blanks.
+	    !
+	    sptr = CH$PLUS(.sptr, .len - 1);	!Point to last character
+	    DECR i FROM .len TO 1 DO		!Work backwards until no
+		BEGIN				!... more chars or a non-blank
+		IF (CH$RCHAR(.sptr) NEQU %C' ')	!... is found
+		THEN EXITLOOP;
+		sptr = .sptr - 1;
+		END;
+
+	    !
+	    !  Calculate new length and reset pointer.
+	    !
+	    len = CH$DIFF(.sptr, .instr [DSC$A_POINTER]) + 1;
+	    sptr = .instr [DSC$A_POINTER];
+	    END;
+
+	soft_break = 0;
+	DECR i FROM .len TO 1 DO		!For each character read....
+	    BEGIN
+	    c = CH$RCHAR_A (sptr);		!Read first character
+	    x = 0;
+	    IF (.c EQLU %C'=')
+	    THEN
+		SELECTONE .i OF
+		    SET
+		    !
+		    !  If "=" is last character on line, then we have
+		    !  a "soft break" (or continued line).
+		    !
+		    [1]	:
+			soft_break = 1;
+		    !
+		    !  If there is only one character left after the
+		    !  "=", make sure it's another "=", otherwise we
+		    !  have an invalidly encoded message.  If it is,
+		    !  then go ahead and finish up the processing now.
+		    !
+		    [2] :
+			BEGIN
+			IF CH$RCHAR (.sptr) NEQU %C'='
+			THEN
+			    status = SS$_ABORT		!Not enough digits!
+			ELSE
+			    BEGIN			!Last one is "=", so
+			    c = %C'=';			!... fake the end of
+			    i = .i - 1;			!... loop
+			    END;
+			END;
+		    !
+		    !  Found a "=xx" representation of a character, where
+		    !  "xx" is a two-digit hexadecimal number.  Convert
+		    !  the sequence to the character specified by "xx".
+		    !
+		    [OTHERWISE] :
+			BEGIN
+			c = 0;				!Start with no character
+			INCR j FROM 1 TO 2 DO
+			    BEGIN
+			    z = CH$RCHAR_A (sptr);	!Read first hex digit
+			    i = .i - 1;
+			    IF (.z EQLU %C'=')
+			    THEN
+				BEGIN
+				c = %C'=';
+				EXITLOOP;
+				END;
+			    IF (.z GEQU %C'a')		!Lowercase?
+			    THEN
+				z = .z - %C'a' + %C'A';
+			    IF NOT(CH$FAIL(CH$FIND_CH (16,
+					UPLIT('0123456789ABCDEF'), .z)))
+			    THEN
+				BEGIN
+				IF (.z GEQU %C'A')
+				THEN
+				    z = .z - 55		!Make it 10, 11, etc.
+				ELSE
+				    z = .z - %C'0';	!Make it 0, 1, etc.
+				IF (.j EQLU 1)		!First iteration is
+				THEN			!... "sixteens" digit
+				    c = .z * 16		!...
+				ELSE			!Second is "ones" digit
+				    c = .c + .z;	!...
+				END
+			    ELSE
+				status = SS$_ABORT;	!Invalid hex char
+			    END;
+			END;
+		    TES;
+
+	    IF (.status) AND NOT(.soft_break)
+	    THEN
+		BEGIN
+		CH$WCHAR_A (.c, dptr);
+		!
+		!  See if output block is full
+		!
+		IF .status AND (CH$DIFF(.dptr, big_buffer) EQLU %ALLOCATION (big_buffer))
+		THEN
+		    BEGIN
+    	    	    	LOCAL dsc : BLOCK [DSC$K_S_BLN,BYTE];
+    	    	    INIT_SDESC (dsc, CH$DIFF (.dptr, big_buffer), big_buffer);
+    	    	    status = MX_FILE_WRITE (.tunit, dsc);
+		    dptr = big_buffer;		!Reset destination pointer
+		    END;
+		END;
+
+	    END;	!DECR i FROM .len TO 1
+
+	IF (.status AND NOT(.soft_break))	!Check for big_buffer overflow
+	THEN
+	    BEGIN
+    	    LOCAL dsc : BLOCK [DSC$K_S_BLN,BYTE];
+    	    INIT_SDESC (dsc, CH$DIFF (.dptr, big_buffer), big_buffer);
+    	    status = MX_FILE_WRITE (.tunit, dsc);
+	    dptr = big_buffer;		!Reset destination pointer
+	    END
+	ELSE
+	    soft_break = 0;
+
+	IF NOT(.status)
+	THEN
+	    BEGIN
+	    TRACE ('  MLF: QP error (invalid char) !XL.', .STATUS);
+	    EXITLOOP;
+	    END;
+
+    END;	!WHILE ($GET....
+
+
+    IF .status THEN
+    BEGIN
+    	MX_FILE_CLOSE (.tunit);
+    	MX_FILE_CLOSE (.unit);
+    	status = MX_FILE_OPEN (MX__FILE_READ, .outfile_a, .unit_a);
+    END
+    ELSE
+    BEGIN
+    	MX_FILE_CLOSE (.tunit, 1);
+    	STR$COPY_DX (.outfile_a, %ASCID'');
+    END;
+
+    FREE_STRINGS (tmpfile, instr);
+
+    .status				!Return condition
+
+END;
+
+END
+ELUDOM

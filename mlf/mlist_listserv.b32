@@ -1,0 +1,400 @@
+%TITLE 'MLIST_LISTSERV'
+MODULE MLIST_LISTSERV (IDENT='V1.9',
+    	ADDRESSING_MODE (EXTERNAL=LONG_RELATIVE, NONEXTERNAL=LONG_RELATIVE)) =
+BEGIN
+!++
+! FACILITY: 	    MX_MLF delivery agent
+!
+! ABSTRACT: 	    Routines for handling LISTSERV emulation commands.
+!
+! MODULE DESCRIPTION:
+!
+!   This module contains routines for handling mailing lists.
+!
+! AUTHOR:   	    M. Madison
+!
+! Copyright (c) 2008, Matthew Madison.
+! 
+! All rights reserved.
+! 
+! Redistribution and use in source and binary forms, with or without
+! modification, are permitted provided that the following conditions
+! are met:
+! 
+!     * Redistributions of source code must retain the above
+!       copyright notice, this list of conditions and the following
+!       disclaimer.
+!     * Redistributions in binary form must reproduce the above
+!       copyright notice, this list of conditions and the following
+!       disclaimer in the documentation and/or other materials provided
+!       with the distribution.
+!     * Neither the name of the copyright owner nor the names of any
+!       other contributors may be used to endorse or promote products
+!       derived from this software without specific prior written
+!       permission.
+! 
+! THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
+! "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
+! LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
+! A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
+! OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
+! SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
+! LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
+! DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
+! THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
+! (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
+! OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+!
+! CREATION DATE:    25-OCT-1991
+!
+! MODIFICATION HISTORY:
+!
+!   25-OCT-1991	V1.0	Madison	    Initial coding.
+!   04-NOV-1991	V1.0-1	Madison	    Wasn't closing msg_text file.
+!   21-NOV-1991	V1.0-2	Madison	    FROMADR getting freed at wrong point.
+!   04-DEC-1991	V1.1	Madison	    Handle source routed froms better.
+!   05-MAR-1992	V1.2	Madison	    New MLE flags.
+!   28-Oct-1992 V1.3	Munroe	    Add QUIT command.
+!   17-MAR-1993 V1.4	Goatley     Add NOTIFY to ADD & REMOVE to match docs.
+!   27-JUL-1993 V1.5	Goatley     Add missing RETURN for bad From: address.
+!				    Add dummy MLST for bad From: address.
+!   10-FEB-1994 V1.6	Goatley     Modify to work with FLQ V2.
+!   14-JAN-1997	V1.7	Madison	    Eliminate MDMLIB.
+!   01-SEP-1997	V1.7-1	Madison	    Fix a couple of memory leaks.
+!    4-SEP-1997 V1.7-2	Goatley     Add "soft" quit to ignore mail sigs, etc.
+!   15-SEP-1997 V1.7-3	Goatley     Ooops!  Allow whitespace in "soft" checks.
+!   30-OCT-1997 V1.7-4	Goatley     Add new param to MLIST_PROCESS_CMD call.
+!   14-JUL-1998	V1.7-5	Madison	    Remove unused WRITE_INFO reference.
+!   13-NOV-1999	V1.8	Madison	    Handle quoted-printable messages, add parity
+!   	    	    	    	    with -request interface.
+!   14-MAR-2001 V1.8-1  Madison     Remove dummy MLST, which was causing an ACCVIO.
+!   15-FEB-2002 V1.9    Madison     Additional cleanup, fix for 0 unit close.
+!--
+    LIBRARY 'SYS$LIBRARY:STARLET';
+    LIBRARY 'MX_SRC_COMMON:FLQ';
+    LIBRARY 'MX_SRC_COMMON:MX';
+    LIBRARY 'MX_SRC_COMMON:AGENT';
+    LIBRARY 'MX_SRC_COMMON:MX_LCLDEFS';
+    LIBRARY 'MLF';
+
+    FORWARD ROUTINE
+    	LIST_CTRL_LISTSERV;
+
+    EXTERNAL ROUTINE
+    	READ_MAILING_LIST,
+    	WRITE_MAILING_LIST,
+    	PARSE_LISTSERV_CMD,
+    	FORWARD_MESSAGE,
+    	MLIST_PROCESS_CMD,
+    	MLIST_ERROR,
+    	MLIST_CTRL_ERROR,
+    	MLF_OPEN_MSG_TEXT,
+    	G_HAT (MX_FILE_READ, MX_FILE_CLOSE, MEM_FREEMLE),
+    	G_HAT (QUOTE_STRING, WRITE_HDRS, FORMAT_HDR,
+    	    PARSE_MBOX, PARSE_ADDRLIST, COPY_FILE, MX_VERSION,
+    	    OPEN_MSG_TEXT, VERIFY_PHRASE, PARSE821, FORMAT821),
+    	G_HAT (STR$COPY_R, STR$CASE_BLIND_COMPARE, STR$APPEND,
+    	    STR$CONCAT, STR$PREFIX, STR$APPEND, STR$UPCASE,
+    	    STR$COMPARE_EQL, STR$COPY_DX, STR$DUPL_CHAR,
+    	    LIB$SYS_FAO, LIB$FIND_FILE, LIB$FIND_FILE_END, LIB$DELETE_FILE,
+    	    STR$TRIM, LIB$RENAME_FILE, LIB$GET_VM, LIB$FREE_VM);
+
+    EXTERNAL
+    	MLISTS	    : QUEDEF,
+    	SYSUSERS    : QUEDEF,
+    	CONFIG	    : CFGDEF;
+
+    TRACE_DECLARATIONS (EXTERNAL);
+
+%SBTTL 'LIST_CTRL_LISTSERV'
+GLOBAL ROUTINE LIST_CTRL_LISTSERV (QCTX, QENT_A, SENDER_A, HDRQ_A) = 
+BEGIN
+!++
+! FUNCTIONAL DESCRIPTION:
+!
+!   Processes LISTSERV-compatible control messages.
+!
+!   	SUBSCRIBE or JOIN
+!   	ADD addrspec	    	(from list owner or system user)
+!   	UNSUBSCRIBE or SIGNOFF
+!   	REMOVE addrspec	    	(from list owner or system user)
+!   	REVIEW
+!
+!   If the control message is not one of the recognized types, the
+!   message is passed verbatim to the list owner(s).
+!
+!   For LISTSERV compatibility, SUBSCRIBE and SIGNOFF can take the
+!   list name (only when sent to listserv@node).
+!
+! RETURNS:  	cond_value, longword (unsigned), write only, by value
+!
+! PROTOTYPE:
+!
+!   LIST_CTRL_LISTSERV
+!
+! IMPLICIT INPUTS:  None.
+!
+! IMPLICIT OUTPUTS: None.
+!
+! COMPLETION CODES:
+!
+!   SS$_NORMAL:	    	normal successful completion.
+!
+! SIDE EFFECTS:
+!
+!   None.
+!--
+    BIND
+    	QENT	= .QENT_A   	: QENTDEF,
+    	SENDER	= .SENDER_A 	: BLOCK [,BYTE],
+    	HDRQ	= .HDRQ_A   	: QUEDEF;
+
+    LOCAL
+    	MLST	: VOLATILE REF MLSTDEF,
+    	TMPQ	: QUEDEF,
+    	TMPQ2	: QUEDEF,
+    	RTEQ	: QUEDEF,
+    	MLSTQ	: QUEDEF,
+    	FROMHDR	: REF TXTDEF,
+    	FROMADR	: REF TXTDEF,
+    	FROMA2	: REF TXTDEF,
+    	TXT 	: REF TXTDEF,
+    	MLE 	: REF MLEDEF,
+    	STR 	: BLOCK [DSC$K_S_BLN,BYTE],
+    	STR2	: BLOCK [DSC$K_S_BLN,BYTE],
+    	MLNAME	: BLOCK [DSC$K_S_BLN,BYTE],
+    	CMDSTR	: BLOCK [DSC$K_S_BLN,BYTE],
+    	CMDPARMS: BLOCK [DSC$K_S_BLN,BYTE],
+    	FROMSTR	: BLOCK [DSC$K_S_BLN,BYTE],
+    	DOMP	: BLOCK [DSC$K_S_BLN,BYTE],
+    	LCLP	: BLOCK [DSC$K_S_BLN,BYTE],
+    	NAME	: BLOCK [DSC$K_S_BLN,BYTE],
+    	qpfile	: BLOCK [DSC$K_S_BLN,BYTE],
+        sdsc    : BLOCK [DSC$K_S_BLN,BYTE],
+    	NEWENT	: QENTDEF,
+	NOTIFY,
+    	CMDSTAT,
+    	CMDCODE,
+    	CHANGED,
+    	UNIT,
+	valid,
+	softquit,
+	first_char,
+    	flags, sflags,
+    	STATUS;
+
+    INIT_DYNDESC (STR, STR2, FROMSTR, DOMP, LCLP, NAME, CMDSTR, CMDPARMS, MLNAME, qpfile);
+    INIT_QUEUE (TMPQ, MLSTQ, TMPQ2, RTEQ);
+
+    FROMHDR = .HDRQ [QUE_L_HEAD];
+    WHILE .FROMHDR NEQA HDRQ [QUE_L_HEAD] AND .FROMHDR [TXT_W_CODE ] NEQ MX_K_HDR_FROM DO
+        FROMHDR = .FROMHDR [TXT_L_FLINK];
+
+    IF .FROMHDR EQLA HDRQ [QUE_L_HEAD] THEN
+    BEGIN
+    	TRACE ('  LIST_CTRL_LISTERV:  No From: header in message.');
+    	MLIST_ERROR (0, %ASCID'no From: header in message');
+    	RETURN SS$_NORMAL;
+    END;
+    INIT_SDESC (sdsc, .fromhdr [TXT_W_LEN], fromhdr [TXT_T_TEXT]);
+    STATUS = PARSE_ADDRLIST (sdsc, TMPQ, 1);
+    IF .STATUS THEN PARSE_ADDRLIST (sdsc, TMPQ2, 0)
+    ELSE
+    BEGIN
+        LOCAL cp, diff;
+        cp = CH$FIND_CH (.fromhdr [TXT_W_LEN], fromhdr [TXT_T_TEXT], %C'<');
+        IF NOT CH$FAIL (.cp) THEN
+        BEGIN
+            diff = CH$DIFF (.cp, fromhdr [TXT_T_TEXT]);
+            INIT_SDESC (sdsc, .fromhdr [TXT_W_LEN]-.diff, .cp);
+    	    STATUS = PARSE_ADDRLIST (sdsc, TMPQ, 1);
+    	    IF .STATUS THEN PARSE_ADDRLIST (sdsc, TMPQ2, 0);
+    	END;
+    END;
+    IF NOT .STATUS OR .TMPQ [QUE_L_HEAD] EQLA TMPQ [QUE_L_HEAD] THEN
+    BEGIN
+    	TRACE ('  LIST_CTRL_LISTSERV:  -- From: address invalid!!');
+    	MLIST_ERROR (0, %ASCID'invalid From: header in message');
+	RETURN SS$_NORMAL;
+    END
+    ELSE
+    BEGIN
+    	REMQUE (.TMPQ [QUE_L_HEAD], FROMADR);
+    	REMQUE (.TMPQ2 [QUE_L_HEAD], FROMA2);
+    	WHILE NOT REMQUE (.TMPQ [QUE_L_HEAD], TXT) DO FREETXT (TXT);
+    	WHILE NOT REMQUE (.TMPQ2 [QUE_L_HEAD], TXT) DO FREETXT (TXT);
+    	INIT_SDESC (SDSC, .FROMA2 [TXT_W_LEN], FROMA2 [TXT_T_TEXT]);
+    	IF PARSE821 (SDSC, RTEQ, LCLP, DOMP) THEN
+    	BEGIN
+    	    INIT_SDESC (SDSC, .FROMADR [TXT_W_LEN], FROMADR [TXT_T_TEXT]);
+    	    PARSE_MBOX (SDSC, STR, STR, NAME)
+    	END
+    	ELSE
+    	BEGIN
+    	    INIT_SDESC (SDSC, .FROMADR [TXT_W_LEN], FROMADR [TXT_T_TEXT]);
+    	    PARSE_MBOX (SDSC, LCLP, DOMP, NAME);
+    	END;
+    	IF .RTEQ [QUE_L_HEAD] NEQA RTEQ THEN
+    	BEGIN
+    	    FORMAT821 (RTEQ, LCLP, DOMP, FROMSTR);
+    	    WHILE NOT REMQUE (.RTEQ [QUE_L_HEAD], TXT) DO FREETXT (TXT);
+    	END
+    	ELSE STR$CONCAT (FROMSTR, LCLP, %ASCID'@', DOMP);
+    	VERIFY_PHRASE (NAME, NAME);
+    	FREETXT (FROMADR);
+    	FREETXT (FROMA2);
+    END;
+ 
+    TRACE ('  LIST_CTRL_LISTSERV:  Message is from: !AS', FROMSTR);
+
+!
+!  There is some "magic" here.  To try to clarify the error messages
+!  generated by mail signatures ("unknown command: xxxx"), etc., this
+!  code will exit with QUIT is found, when an invalid line is
+!  found after a blank line, or when a line beginning with a non-alphabetic
+!  character is found.  This should catch most mail signatures, etc.,
+!  while still allowing blank lines between multiple valid commands.
+!
+    valid = 0;		!Assume no valid commands
+    softquit = 0;
+    STATUS = MLF_OPEN_MSG_TEXT (QENT, UNIT, .hdrq_a, qpfile);
+    IF NOT .STATUS THEN UNIT = 0
+    ELSE WHILE 1 DO
+    BEGIN
+    	WHILE 1 DO
+    	BEGIN
+    	    IF .UNIT NEQ 0 THEN STATUS = MX_FILE_READ (.UNIT, STR);
+    	    IF NOT .STATUS THEN EXITLOOP;
+    	    STR$TRIM (STR, STR);
+	    IF (.str [DSC$W_LENGTH] GTR 0)
+	    THEN
+		EXITLOOP
+	    ELSE
+		softquit = 1;		!Found a blank line, set "soft" QUIT
+    	END;
+    	IF NOT .STATUS THEN EXITLOOP;
+
+	!
+	!  Get the first character to be sure it's alphabetic, but skip
+	!  over any whitespace at the beginning of the line.
+	!
+	first_char = 0;
+	BEGIN
+	    LOCAL ptr : REF VECTOR[,BYTE];
+	    ptr = .str [DSC$A_POINTER];
+	    INCR i FROM 0 TO .str [DSC$W_LENGTH]-1 DO
+		BEGIN
+		first_char = .ptr [.i];
+		IF (.first_char NEQU %CHAR(32) AND
+		    .first_char NEQU %CHAR(9))
+		THEN EXITLOOP;
+		END;
+	END;
+
+	!
+	!  If line doesn't begin with alphabetic character, then force
+	!  a "soft" quit.
+	!
+	IF .first_char NEQU 0 AND
+	   ((.first_char LSSU %C'A') OR
+	   ((.first_char GTRU %C'Z') AND
+	    (.first_char LSSU %C'a')) OR
+	    (.first_char GTRU %C'z'))
+	THEN
+	    BEGIN
+	    status = 0;
+	    softquit = 1;
+	    END
+	ELSE
+	    !
+	    !  Here, line begins with alphabetic character, so go parse it.
+	    !
+	    BEGIN
+	    TRACE ('  LIST_CTRL_LISTSERV: command is: !AS', STR);
+	    FREE_STRINGS (CMDSTR, MLNAME, CMDPARMS);
+	    STATUS = PARSE_LISTSERV_CMD (STR, CMDCODE, NOTIFY, MLNAME, CMDSTR, CMDPARMS,
+    	    	    	    	    	 flags, sflags);
+	    IF .CMDCODE EQL MLCMD__UNKNOWN THEN STATUS = 0;
+	    IF .CMDCODE EQL MLCMD__QUIT THEN EXITLOOP ;
+	    END;
+
+	valid = .valid OR (.status AND 1);	!Any valid commands?
+
+	IF NOT(.status) AND		!Invalid command
+	   (.softquit) AND		!... following a blank line
+	   (.valid)			!... and at least one valid command
+	THEN
+	    BEGIN
+    	    TRACE ('  LIST_CTRL_LISTSERV:  Invalid line, skipping rest.');
+    	    LIB$SYS_FAO (%ASCID'found an invalid line, rest of this message ignored: !AS', 0, cmdstr, str);
+    	    MLIST_ERROR (0, CMDSTR);
+    	    STATUS = 0;
+	    EXITLOOP;
+	    END;
+
+	softquit = 0;		!Ignore "soft" quit now
+
+    	IF .STATUS THEN
+    	BEGIN
+    	    IF .MLNAME [DSC$W_LENGTH] GTR 0 THEN
+    	    BEGIN
+    	    	MLST = .MLISTS [QUE_L_HEAD];
+    	    	WHILE .MLST NEQA MLISTS [QUE_L_HEAD] DO
+    	    	BEGIN
+    	    	    STR$COPY_R (STR2, MLST [MLST_W_NAME], MLST [MLST_T_NAME]);
+    	    	    IF STR$CASE_BLIND_COMPARE (MLNAME, STR2) EQL 0 THEN EXITLOOP;
+    	    	    MLST = .MLST [MLST_L_FLINK];
+    	    	END;
+    	    	IF .MLST EQLA MLISTS [QUE_L_HEAD] THEN
+    	    	BEGIN
+    	    	    TRACE ('  LIST_CTRL_LISTSERV:  unknown list specified on command.');
+    	    	    LIB$SYS_FAO (%ASCID'unknown list: !AS', 0, STR2, STR);
+    	    	    MLIST_ERROR (0, STR2);
+    	    	    STATUS = 0;
+    	    	END;
+    	    END
+    	    ELSE IF .CMDCODE NEQ MLCMD__HELP AND .CMDCODE NEQ MLCMD__LIST THEN
+    	    BEGIN
+    	    	TRACE ('  LIST_CTRL_LISTSERV:  no list specified.');
+    	    	LIB$SYS_FAO (%ASCID'list name required for !AS command.',
+    	    	    	0, STR, CMDSTR);
+    	    	MLIST_ERROR (0, STR);
+    	    	STATUS = 0;
+    	    END
+    	    ELSE MLST = 0;
+    	END
+    	ELSE
+    	BEGIN
+    	    TRACE ('  LIST_CTRL_LISTSERV:  Unknown command.');
+    	    LIB$SYS_FAO (%ASCID'unknown command: !AS', 0, CMDSTR, STR);
+    	    MLIST_ERROR (0, CMDSTR);
+    	    STATUS = 0;
+    	END;
+
+    	IF .STATUS THEN
+    	BEGIN
+    	    IF .MLST NEQA 0 THEN READ_MAILING_LIST (.MLST, MLSTQ);
+    	    CHANGED = 0;
+    	    MLIST_PROCESS_CMD (.MLST, MLSTQ, .CMDCODE, CMDPARMS,
+    	    	    FROMSTR, NAME, SENDER, HDRQ, .QCTX, CHANGED, .NOTIFY, .flags, .sflags);
+    	    IF .CHANGED AND .MLST NEQA 0 THEN WRITE_MAILING_LIST (.MLST, MLSTQ);
+    	END;
+
+    	WHILE NOT REMQUE (.MLSTQ [QUE_L_HEAD], MLE) DO MEM_FREEMLE (MLE);
+    	WHILE NOT REMQUE (.TMPQ [QUE_L_HEAD], TXT) DO FREETXT (TXT);
+
+    END;  ! iterate through all lines in message
+
+    IF .UNIT NEQU 0 THEN
+        MX_FILE_CLOSE (.UNIT);
+    UNIT = 0;
+
+    IF .qpfile [DSC$W_LENGTH] NEQ 0 THEN LIB$DELETE_FILE (qpfile);
+    FREE_STRINGS (STR, STR2, DOMP, LCLP, NAME, FROMSTR, CMDSTR, CMDPARMS, MLNAME, qpfile);
+
+    SS$_NORMAL
+
+END; ! LIST_CTRL_LISTSERV
+
+END
+ELUDOM

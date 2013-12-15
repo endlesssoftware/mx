@@ -1,0 +1,272 @@
+%TITLE 'FORWARD_MESSAGE'
+MODULE FORWARD_MESSAGE (IDENT='V1.10',
+    	ADDRESSING_MODE (EXTERNAL=LONG_RELATIVE, NONEXTERNAL=LONG_RELATIVE)) =
+BEGIN
+!++
+! FACILITY: 	    MX_MLF agent
+!
+! ABSTRACT: 	    Routines for forwarding messages.
+!
+! MODULE DESCRIPTION:
+!
+!   This module contains routine FORWARD_MESSAGE, which forwards a message
+!   to one or more users.
+!
+! AUTHOR:   	    M. Madison
+!
+! Copyright (c) 2008, Matthew Madison.
+! 
+! All rights reserved.
+! 
+! Redistribution and use in source and binary forms, with or without
+! modification, are permitted provided that the following conditions
+! are met:
+! 
+!     * Redistributions of source code must retain the above
+!       copyright notice, this list of conditions and the following
+!       disclaimer.
+!     * Redistributions in binary form must reproduce the above
+!       copyright notice, this list of conditions and the following
+!       disclaimer in the documentation and/or other materials provided
+!       with the distribution.
+!     * Neither the name of the copyright owner nor the names of any
+!       other contributors may be used to endorse or promote products
+!       derived from this software without specific prior written
+!       permission.
+! 
+! THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
+! "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
+! LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
+! A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
+! OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
+! SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
+! LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
+! DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
+! THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
+! (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
+! OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+!
+! CREATION DATE:    15-DEC-1989
+!
+! MODIFICATION HISTORY:
+!
+!   15-DEC-1989	V1.0	Madison	    Initial coding.
+!   21-DEC-1989	V1.0-1	Madison	    Added multiple-user support (for lists).
+!   02-JAN-1990	V1.0-2	Madison	    Fixed FORWARD_ERROR call problem.
+!   22-JAN-1990	V1.1-3	Madison	    Make Resent-From a bit more accurate.
+!   04-APR-1990	V1.2-4	Madison	    Add debug/trace.
+!   07-FEB-1991	V1.3	Madison	    Use new COPY_FILE routine.
+!   22-OCT-1991	V1.4	Madison	    Use RCPTDEF structure, MSG_TEXT FID.
+!   15-NOV-1991	V1.4-1	Madison	    New MEM RCPT rtns.
+!   13-MAR-1992	V1.4-2	Madison	    Ditch the resent- headers stuff.
+!   10-FEB-1994 V1.5	Goatley     Modify to work with FLQ V2.
+!   27-FEB-1994	V1.6	Madison	    Limit number of recipients per message to 100.
+!   24-SEP-1996 V1.6-1  Wing        Limit max recipients based on logical name
+!   14-JAN-1997	V1.7	Madison	    Eliminate MDMLIB.
+!   02-APR-1997	V1.8	Madison	    MAX_PER_MSG.
+!   26-APR-1997	V1.8-1	Madison	    Carry recipient flags forward.
+!   02-MAY-1997	V1.8-2	Madison	    Eliminate unused VMS_TO_MX declaration.
+!   29-AUG-1997	V1.9	Madison	    RCPT changes.
+!    2-SEP-1997 V1.9-1	Goatley     ua can be null, so handle it.
+!   14-JUL-1998	V1.10	Madison	    Use WRITE_ENVELOPE.
+!--
+    LIBRARY 'SYS$LIBRARY:STARLET';
+    LIBRARY 'MX_SRC_COMMON:FLQ';
+    LIBRARY 'MX_SRC_COMMON:MX';
+    LIBRARY 'MX_SRC_COMMON:AGENT';
+    LIBRARY 'MX_SRC_COMMON:MX_LCLDEFS';
+    LIBRARY 'MLF';
+
+    EXTERNAL LITERAL
+    	MX__FWDLOOP;
+
+    EXTERNAL ROUTINE
+    	FORWARD_ERROR,
+    	G_HAT (WRITE_HDRS, WRITE_ENVELOPE, PARSE_MBOX, COPY_FILE,
+    	    	MEM_GETRCPT, MEM_FREERCPT, MEM_GETTXT, DISPOSE_ENVELOPE),
+    	G_HAT (STR$CONCAT, STR$COPY_DX, STR$APPEND, LIB$CVT_DTB);
+
+    OWN
+    	FWD_MAX;
+
+    EXTERNAL
+    	MLF_INFO    : MLFDEF,
+    	CONFIG	    : CFGDEF;
+
+    TRACE_DECLARATIONS (EXTERNAL);
+
+%SBTTL 'FORWARD_MESSAGE'
+GLOBAL ROUTINE FORWARD_MESSAGE (QCTX, QENT_A, SENDER_A, USR_A, HDRQ_A,
+    	    	    	    	    FWDQUE_A, MAX_PER_MSG) = 
+BEGIN
+!++
+! FUNCTIONAL DESCRIPTION:
+!
+!   Forwards a mail message.  If the message has already been resent from
+!   this user, the message is returned to sender with a loop-detection
+!   error message.
+!
+! RETURNS:  	cond_value, longword (unsigned), write only, by value
+!
+! PROTOTYPE:
+!
+!   FORWARD_MESSAGE  qctx, qent, sender, usr, hdrq, fwdque, max_per_msg
+!
+! IMPLICIT INPUTS:  None.
+!
+! IMPLICIT OUTPUTS: None.
+!
+! COMPLETION CODES:
+!
+!   SS$_NORMAL:	    	normal successful completion.
+!
+! SIDE EFFECTS:
+!
+!   None.
+!--
+    BUILTIN
+    	ACTUALCOUNT;
+
+    BIND
+    	QENT	= .QENT_A   	    	: QENTDEF,
+    	SENDER	= .SENDER_A 	    	: BLOCK [,BYTE],
+    	USR 	= .USR_A    	    	: RCPTDEF,
+    	ua  	= .usr [RCPT_A_ADDR]	: TXTDEF,
+    	HDRQ	= .HDRQ_A   	    	: QUEDEF,
+    	FWDQUE	= .FWDQUE_A 	    	: QUEDEF;
+
+    LOCAL
+    	NEWENT	: QENTDEF,
+    	SDSC	: BLOCK [DSC$K_S_BLN,BYTE],
+    	STR 	: BLOCK [DSC$K_S_BLN,BYTE],
+    	LCLP	: BLOCK [DSC$K_S_BLN,BYTE],
+    	DOMP	: BLOCK [DSC$K_S_BLN,BYTE],
+    	TXT 	: REF TXTDEF,
+    	FWDUSR	: REF RCPTDEF,
+    	R   	: REF RCPTDEF,
+    	envl	: ENVLDEF,
+    	HDRCT,
+    	COUNT,
+    	STATUS;
+
+    INIT_DYNDESC (STR, LCLP, DOMP);
+
+    SDSC [DSC$B_DTYPE] = DSC$K_DTYPE_T;
+    SDSC [DSC$B_CLASS] = DSC$K_CLASS_S;
+
+    HDRCT = 0;
+
+    CH$FILL (%CHAR (0), ENVL_S_ENVLDEF, envl);
+    envl [ENVL_V_ORIGIN] = 1;
+    envl [ENVL_L_ORIGIN] = MX_K_ORG_LOCAL;
+    envl [ENVL_V_FROMADR] = 1;
+    envl [ENVL_A_FROMADR] = MEM_GETTXT (.sender [DSC$W_LENGTH], .sender [DSC$A_POINTER]);
+    INIT_QUEUE (envl [ENVL_Q_RCPTQUE]);
+    IF ua NEQA 0 THEN
+    BEGIN
+    	envl [ENVL_V_ORGSENDER] = 1;
+    	envl [ENVL_A_ORGSENDER] = MEM_GETTXT (.ua [TXT_W_LEN], ua [TXT_T_TEXT]);
+    END;
+
+    FWDUSR = .FWDQUE [QUE_L_HEAD];
+
+    WHILE (.FWDUSR NEQA FWDQUE) DO
+    BEGIN
+    	FLQ_INIT_QENT (NEWENT);
+    	NEWENT [QENT_L_STATUS] = FLQ_K_STINP;
+    	NEWENT [QENT_V_LOCK] = 1;
+    	newent [QENT_L_DSTPRC] = FLQ_K_MX_ROUTER;
+    	newent [QENT_L_ORIGIN] = MX_K_ORG_LOCAL;
+    	STATUS = FLQ_ADD (QCTX, NEWENT);
+    	IF NOT .STATUS THEN
+    	BEGIN
+    	    TRACE ('  FORWARD_MESSAGE: Sts=!XL on adding queue entry.');
+    	    FORWARD_ERROR (USR, FWDQUE, .STATUS);
+    	    INCR I FROM 1 TO .HDRCT DO
+    	    BEGIN
+    	    	REMQUE (.HDRQ [QUE_L_HEAD], TXT);
+    	    	FREETXT (TXT);
+    	    END;
+       	    RETURN .STATUS;
+    	END;
+
+    	TRACE ('  FORWARD_MESSAGE:  Forwarding queue entry number=!UL',
+    	    .NEWENT [QENT_L_ENTNUM]);
+
+    	WRITE_HDRS (.QCTX, NEWENT, %ASCID'HDR_INFO', HDRQ);
+
+    	IF .MAX_PER_MSG EQL -1 THEN MAX_PER_MSG = .MLF_INFO [MLF_L_MAXFWD];
+
+        TRACE('  FORWARD_MESSAGE:  Max recipients per message=!UL', .MAX_PER_MSG);
+        
+    	WHILE (.FWDUSR NEQA FWDQUE [QUE_L_HEAD]) AND 
+    	    	(.MAX_PER_MSG EQL 0 OR (.envl [ENVL_L_RCPTCOUNT] LSSU .MAX_PER_MSG)) DO
+    	BEGIN
+    	    BIND
+    	    	fa  = .fwdusr [RCPT_A_ADDR] 	: TXTDEF;
+    	    SDSC [DSC$W_LENGTH] = .fa [TXT_W_LEN];
+    	    SDSC [DSC$A_POINTER] = fa [TXT_T_TEXT];
+    	    TRACE ('  FORWARD_MESSAGE: Forwarding to: !AS', SDSC);
+    	    MEM_GETRCPT (R);
+    	    R [RCPT_L_FLAGS] = .FWDUSR [RCPT_L_FLAGS];
+    	    IF CH$RCHAR (fa [TXT_T_TEXT]) NEQ %C'<' THEN
+    	    BEGIN
+    	    	STR$CONCAT (STR, %ASCID'<', SDSC, %ASCID'>');
+    	    	r [RCPT_A_ADDR] = MEM_GETTXT (.str [DSC$W_LENGTH], .str [DSC$A_POINTER]);
+    	    END
+    	    ELSE
+    	    	r [RCPT_A_ADDR] = MEM_GETTXT (.fa [TXT_W_LEN], fa [TXT_T_TEXT]);
+    	    INSQUE_TAIL (.r, envl [ENVL_Q_RCPTQUE]);
+    	    envl [ENVL_L_RCPTCOUNT] = .envl [ENVL_L_RCPTCOUNT] + 1;
+    	    FWDUSR = .FWDUSR [RCPT_L_FLINK];
+    	END;
+
+    	PARSE_MBOX (SENDER, LCLP, DOMP);
+    	STR$CONCAT (STR, LCLP, %ASCID'@', DOMP);
+
+    	STORE_ORGADR (newent, STR);
+
+    	WRITE_envelope (.QCTX, NEWENT, %ASCID'SRC_INFO', envl);
+    	WHILE NOT REMQUE_HEAD (envl [ENVL_Q_RCPTQUE], R) DO
+    	    MEM_FREERCPT (R);
+
+    	FLQ_MAKE_FSPEC (.NEWENT [QENT_L_ENTNUM], %ASCID'MSG_TEXT', DOMP);
+    	IF CH$EQL (MXQ_S_FILEID, QENT [MXQ_X_FILEID], 4, UPLIT (0), %CHAR (0)) THEN
+    	BEGIN
+    	    FLQ_MAKE_FSPEC (.QENT [MXQ_L_BACKREF], %ASCID'MSG_TEXT', LCLP);
+    	    STATUS = COPY_FILE (LCLP, DOMP, 0, 0, COUNT);
+    	END
+    	ELSE STATUS = COPY_FILE (0, DOMP, 0, 0, COUNT, QENT [MXQ_X_FILEID]);
+    	IF .STATUS THEN
+    	BEGIN    	
+    	    NEWENT [QENT_L_SIZE] = (.COUNT + .NEWENT [QENT_L_SIZE]) * .envl [ENVL_L_RCPTCOUNT];
+    	    NEWENT [QENT_L_STATUS] = FLQ_K_STRDY;
+    	END
+    	ELSE
+    	BEGIN
+    	    FORWARD_ERROR (USR, FWDQUE, .STATUS);
+    	    NEWENT [QENT_L_STATUS] = FLQ_K_STCAN;
+    	END;
+
+    	FLQ_UPDATE (QCTX, NEWENT);
+
+    	envl [ENVL_L_RCPTCOUNT] = 0;
+
+    END;
+
+    DISPOSE_ENVELOPE (envl);
+
+    INCR I FROM 1 TO .HDRCT DO
+    BEGIN
+    	REMQUE (.HDRQ [QUE_L_HEAD], TXT);
+    	FREETXT (TXT);
+    END;
+
+    FREE_STRINGS (STR, LCLP, DOMP);
+
+    SS$_NORMAL
+
+END; ! FORWARD_MESSAGE
+
+END
+ELUDOM    

@@ -1,0 +1,339 @@
+%TITLE 'PARSE_FILESERV_CMD'
+MODULE PARSE_FILESERV_CMD (IDENT='V1.3') =
+BEGIN
+!++
+! FACILITY: 	    MX MLF
+!
+! ABSTRACT: 	    Parses mailing-list processor commands.
+!
+! MODULE DESCRIPTION:
+!
+!
+! AUTHOR:   	    M. Madison
+!
+! Copyright (c) 2008, Matthew Madison.
+! 
+! All rights reserved.
+! 
+! Redistribution and use in source and binary forms, with or without
+! modification, are permitted provided that the following conditions
+! are met:
+! 
+!     * Redistributions of source code must retain the above
+!       copyright notice, this list of conditions and the following
+!       disclaimer.
+!     * Redistributions in binary form must reproduce the above
+!       copyright notice, this list of conditions and the following
+!       disclaimer in the documentation and/or other materials provided
+!       with the distribution.
+!     * Neither the name of the copyright owner nor the names of any
+!       other contributors may be used to endorse or promote products
+!       derived from this software without specific prior written
+!       permission.
+! 
+! THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
+! "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
+! LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
+! A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
+! OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
+! SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
+! LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
+! DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
+! THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
+! (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
+! OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+!
+! CREATION DATE:    10-JAN-1990
+!
+! MODIFICATION HISTORY:
+!
+!   10-JAN-1990	V1.0	Madison	    Initial coding (from PARSE_MLIST_CMD).
+!   16-DEC-1990	V1.1	Madison	    Add GET, INDEX synonyms.
+!   20-MAR-1991	V1.1-1	Madison	    Use MEM routines.
+!   17-Aug-1992 V1.2	Munroe	    Check for real file names.
+!    8-JAN-1993 V1.2-1	Goatley     Add Dick Munroe's patch for QUIT command.
+!   10-JAN-1993 V1.2-2	Goatley     Fix TPARSE table for DIR (optional file).
+!   25-JAN-1993 V1.2-3	Goatley     Added ADDRESS command.
+!   10-MAR-1993 V1.3	Goatley     Modified for AXP.
+!--
+
+    LIBRARY 'SYS$LIBRARY:STARLET';
+    LIBRARY 'SYS$LIBRARY:TPAMAC';
+    LIBRARY 'MX_SRC_COMMON:MX';
+    LIBRARY 'MLF';
+
+    FORWARD ROUTINE
+    	PARSE_FILESERV_CMD,
+    	PFC_STORE,
+    	PFC_STORE_CODE,
+	PFC_STORE_FILESPEC,
+    	PFC_SET_BLANKS;
+
+    EXTERNAL ROUTINE
+    	G_HAT (LIB$TPARSE, STR$UPCASE, MEM_GETTXT);
+
+    MACRO
+    	TPA_A_P1    	=   TPA$C_LENGTH0+00,0,32,0%,
+    	TPA_A_P2    	=   TPA$C_LENGTH0+04,0,32,0%,
+    	TPA_A_P3    	=   TPA$C_LENGTH0+08,0,32,0%,
+    	TPA_A_P4    	=   TPA$C_LENGTH0+12,0,32,0%;
+
+%SBTTL 'State table for PARSE_FILESERV_CMD'
+
+    $INIT_STATE (PFC_STATE, PFC_KEY);
+
+    $STATE (START,
+    	('SENDME', SEND1, PFC_SET_BLANKS),
+    	('GET', SEND1, PFC_SET_BLANKS),
+    	('HELP', TPA$_EXIT, PFC_STORE,,, FSCMD__HELP),
+    	('LIST', LIST1, PFC_SET_BLANKS),
+    	('INDEX', LIST1, PFC_SET_BLANKS),
+    	('DIRECTORY', LIST1, PFC_SET_BLANKS),
+	('ADDRESS', ADDRESS1, PFC_SET_BLANKS),
+	('QUIT', TPA$_EXIT, PFC_STORE_CODE,,, FSCMD__QUIT));
+
+    $STATE (SEND1,
+    	(TPA$_BLANK, SEND1),
+	(TPA$_EOS, TPA$_EXIT, PFC_STORE,,, FSCMD__SEND),	!Allow no args
+	! Make sure a valid VMS file spec if given.
+    	(TPA$_FILESPEC, TPA$_EXIT, PFC_STORE_FILESPEC,,, FSCMD__SEND));
+							! sendme/get valid-vms-file-specification
+    $STATE (LIST1,
+    	(TPA$_BLANK, LIST1),
+	! Make sure either nothing or a valid VMS file spec is given.
+	(TPA$_EOS, TPA$_EXIT, PFC_STORE,,, FSCMD__LIST),	!Allow no args
+	(TPA$_FILESPEC, TPA$_EXIT, PFC_STORE_FILESPEC,,, FSCMD__LIST));
+							! list valid-vms-file-specification
+    $STATE (ADDRESS1,
+	(TPA$_BLANK, ADDRESS1),
+	(TPA$_LAMBDA, TPA$_EXIT, PFC_STORE,,, FSCMD__ADDRESS));
+
+
+%SBTTL 'PARSE_FILESERV_CMD'
+GLOBAL ROUTINE PARSE_FILESERV_CMD (STR_A, CODE_A, TXT_A_A) =
+BEGIN
+!++
+! FUNCTIONAL DESCRIPTION:
+!
+!   Parses a FILESERV command.
+!
+! RETURNS:  	cond_value, longword (unsigned), write only, by value
+!
+! PROTOTYPE:
+!
+!   PARSE_FILESERV_CMD  str, rtq, lcl, dom
+!
+! IMPLICIT INPUTS:  None.
+!
+! IMPLICIT OUTPUTS: None.
+!
+! COMPLETION CODES:
+!
+!   SS$_NORMAL:	    	normal successful completion.
+!
+! SIDE EFFECTS:
+!
+!   None.
+!--
+    BIND
+    	STR 	= .STR_A    : BLOCK [DSC$K_S_BLN,BYTE];
+
+    LITERAL
+    	TPA_C_LENGTH	=   TPA$C_LENGTH0 + 16,
+    	TPA_K_COUNT 	=   TPA$K_COUNT0 + 4;
+
+    LOCAL
+    	TPABLK	: BLOCK [TPA_C_LENGTH,BYTE],
+    	TMP 	: BLOCK [DSC$K_S_BLN,BYTE],
+    	STATUS;
+
+    INIT_DYNDESC (TMP);
+    STR$UPCASE (TMP, STR);
+    TPABLK [TPA$L_COUNT] = TPA_K_COUNT;
+    TPABLK [TPA$L_OPTIONS] = TPA$M_ABBREV;
+    TPABLK [TPA$L_STRINGCNT] = .TMP [DSC$W_LENGTH];
+    TPABLK [TPA$L_STRINGPTR] = .TMP [DSC$A_POINTER];
+    TPABLK [TPA_A_P1] = STR;
+    TPABLK [TPA_A_P2] = .CODE_A;
+    TPABLK [TPA_A_P3] = .TXT_A_A;
+    TPABLK [TPA_A_P4] = .TMP [DSC$A_POINTER];
+
+    STATUS = LIB$TPARSE (TPABLK, PFC_STATE, PFC_KEY);
+
+    IF NOT .STATUS THEN
+    	.CODE_A = FSCMD__UNKNOWN;
+
+    FREE_STRINGS (TMP);
+
+    SS$_NORMAL
+
+END; ! PARSE_FILESERV_CMD
+
+%SBTTL 'PFC_STORE'
+TPA_ROUTINE (PFC_STORE, (OPTIONS, STRINGCNT, STRINGPTR, TOKENCNT,
+    	    TOKENPTR, CHAR, NUMBER, PARAM, STR_A, CODE_A, TXT_A_A,
+    	    STRINGBASE))
+!++
+! FUNCTIONAL DESCRIPTION:
+!
+!   Invoked by TPARSE to store any arguments on the mailing list command.
+!
+! RETURNS:  	cond_value, longword (unsigned), write only, by value
+!
+! PROTOTYPE:
+!
+!   PFC_STORE opt, scnt, sptr, tcnt, tptr, chr, num, par, p1, p2, p3
+!
+! IMPLICIT INPUTS:  None.
+!
+! IMPLICIT OUTPUTS: None.
+!
+! COMPLETION CODES:
+!
+!   SS$_NORMAL:	    	normal successful completion.
+!
+! SIDE EFFECTS:
+!
+!   None.
+!--
+    BIND
+    	STR 	= .STR_A	: BLOCK [,BYTE],
+    	CODE	= .CODE_A,
+    	TXT 	= .TXT_A_A  	: REF TXTDEF;
+ 
+    CODE = .PARAM;
+    IF .STRINGCNT GTR 0 THEN
+    BEGIN
+    	TXT = MEM_GETTXT (.STRINGCNT);
+    	TXT [TXT_W_LEN] = .STRINGCNT;
+    	TXT [TXT_W_CODE] = 0;
+    	CH$MOVE (.STRINGCNT,
+    	    CH$PLUS (.STR [DSC$A_POINTER], CH$DIFF (.STRINGPTR, .STRINGBASE)),
+    	    TXT [TXT_T_TEXT]);
+    END;
+
+    SS$_NORMAL
+
+END; ! PFC_STORE
+
+
+%SBTTL 'PFC_STORE_CODE'
+TPA_ROUTINE (PFC_STORE_CODE, (OPTIONS, STRINGCNT, STRINGPTR, TOKENCNT,
+	    TOKENPTR, CHAR, NUMBER, PARAM, STR_A, CODE_A, TXT_A_A,
+	    STRINGBASE))
+!++
+! FUNCTIONAL DESCRIPTION:
+!
+!   Invoked by TPARSE when only the CODE needs to be saved.
+!
+! RETURNS:  	cond_value, longword (unsigned), write only, by value
+!
+! PROTOTYPE:
+!
+!   PFC_STORE opt, scnt, sptr, tcnt, tptr, chr, num, par, p1, p2, p3
+!
+! IMPLICIT INPUTS:  None.
+!
+! IMPLICIT OUTPUTS: None.
+!
+! COMPLETION CODES:
+!
+!   SS$_NORMAL:	    	normal successful completion.
+!
+! SIDE EFFECTS:
+!
+!   None.
+!--
+BIND
+	STR 	= .STR_A	: BLOCK [,BYTE],
+	CODE	= .CODE_A,
+	TXT 	= .TXT_A_A  	: REF TXTDEF;
+
+     CODE = .PARAM;
+ 
+     SS$_NORMAL
+ 
+END; ! PFC_STORE_CODE
+
+
+%SBTTL 'PFC_STORE_FILESPEC'
+TPA_ROUTINE (PFC_STORE_FILESPEC, (OPTIONS, STRINGCNT, STRINGPTR, TOKENCNT,
+	    TOKENPTR, CHAR, NUMBER, PARAM, STR_A, CODE_A, TXT_A_A,
+	    STRINGBASE))
+!++
+! FUNCTIONAL DESCRIPTION:
+!
+!   Invoked by TPARSE to store any argument that should be a file specification.
+!
+! RETURNS:  	cond_value, longword (unsigned), write only, by value
+!
+! PROTOTYPE:
+!
+!   PFC_STORE opt, scnt, sptr, tcnt, tptr, chr, num, par, p1, p2, p3
+!
+! IMPLICIT INPUTS:  None.
+!
+! IMPLICIT OUTPUTS: None.
+!
+! COMPLETION CODES:
+!
+!   SS$_NORMAL:	    	normal successful completion.
+!
+! SIDE EFFECTS:
+!
+!   None.
+!--
+BIND
+	STR 	= .STR_A	: BLOCK [,BYTE],
+	CODE	= .CODE_A,
+	TXT 	= .TXT_A_A  	: REF TXTDEF;
+
+   CODE = .PARAM;		    ! Return the "type" of the parsed command.
+   IF .TOKENCNT GTR 0
+   THEN
+	BEGIN
+	TXT = MEM_GETTXT (.TOKENCNT);	    ! Allocate memory to hold the token.
+	TXT [TXT_W_LEN] = .TOKENCNT;	    ! The string is TOKENCNT characters long.
+	TXT [TXT_W_CODE] = 0;
+	CH$MOVE (.TOKENCNT, .TOKENPTR, TXT [TXT_T_TEXT]);
+	END;				    ! Move the token into the string.
+
+   SS$_NORMAL
+
+END; ! PFC_STORE_FILESPEC
+
+
+%SBTTL 'PFC_SET_BLANKS'
+TPA_ROUTINE (PFC_SET_BLANKS, (OPTIONS, STRINGCNT, STRINGPTR, TOKENCNT,
+    	    TOKENPTR, CHAR, NUMBER, PARAM, STR_A, CODE_A, TXT_A_A,
+    	    STRINGBASE))
+!++
+! FUNCTIONAL DESCRIPTION:
+!
+!   Invoked by TPARSE to store any arguments on the mailing list command.
+!
+! RETURNS:  	cond_value, longword (unsigned), write only, by value
+!
+! PROTOTYPE:
+!
+!   PFC_SET_BLANKS opt, scnt, sptr, tcnt, tptr, chr, num, par, p1, p2, p3
+!
+! IMPLICIT INPUTS:  None.
+!
+! IMPLICIT OUTPUTS: None.
+!
+! COMPLETION CODES:
+!
+!   SS$_NORMAL:	    	normal successful completion.
+!
+! SIDE EFFECTS:
+!
+!   None.
+!--
+    OPTIONS = .OPTIONS OR TPA$M_BLANKS;
+    SS$_NORMAL
+
+END; ! PFC_SET_BLANKS
+
+END
+ELUDOM

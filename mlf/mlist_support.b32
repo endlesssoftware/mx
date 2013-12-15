@@ -1,0 +1,4816 @@
+%TITLE 'MLIST_SUPPORT'
+MODULE MLIST_SUPPORT (IDENT='V2.11-1',
+	ADDRESSING_MODE (EXTERNAL=LONG_RELATIVE, NONEXTERNAL=LONG_RELATIVE)) =
+BEGIN
+!++
+! FACILITY:     MX_MLF local delivery agent
+!
+! ABSTRACT:     Routines for handling mailing lists.
+!
+! MODULE DESCRIPTION:
+!
+!   This module contains routines for handling mailing lists.
+!
+! AUTHOR:	    M. Madison
+!
+! Copyright (c) 2008, Matthew Madison.
+! 
+! All rights reserved.
+! 
+! Redistribution and use in source and binary forms, with or without
+! modification, are permitted provided that the following conditions
+! are met:
+! 
+!     * Redistributions of source code must retain the above
+!       copyright notice, this list of conditions and the following
+!       disclaimer.
+!     * Redistributions in binary form must reproduce the above
+!       copyright notice, this list of conditions and the following
+!       disclaimer in the documentation and/or other materials provided
+!       with the distribution.
+!     * Neither the name of the copyright owner nor the names of any
+!       other contributors may be used to endorse or promote products
+!       derived from this software without specific prior written
+!       permission.
+! 
+! THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
+! "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
+! LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
+! A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
+! OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
+! SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
+! LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
+! DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
+! THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
+! (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
+! OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+!
+! CREATION DATE:    25-OCT-1991
+!
+! MODIFICATION HISTORY:
+!
+!   25-OCT-1991	V1.0	Madison	    Initial coding.
+!   04-NOV-1991	V1.0-1	Madison	    Support ADD/NOMAIL; better return address.
+!   05-NOV-1991	V1.0-2	Madison	    Fix rcpq problem.
+!   11-NOV-1991	V1.0-3	Madison	    Include Reply-To on all messages.
+!   15-NOV-1991	V1.0-4	Madison	    MEM RCPT rtns.
+!   18-NOV-1991	V1.0-5	Madison	    Wasn't setting MAIL bit on SUBSCRIBEs.
+!   04-DEC-1991	V1.1	Madison	    Wasn't handling source-routes properly.
+!   05-MAR-1992	V1.2	Madison	    New MLE stuff.
+!   13-MAR-1992	V1.2-1	Madison	    Use MAKE_ADDRESS.
+!   16-MAR-1992	V1.2-2	Madison	    Fix access denied message.
+!   20-MAR-1992	V1.2-3	Madison	    Fix NOMAIL bug.
+!   27-APR-1992	V1.2-4	Madison	    Fix mangling of original message headers.
+!    9-JAN-1993 V1.3	Goatley     Add ACCESS processing to CHECK_ACCESS.
+!				    Add ACCESS output to REVIEW. (Dick Munroe)
+!   13-JAN-1993 V1.3-1	Goatley     Add support for list return address.
+!   16-JAN-1993 V1.3-2	Goatley     Remove original "Received:" headers if set.
+!   25-JAN-1993 V1.3-3	Goatley     Added "Sender:", etc., for ListServ
+!    8-FEB-1993 V1.3-4	Goatley     Changed format (again) of .MAILING_LISTs.
+!   17-MAR-1993 V1.4	Goatley     Fix "Postmaster" addr for SRC_INFO.
+!				    Fix ORIGADDR for MLIST_LIST.
+!   18-MAR-1993 V1.4-1	Goatley     Added check for /PRIVATE in MLIST_LIST.
+!   29-APR-1993 V1.4-2	Goatley     Modified to handle new MLE offsets for AXP.
+!   30-APR-1993 V1.4-3	Goatley     Changed ListServ to MXserver.
+!    7-AUG-1993 V1.5	Goatley     Removed ListServ as an option.
+!   14-DEC-1993 V1.5-1	Goatley     Remove original "other" headers if set.
+!   10-JAN-1994 V1.5-2	Goatley     Added global /NOCASE for a list.
+!   10-FEB-1994 V1.6	Goatley     Modify to work with FLQ V2.
+!   24-MAR-1994 V1.6-1	Goatley     Recognize -server like -request.
+!   28-MAR-1994 V1.6-2	Goatley     Add support for owner-listname.
+!   29-MAR-1994 V1.6-3	Goatley     Clean up appearance of ORGADR.
+!   31-MAR-1994 V1.6-4	Goatley     Fix typo.
+!    8-APR-1994 V1.7	Goatley     Add FORWARD_TO_SYSTEM_USERS.
+!   27-FEB-1995 V1.8	Goatley     Added support for /NOCASE on REMOVE, later.
+!   11-SEP-1995 V1.8-1	Goatley	    Added support for -Digest, missing Date:s.
+!				    Add simple check for SUB or UNSUB subjects.
+!   25-OCT-1995 V1.8-2	Goatley     Fix NOREPRO that was broken in V1.8-1.
+!   16-NOV-1995 V1.8-3	Goatley     Don't write digest posts to archives.
+!   10-DEC-1995 V1.8-4	Goatley     Add DENY subscribers, FROM_DAEMON.
+!   28-MAR-1996 V1.9	Goatley	    Use From: in FROM_DAEMON instead of SENDER.
+!   19-JUN-1996 V1.9-1	Goatley     Use list return address to replace Reply-To.
+!   14-JAN-1997	V2.0	Madison	    Eliminate MDMLIB.
+!   02-APR-1997	V2.1	Madison	    max recip per msg.
+!   13-APR-1997	V2.1-1	Madison	    Add X-Date-Warning header when adding Date: header.
+!   26-APR-1997	V2.2	Madison	    Set DSN_FAILURE flag on list recipients;
+!   	    	    	    	    sort mailing list recipients by host name.
+!   02-MAY-1997	V2.3	Madison	    New local address formatter.
+!   03-MAY-1997	V2.4	Goatley	    Add List-* headers, hostname support.
+!    5-MAY-1997 V2.4-1	Goatley     Add support for NOPOST, MLST_V_SS_* flags.
+!    6-MAY-1997 V2.4-2	Goatley	    Don't write List-* headers to archives.
+!    6-MAY-1997 V2.4-3  Madison     Fix use of errors-to as envelope from.
+!    7-MAY-1997 V2.4-4	Goatley     Don't use HOSTNAME in MLIST_LIST (no MLST!).
+!				    Also, use MX__FMT_FROM before STORE_ORGADR.
+!   14-MAY-1997	V2.4-5	Madison	    Retain case of host name in Reply-To header.
+!   20-JUN-1997 V2.4-6	Goatley	    On REVIEW, don't include "<>" in ORGADR.
+!   29-AUG-1997	V2.5	Madison	    Restructured MLEs, RCPTs.
+!   01-SEP-1997	V2.5-1	Madsion	    Bug fixes, memory leak fix.
+!    1-OCT-1997 V2.5-2	Goatley     In FORWARD_TO_LIST, drop some more headers.
+!				    Don't add Sender:, Warnings-To:, Errors-To:
+!				    (as recommended in IETF maillist draft).
+!    2-OCT-1997 V2.5-3	Goatley	    Change wording of removal failure message.
+!    2-OCT-1997 V2.5-4	Goatley     Add ability to CC owner on post failures.
+!				    Also, add support for Subject: prefixes.
+!   30-OCT-1997 V2.5-5	Goatley	    Fix handling of *_SS_* bits in ADD.
+!   28-JUN-1998	V2.6	Maidson	    Add ORCPT information.
+!   14-JUL-1998	V2.7	Madison	    Use WRITE_ENVELOPE.
+!   25-NOV-2000	V2.8	Madison	    Add support for new ignore settings; MODIFY cmd; size limit.
+!   03-DEC-2000	V2.8-1	Madison	    Log an event when dropping a posting.
+!   17-FEB-2001 V2.8-2  Madison     Fix MLIST_ADD call.  Fix ADD so it does case-blind
+!                                   comparisons against subscribers who are set NOCASE.
+!   10-MAR-2001 V2.8-3  Madison     Fix address checks to allow -Digest address.
+!   14-FEB-2002 V2.9    Madison     Subscribe confirmations, text-only checks, review/brief.
+!   24-FEB-2002 V2.9-1  Madison     Increase transaction timeout to 3 days.
+!   02-MAR-2002 V2.10   Madison     Configurable trans timeout; owner notifications;
+!                                   loosened From: check on trans confirmations.
+!   07-APR-2002 V2.11   Madison     Apply rewrite/alias processing to IGNORE=MISSING checks.
+!   11-MAY-2002 V2.11-1 Madison     Fix ACCVIO.
+!--
+    LIBRARY 'SYS$LIBRARY:STARLET';
+    LIBRARY 'MX_SRC_COMMON:FLQ';
+    LIBRARY 'MX_SRC_COMMON:MX';
+    LIBRARY 'MX_SRC_COMMON:AGENT';
+    LIBRARY 'MX_SRC_COMMON:MX_LCLDEFS';
+    LIBRARY 'MX_SRC_COMMON:FIELDS';
+    LIBRARY 'MX_SRC_COMMON:ROUTER';
+    LIBRARY 'MLF';
+
+    FORWARD ROUTINE
+	MAILING_LIST,
+	FROM_DAEMON,
+	FORWARD_TO_SYSTEM_USERS,
+	FORWARD_TO_LIST_OWNER,
+	FORWARD_TO_LIST,
+	CHECK_ACCESS,
+	READ_MAILING_LIST,
+	WRITE_MAILING_LIST,
+	MLIST_ADD,
+	MLIST_REMOVE,
+    	MLIST_MODIFY,
+	MLIST_REVIEW,
+	MLIST_LIST,
+	MLIST_ARCHIVE,
+	MLIST_SET,
+	MLIST_QUERY,
+        MLIST_CREATE_TRANSACTION,
+        MLIST_CONFIRM_TRANSACTION,
+	GET_FROM_ADDR,
+    	add_recipient_sorted : NOVALUE,
+    	header_contains_address,
+        is_text_plain,
+        load_transactions : NOVALUE,
+        mlist_purge_transactions : NOVALUE;
+
+%IF NOT %DECLARED (%QUOTE SS$_NOSUCHOBJECT) %THEN
+    LITERAL SS$_NOSUCHOBJECT = 2696;
+%FI
+%IF NOT %DECLARED (%QUOTE SS$_INVARG) %THEN
+    LITERAL SS$_INVARG = 4042;
+%FI
+
+    _DEF (TRANS)
+        TRANS_L_FLINK   = _LONG,
+        TRANS_L_BLINK   = _LONG,
+        TRANS_Q_CREDT   = _QUAD,
+        TRANS_Q_LASTDT  = _QUAD,
+        TRANS_A_ADDR    = _LONG,
+        TRANS_A_TID     = _LONG,
+        TRANS_A_FSPEC   = _LONG,
+        TRANS_W_MLIST   = _WORD,
+        TRANS_T_MLIST   = _BYTES (MLST_S_NAME)
+    _ENDDEF (TRANS);
+
+    EXTERNAL ROUTINE
+	PARSE_CONF_LINE,
+	FORWARD_MESSAGE,
+	ERROR_ADD_RCPT,
+	MLIST_ERROR,
+	MLIST_CTRL_ERROR,
+	MLIST_NOTIFY_COMPLETE,
+        MLIST_NOTIFY_TRANSACTION,
+	MLIST_SEND_HELP,
+	MLIST_QUERY_REPLY,
+	MLIST_NOTIFY_OWNER,
+        REWRITE, FINDPATH, FINDALIAS,
+    	G_HAT (MX_FILE_OPEN, MX_FILE_READ, MX_FILE_WRITE, MX_FILE_CLOSE, MX_MKDATE),
+	G_HAT (QUOTE_STRING, WRITE_ENVELOPE, WRITE_HDRS, FORMAT_HDR,
+	    PARSE_MBOX, PARSE_ADDRLIST, COPY_FILE, MX_VERSION,
+	    VERIFY_PHRASE, MEM_GETRCPT, MEM_FREERCPT, PARSE821,
+	    FORMAT821, MX_FMT_LCL_ADDR, MEM_GETTXT, MEM_GETMLE, MEM_FREEMLE,
+    	    XTEXT_ENCODE, DISPOSE_ENVELOPE, LOG_EVENT, MAKE_MESSAGE_ID),
+	G_HAT (STR$MATCH_WILD, STR$COPY_R, STR$CASE_BLIND_COMPARE, STR$APPEND,
+	    STR$CONCAT, STR$PREFIX, STR$APPEND, STR$UPCASE, STR$RIGHT,
+	    STR$COMPARE_EQL, STR$COPY_DX, STR$DUPL_CHAR, STR$POSITION,
+	    LIB$SYS_FAO, LIB$FIND_FILE, LIB$FIND_FILE_END, LIB$DELETE_FILE,
+	    STR$TRIM, LIB$RENAME_FILE, LIB$GET_VM, LIB$FREE_VM, LIB$CVT_HTB,
+	    STR$GET1_DX, STR$FREE1_DX, LIB$SUB_TIMES);
+
+    EXTERNAL
+	MLISTS	    : QUEDEF,
+	SYSUSERS    : QUEDEF,
+	CONFIG	    : CFGDEF,
+        shutdown_flag;
+
+    TRACE_DECLARATIONS (EXTERNAL);
+
+    EXTERNAL LITERAL
+	MX__MAILLIST, MX__MLCTRL, MX__LISTOWNER, MX__MAILLISTD, LIB$_NORMAL;
+
+    MACRO
+	str_lowercase (dest) =			!Convert string to lowercase
+	   BEGIN				!... in place
+		LOCAL __destptr : REF $BBLOCK,
+		      __destlen, __c;
+		__destptr = .dest[DSC$A_POINTER];	!Point to string
+		__destlen = .dest[DSC$W_LENGTH];	!Get length
+		WHILE (.__destlen NEQU 0) DO		!Step through string
+		    BEGIN
+		    __c = CH$RCHAR(.__destptr);
+		    IF (.__c GEQU %C'A' AND .__c LEQU %C'Z')
+		    THEN
+			CH$WCHAR_A (.__c + 32, __destptr)
+		    ELSE
+			__destptr = .__destptr + 1;
+		    __destlen = .__destlen - 1;
+		    END;
+	   END
+	%,
+    	pname	= 'MX mailing list processor'%;
+
+    OWN
+        last_tid        : INITIAL (0),
+        transq_loaded   : INITIAL (0),
+        trans_intvl     : VECTOR [2,LONG],
+        trans_deflimit  : VECTOR [2,LONG],
+        last_purge      : VECTOR [2,LONG],
+        transq          : QUEDEF;
+
+    BIND
+	ascid_null_line		= %ASCID'',
+	ascid_r			= %ASCID':R',
+	ascid_w			= %ASCID'W',
+	ascid_e			= %ASCID'E',
+	ascid_d			= %ASCID'D',
+	ascid_lparen		= %ASCID'(',
+	ascid_rparen		= %ASCID')',
+	ascid_colon		= %ASCID':',
+	ascid_comma		= %ASCID',',
+	ascid_space		= %ASCID' ',
+	ascid_space_langle	= %ASCID' <',
+	ascid_langle		= %ASCID'<',
+	ascid_rangle		= %ASCID'>',
+	ascid_comma_space	= %ASCID', ',
+	ascid_nine_spaces	= %ASCID'         ',
+	ascid_atsign		= %ASCID'@',
+	ascid_owner		= %ASCID'owner-',
+	ascid_x_listname	= %ASCID'X-ListName: ',
+	ascid_mxserver		= %ASCID'MXserver',
+	ascid_postmaster	= %ASCID'Postmaster',
+	ascid_hdr_info		= %ASCID'HDR_INFO',
+	ascid_src_info		= %ASCID'SRC_INFO',
+	ascid_mlist_filename	= %ASCID'MX_MLIST_DIR:!AD.MAILING_LIST',
+	ascid_deny		= %ASCID'DENY',
+	ascid_nodeny		= %ASCID'NODENY',
+	ascid_digest		= %ASCID'DIGEST',
+	ascid_nodigest		= %ASCID'NODIGEST',
+	ascid_conceal		= %ASCID'CONCEAL',
+	ascid_noconceal		= %ASCID'NOCONCEAL',
+	ascid_repro		= %ASCID'REPRO',
+	ascid_norepro		= %ASCID'NOREPRO',
+	ascid_mail		= %ASCID'MAIL',
+	ascid_nomail		= %ASCID'NOMAIL',
+	ascid_access		= %ASCID'ACCESS',
+	ascid_nocase		= %ASCID'NOCASE',
+	ascid_nopost		= %ASCID'NOPOST',
+    	ascid_pname 	    	= %ASCID pname,
+        ascid_hypdigest         = %ASCID'-Digest'   : BLOCK [,BYTE];
+
+
+%SBTTL 'MAILING_LIST'
+GLOBAL ROUTINE MAILING_LIST (RCP_A, MLST_A_A, TID_A) =
+BEGIN
+!++
+! FUNCTIONAL DESCRIPTION:
+!
+!   Checks the list of mailing lists to see if the specified "recipient"
+!   is a mailing list name or mailing list control name (list-REQUEST)
+!   (or list-SERVER).  MXSERVER and MXSERV are accepted as mailing list
+!   control names.
+!
+! RETURNS:	cond_value, longword (unsigned), write only, by value
+!
+! PROTOTYPE:
+!
+!   MAILING_LIST  rcp, mlst, tid
+!
+! IMPLICIT INPUTS:  None.
+!
+! IMPLICIT OUTPUTS: None.
+!
+! COMPLETION CODES:
+!
+!   SS$_NORMAL:		normal successful completion.
+!
+! SIDE EFFECTS:
+!
+!   None.
+!--
+    BIND
+	RCP 	= .RCP_A    	    	: RCPTDEF,
+    	Xaddr	= .rcp [RCPT_A_ADDR]	: TXTDEF,
+	MLST	= .MLST_A_A 	    	: REF MLSTDEF,
+        TID     = .TID_A                : BLOCK [,BYTE];
+
+    LOCAL
+	r	: BLOCK [DSC$K_S_BLN,BYTE],
+	m	: REF MLSTDEF,
+        cp,
+	str	: $BBLOCK [DSC$K_S_BLN],
+	str2	: $BBLOCK [DSC$K_S_BLN];
+
+    INIT_DYNDESC (str, str2);
+    INIT_SDESC (R, .Xaddr [TXT_W_LEN], Xaddr [TXT_T_TEXT]);
+    cp = CH$FIND_CH (.Xaddr [TXT_W_LEN], Xaddr [TXT_T_TEXT], %C'+');
+    IF NOT CH$FAIL (.cp) THEN
+        r [DSC$W_LENGTH] = CH$DIFF (.cp, Xaddr [TXT_T_TEXT]);
+
+    IF STR$CASE_BLIND_COMPARE (r, %ASCID'MXSERVER') EQL 0 OR
+       STR$CASE_BLIND_COMPARE (r, %ASCID'MXSERV') EQL 0 THEN
+    BEGIN
+	MLST = 0;  ! indicates it was MXSERVER [+...]
+        IF NOT CH$FAIL (.cp) THEN
+            STR$COPY_R (tid, %REF (.Xaddr [TXT_W_LEN] - .r [DSC$W_LENGTH] - 1),
+                        CH$PLUS (Xaddr [TXT_T_TEXT], .r [DSC$W_LENGTH] + 1));
+	RETURN MX__MLCTRL;
+    END;
+
+    r [DSC$W_LENGTH] = .Xaddr [TXT_W_LEN];
+
+    M = .MLISTS [QUE_L_HEAD];
+    WHILE .M NEQA MLISTS [QUE_L_HEAD] DO
+    BEGIN
+	STR$COPY_R (STR, M [MLST_W_NAME], M [MLST_T_NAME]);
+	IF STR$CASE_BLIND_COMPARE (STR, R) EQL 0 THEN
+	BEGIN
+	    MLST = .M;
+	    FREE_STRINGS (STR);
+	    RETURN MX__MAILLIST;
+	END;
+	STR$CONCAT (str2, str, ascid_hypdigest);
+	IF (STR$CASE_BLIND_COMPARE (str2, r) EQLU 0)
+	THEN
+	    BEGIN
+	    mlst = .m;
+	    FREE_STRINGS (str, str2);
+	    RETURN MX__MAILLISTD;
+	    END;
+
+	STR$CONCAT (str2, ascid_owner, str);
+	IF (STR$CASE_BLIND_COMPARE (str2, r) EQLU 0)
+	THEN
+	    BEGIN
+	    mlst = .m;
+	    FREE_STRINGS (str, str2);
+	    RETURN MX__LISTOWNER;
+	    END;
+
+	STR$CONCAT (str2, str, %ASCID'-server');
+	STR$APPEND (STR, %ASCID'-request');
+	IF (STR$CASE_BLIND_COMPARE (STR, R) EQLU 0) OR
+	   (STR$CASE_BLIND_COMPARE (str2, r) EQLU 0)
+	THEN
+	BEGIN
+	    MLST = .M;
+	    FREE_STRINGS (str, str2);
+	    RETURN MX__MLCTRL;
+	END;
+	M = .M [MLST_L_FLINK];
+    END;
+    FREE_STRINGS (str, str2);
+
+    0  ! for lack of some better value
+
+END; ! MAILING_LIST
+
+%SBTTL 'FROM_DAEMON'
+GLOBAL ROUTINE FROM_DAEMON (hdrq_a) =
+BEGIN
+!++
+! FUNCTIONAL DESCRIPTION:
+!
+!   Checks the specified SENDER address to see if it appears to come
+!   an automated mailer daemon.  Such messages should be ignored, since
+!   we don't want the MLF process to get into a loop with another automated
+!   daemon.
+!
+!   For now, daemon names are hardcoded.  This should be site-definable,
+!   but.....
+!
+! RETURNS:	cond_value, longword (unsigned), write only, by value
+!
+! PROTOTYPE:
+!
+!   FROM_DAEMON  sender
+!
+! IMPLICIT INPUTS:  None.
+!
+! IMPLICIT OUTPUTS: None.
+!
+! COMPLETION CODES:
+!
+!   SS$_NORMAL:		normal successful completion.
+!
+! SIDE EFFECTS:
+!
+!   None.
+!--
+    BIND
+	hdrq	= .hdrq_a	: QUEDEF;
+
+    LOCAL
+	lclp	: $BBLOCK [DSC$K_S_BLN],
+	domp	: $BBLOCK [DSC$K_S_BLN],
+	str	: $BBLOCK [DSC$K_S_BLN],
+	status;
+
+    INIT_DYNDESC (str, lclp, domp);
+
+    status = 0;
+
+    IF GET_FROM_ADDR (hdrq, lclp, domp, str)
+    THEN
+	BEGIN
+	IF (STR$CASE_BLIND_COMPARE (lclp, ascid_postmaster) EQLU 0) OR
+	   (STR$CASE_BLIND_COMPARE (lclp, ascid_mxserver) EQLU 0) OR
+	   (STR$CASE_BLIND_COMPARE (lclp, %ASCID'mailer-daemon') EQLU 0) OR
+	   (STR$CASE_BLIND_COMPARE (lclp, %ASCID'LISTSERV') EQLU 0) OR
+	   (STR$CASE_BLIND_COMPARE (lclp, %ASCID'UCX_SMTP') EQLU 0) OR
+	   (STR$CASE_BLIND_COMPARE (lclp, %ASCID'mmdf') EQLU 0) OR
+	   (STR$CASE_BLIND_COMPARE (lclp, %ASCID'uucp') EQLU 0)
+	THEN
+	   status = 1;
+	END;
+
+    FREE_STRINGS (str, lclp, domp);
+
+    RETURN (.status);
+
+END; ! FROM_DAEMON
+
+
+%SBTTL 'FORWARD_TO_SYSTEM_USERS'
+GLOBAL ROUTINE FORWARD_TO_SYSTEM_USERS (qctx, qent_a, sender_a, hdrq_a) =
+BEGIN
+!++
+! FUNCTIONAL DESCRIPTION:
+!
+!   Forwards a message to the list owner.  Used for errors.
+!
+! RETURNS:	cond_value, longword (unsigned), write only, by value
+!
+! PROTOTYPE:
+!
+!   FORWARD_TO_SYSTEM_USERS
+!
+! IMPLICIT INPUTS:  None.
+!
+! IMPLICIT OUTPUTS: None.
+!
+! COMPLETION CODES:
+!
+!   SS$_NORMAL:		normal successful completion.
+!
+! SIDE EFFECTS:
+!
+!   None.
+!--
+    BIND
+	qent	= .qent_a		: QENTDEF,
+	sender	= .sender_a		: $BBLOCK,
+	hdrq	= .hdrq_a		: QUEDEF;
+
+    LOCAL
+	su	: REF TXTDEF,
+	rcpt	: REF RCPTDEF,
+	fwdu	: RCPTDEF,
+	fwdq	: QUEDEF;
+
+    TRACE ('  This is a local message from Postmaster; will not process.');
+    su = .sysusers [QUE_L_HEAD];
+    IF .su EQLA sysusers
+    THEN
+	TRACE ('  ...No System Users to forward to; will discard.')
+    ELSE
+	BEGIN
+	INIT_QUEUE (fwdq);
+	WHILE .su NEQA sysusers DO
+	    BEGIN
+	    MEM_GETRCPT (rcpt);
+    	    rcpt [RCPT_A_ADDR] = MEM_GETTXT (.su [TXT_W_LEN], su [TXT_T_TEXT]);
+	    INSQUE (.rcpt, .fwdq [QUE_L_TAIL]);
+	    su = .su [TXT_L_FLINK];
+	    END;
+
+	CH$FILL (%CHAR (0), RCPT_S_RCPTDEF, fwdu);
+	TRACE ('  ...Forwarding message to System Users.');
+	FORWARD_MESSAGE (.qctx, qent, sender, fwdu, hdrq, fwdq, 0);
+	WHILE NOT REMQUE (.fwdq [QUE_L_HEAD], rcpt) DO
+		MEM_FREERCPT (rcpt);
+	END;
+
+    SS$_NORMAL
+
+END;	!FORWARD_TO_SYSTEM_USERS
+
+
+%SBTTL 'FORWARD_TO_LIST_OWNER'
+GLOBAL ROUTINE FORWARD_TO_LIST_OWNER (qctx, qent_a, sender_a, usr_a, mlst_a,
+	hdrq_a) =
+BEGIN
+!++
+! FUNCTIONAL DESCRIPTION:
+!
+!   Forwards a message to the list owner.  Used for errors.
+!
+! RETURNS:	cond_value, longword (unsigned), write only, by value
+!
+! PROTOTYPE:
+!
+!   FORWARD_TO_LIST_OWNER
+!
+! IMPLICIT INPUTS:  None.
+!
+! IMPLICIT OUTPUTS: None.
+!
+! COMPLETION CODES:
+!
+!   SS$_NORMAL:		normal successful completion.
+!
+! SIDE EFFECTS:
+!
+!   None.
+!--
+    BIND
+	qent	= .qent_a		: QENTDEF,
+	sender	= .sender_a		: $BBLOCK,
+	mlst	= .mlst_a		: MLSTDEF,
+	hdrq	= .hdrq_a		: QUEDEF,
+	ownq	= mlst [MLST_Q_OWNQ]	: QUEDEF;
+
+    LOCAL
+	rcpt	: REF RCPTDEF,
+	fwdq	: QUEDEF,
+	fwdu	: RCPTDEF,
+	status;
+
+    INIT_QUEUE (fwdq);
+    !
+    !  Send the message back to the Errors-To address.
+    !
+    MEM_GETRCPT (rcpt);
+    rcpt [RCPT_A_ADDR] = MEM_GETTXT (.mlst [MLST_W_ERRSTO], mlst [MLST_T_ERRSTO]);
+    INSQUE (.rcpt, .fwdq [QUE_L_TAIL]);
+
+    CH$FILL (%CHAR (0), RCPT_S_RCPTDEF, fwdu);
+    TRACE ('   ...Forwarding message to list owner !AD', .mlst [MLST_W_ERRSTO],
+		mlst [MLST_T_ERRSTO]);
+    FORWARD_MESSAGE (.qctx, qent, sender, fwdu, hdrq, fwdq, 0);
+
+    WHILE NOT REMQUE (.fwdq [QUE_L_HEAD], rcpt) DO
+    	    	MEM_FREERCPT (rcpt);
+
+    SS$_NORMAL
+
+END;	! FORWARD_TO_LIST_OWNER
+
+
+%SBTTL 'FORWARD_TO_LIST'
+GLOBAL ROUTINE FORWARD_TO_LIST (QCTX, QENT_A, SENDER_A, USR_A, MLST_A,
+				HDRQ_A, digest_flag, msg_size) =
+BEGIN
+!++
+! FUNCTIONAL DESCRIPTION:
+!
+!   Distributes a message to a mailing list.
+!
+! RETURNS:	cond_value, longword (unsigned), write only, by value
+!
+! PROTOTYPE:
+!
+!   FORWARD_TO_LIST
+!
+! IMPLICIT INPUTS:  None.
+!
+! IMPLICIT OUTPUTS: None.
+!
+! COMPLETION CODES:
+!
+!   SS$_NORMAL:		normal successful completion.
+!
+! SIDE EFFECTS:
+!
+!   None.
+!--
+    BIND
+	QENT	= .QENT_A	: QENTDEF,
+	SENDER	= .SENDER_A : BLOCK [,BYTE],
+	MLST	= .MLST_A	: MLSTDEF,
+	ORGHDRQ = .HDRQ_A	: QUEDEF;
+
+    LOCAL
+	MLSTQ	: QUEDEF,
+	TMPQ	: QUEDEF,
+	RCPTQ	: QUEDEF,
+	RTEQ	: QUEDEF,
+	HDRQ	: QUEDEF,
+	FROMHDR	: REF TXTDEF,
+	FROMADR	: REF TXTDEF,
+	TXT	: REF TXTDEF,
+	HDR	: REF TXTDEF,
+	RCPT	: REF RCPTDEF,
+	MLE	: REF MLEDEF,
+	SDSC	: $BBLOCK [DSC$K_S_BLN],
+	STR	: $BBLOCK [DSC$K_S_BLN],
+	FROMSTR	: $BBLOCK [DSC$K_S_BLN],
+    	realfrom: $BBLOCK [DSC$K_S_BLN],
+	LCLP	: $BBLOCK [DSC$K_S_BLN],
+	DOMP	: $BBLOCK [DSC$K_S_BLN],
+	owner	: $BBLOCK [DSC$K_S_BLN],
+    	host	: $BBLOCK [DSC$K_S_BLN],
+    	reqaddr	: $BBLOCK [DSC$K_S_BLN],
+	NEWENT	: QENTDEF,
+	oldwprot, oldgprot, digest, have_date, toccverified,
+	STATUS;
+
+    INIT_DYNDESC (STR, FROMSTR, realfrom, LCLP, DOMP, owner, reqaddr);
+    INIT_QUEUE (MLSTQ, TMPQ, HDRQ);
+
+    digest = .digest_flag;	!Make a copy so we can clear it, if needed
+
+    have_date = 0;		!Assume there's no Date: header
+
+    IF (.mlst [MLST_V_CC_POSTERR])	!CC list owner on post errors?
+    THEN
+	BEGIN
+	INIT_SDESC (host, .mlst [MLST_W_ERRSTO], mlst [MLST_T_ERRSTO]);
+	ERROR_ADD_RCPT (host);		!Add the errors to address too
+	END;
+
+    IF .mlst [MLST_L_MSGSZLIM] NEQU 0 AND .msg_size GTRU .mlst [MLST_L_MSGSZLIM] * 1024 THEN
+    BEGIN
+	MLIST_ERROR (MLST, %ASCID'Message exceeds allowable maximum for mailing list postings.');
+    	RETURN SS$_NORMAL;
+    END;
+
+    LIB$SYS_FAO (%ASCID'!AD-request', 0, str, .mlst [MLST_W_NAME], mlst [MLST_T_NAME]);
+    IF .mlst [MLST_W_HOSTNAME] NEQ 0 THEN
+    BEGIN
+    	INIT_SDESC (host, .mlst [MLST_W_HOSTNAME], mlst [MLST_T_HOSTNAME]);
+    	STR$CONCAT (reqaddr, str, ascid_atsign, host);
+    END
+    ELSE
+    	MX_FMT_LCL_ADDR (MX__FMT_FROM, str, reqaddr);
+
+    toccverified = NOT .mlst [MLST_V_RQLSTADR];
+
+    !
+    !  Make a duplicate set of working headers.
+    !
+    HDR = .ORGHDRQ [QUE_L_HEAD];
+    WHILE .HDR NEQA ORGHDRQ DO
+    BEGIN
+        IF .mlst [MLST_V_TEXTONLY] AND .hdr [TXT_W_CODE] EQL MX_K_HDR_MIME_C_TYPE THEN
+            IF NOT is_text_plain (.hdr [TXT_W_LEN], hdr [TXT_T_TEXT]) THEN
+            BEGIN
+                TRACE ('  FORWARD_TO_LIST: reject non-plain-text message (content type: !AD)',
+                            .hdr [TXT_W_LEN], hdr [TXT_T_TEXT]);
+                MLIST_ERROR (mlst,
+                             %ASCID'Mailing list configured to accept only plain text postings.');
+                FREE_STRINGS (str, reqaddr);
+                WHILE NOT REMQUE (.hdrq [QUE_L_HEAD], hdr) DO FREETXT (hdr);
+                RETURN SS$_NORMAL;
+            END;
+
+    	IF (.mlst [MLST_V_NOSPAMHI] OR .mlst [MLST_V_NOSPAMMD] OR
+    	    .mlst [MLST_V_NOSPAMLO]) AND .hdr [TXT_W_CODE] EQL MX_K_HDR_X_JUNK_MAIL_RATING AND
+    	    .hdr [TXT_W_LEN] NEQU 0 THEN
+    	BEGIN
+    	    LOCAL
+    	    	reject;
+    	    reject = 0;
+    	    SELECTONE CH$RCHAR (hdr [TXT_T_TEXT]) OF
+    	    SET
+    	    	['L'] : reject = .mlst [MLST_V_NOSPAMLO];
+    	    	['M'] : reject = .mlst [MLST_V_NOSPAMLO] OR .mlst [MLST_V_NOSPAMMD];
+    	    	['H'] : reject = .mlst [MLST_V_NOSPAMLO] OR .mlst [MLST_V_NOSPAMMD]
+    	    	    	    	 OR .mlst [MLST_V_NOSPAMHI];
+    	    	[OTHERWISE] : reject = 0;
+    	    TES;
+    	    IF .reject THEN
+    	    BEGIN
+    	    	TRACE ('  FORWARD_TO_LIST: Reject: junk mail rating is !AD', .hdr [TXT_W_LEN], hdr [TXT_T_TEXT]);
+    	    	LIB$SYS_FAO (%ASCID'MLF: dropped posting from !AS to mailing list !AD due to !AD junk mail rating',
+    	    	    	    0, str, sender, .mlst [MLST_W_NAME], mlst [MLST_T_NAME],
+    	    	    	    .hdr [TXT_W_LEN], hdr [TXT_T_TEXT]);
+    	    	LOG_EVENT (str);
+		FREE_STRINGS (str, reqaddr);
+		WHILE NOT REMQUE (.hdrq [QUE_L_HEAD], hdr) DO FREETXT (hdr);
+		RETURN SS$_NORMAL;
+    	    END;
+    	END;
+
+    	IF NOT .toccverified AND (.hdr [TXT_W_CODE] EQL MX_K_HDR_TO OR
+    	    	    	    	  .hdr [TXT_W_CODE] EQL MX_K_HDR_CC) THEN
+    	BEGIN
+            LOCAL
+                buf     : VECTOR [MLST_S_NAME+8,BYTE];
+            IF .digest THEN
+            BEGIN
+                INIT_SDESC (sdsc, .mlst [MLST_W_NAME]+.ascid_hypdigest [DSC$W_LENGTH], buf);
+                CH$COPY (.mlst [MLST_W_NAME], mlst [MLST_T_NAME], .ascid_hypdigest [DSC$W_LENGTH],
+                         .ascid_hypdigest [DSC$A_POINTER], %C' ', .sdsc [DSC$W_LENGTH], buf);
+            END
+            ELSE
+    	    	INIT_SDESC (sdsc, .mlst [MLST_W_NAME], mlst [MLST_T_NAME]);
+    	    toccverified = header_contains_address (.hdr, sdsc);
+    	END;
+    	    	
+	!
+	! If the original "Received:" headers are to be removed, then
+	! only copy a node if it's not a "Received:" or if REMRCVD
+	! is 0.  This is especially useful for BITNET lists, which
+	! can have lots of "Received:" info from INTERBIT gateways.
+	!
+	! Also, strip out "Sender:" since we put our own on.
+	!
+	IF ((.HDR[TXT_W_CODE] NEQU MX_K_HDR_RECEIVED)	OR	!Not received
+	   NOT(.MLST [MLST_V_REMRCVD]))			AND	!.. or nostrip
+	   ((.hdr[TXT_W_CODE] NEQU MX_K_HDR_OTHER)	OR	!.. or not other
+	   NOT(.mlst [MLST_V_REMOTHER]))		AND	!.. or nostrip
+!	   (.HDR[TXT_W_CODE] NEQU MX_K_HDR_SENDER)	AND	!.. & ^SENDER
+	   (.hdr[TXT_W_CODE] NEQU MX_K_HDR_LIST_SUB)	AND	!.. & Not List-
+	   (.hdr[TXT_W_CODE] NEQU MX_K_HDR_LIST_UNSUB)	AND	!.. headers
+	   (.hdr[TXT_W_CODE] NEQU MX_K_HDR_LIST_HELP)	AND
+	   (.hdr[TXT_W_CODE] NEQU MX_K_HDR_LIST_OTHER)	AND
+	   (.hdr[TXT_W_CODE] NEQU MX_K_HDR_X_LISTNAME)	AND	!X-Listname:
+	   !
+	   !The IETF recommends list processors drop the following headers....
+	   !
+	   (.hdr[TXT_W_CODE] NEQU MX_K_HDR_CONTENT_LENGTH) AND	!Content-Length:
+	   (.hdr[TXT_W_CODE] NEQU MX_K_HDR_ERRORS_TO)	AND	!Errors-To:
+	   (.hdr[TXT_W_CODE] NEQU MX_K_HDR_WARNINGS_TO)	AND	!Warnings-To:
+	   (.hdr[TXT_W_CODE] NEQU MX_K_HDR_PRECEDENCE)	AND	!Precedence:
+	   (.hdr[TXT_W_CODE] NEQU MX_K_HDR_DISP_NOTIF_TO) AND	!Disposition-Notification-To:
+	   (.hdr[TXT_W_CODE] NEQU MX_K_HDR_RTNRECPT_TO)	AND	!Return-Receipt-To:
+	   (.hdr[TXT_W_CODE] NEQU MX_K_HDR_CONFIRM_READ_TO)	!X-Confirm-Reading-To:   (eh?!)
+	THEN							!Then copy it
+	    BEGIN
+	    IF (.hdr [TXT_W_CODE] EQLU MX_K_HDR_DATE)
+	    THEN
+		have_date = 1;
+	    !
+	    !  Before we copy it, this seems like a good place to check
+	    !  for a Subject: line starting with "SUBSCRIBE", "UNSUBSCRIBE",
+	    !  or "SIGNOFF".  If found, return an error to the sender.
+	    !
+	    IF (.hdr [TXT_W_CODE] EQLU MX_K_HDR_SUBJECT) AND
+		(.hdr [TXT_W_LEN] GEQU 7)
+	    THEN
+		BEGIN
+		LOCAL ptr : REF $BBLOCK, newlen;
+		!
+		!  Copy subject line and convert it to uppercase.
+		!
+		STR$COPY_R (str, hdr [TXT_W_LEN], hdr [TXT_T_TEXT]);
+		STR$UPCASE (str, str);
+		!
+		!  Skip over any starting blanks on the subject line.
+		!  Use ptr and newlen to avoid copying string around
+		!  some more.
+		!
+		ptr = .str [DSC$A_POINTER];
+		DECR i FROM .str [DSC$W_LENGTH] TO 1 DO
+		    IF CH$RCHAR(.ptr) LEQU %C' ' THEN ptr = .ptr + 1;
+
+		newlen = .str [DSC$W_LENGTH] - (.ptr - .str [DSC$A_POINTER]);
+		IF CH$EQL (9, UPLIT('SUBSCRIBE'),
+			   MIN (9, .newlen), .ptr) OR	!Be sure we don't check
+		   CH$EQL (7, UPLIT('SIGNOFF'),		!... past the ends of
+			   MIN (7, .newlen), .ptr) OR	!... the strings!!
+		   CH$EQL (11, UPLIT('UNSUBSCRIBE'),
+			   MIN (11, .newlen), .ptr)
+		THEN
+		    BEGIN
+		    TRACE ('  FORWARD_TO_LIST: Reject: subject indicates SUBSCRIBE or SIGNOFF: !AS', str);
+		    MLIST_ERROR (mlst,
+			%ASCID'Subject suggests list processor command; send to',
+			reqaddr);
+		    FREE_STRINGS (str, reqaddr);
+		    WHILE NOT REMQUE (.hdrq [QUE_L_HEAD], hdr) DO FREETXT (hdr);
+		    RETURN SS$_NORMAL;
+		    END;
+		FREE_STRINGS (str);
+		END;
+
+	    TXT = MEM_GETTXT (.HDR [TXT_W_LEN]);
+	    CH$MOVE (.HDR [TXT_W_LEN]+TXT_S_TXTDEF, .HDR, .TXT);
+	    INSQUE (.TXT, .HDRQ [QUE_L_TAIL]);
+	    END;
+	HDR = .HDR [TXT_L_FLINK];
+    END;
+
+    IF NOT .toccverified THEN
+    BEGIN
+    	TRACE ('  FORWARD_TO_LIST: Reject: mailing list address not found in To: or CC: header');
+    	LIB$SYS_FAO (%ASCID'MLF: dropped posting from !AS to mailing list !AD due to missing !AS address in To or Cc header',
+    	    	     0, str, sender, .mlst [MLST_W_NAME], mlst [MLST_T_NAME],
+                     (IF .digest THEN %ASCID'digest' ELSE %ASCID'list'));
+    	LOG_EVENT (str);
+	FREE_STRINGS (str, reqaddr);
+	WHILE NOT REMQUE (.hdrq [QUE_L_HEAD], hdr) DO FREETXT (hdr);
+	RETURN SS$_NORMAL;
+    END;
+
+    READ_MAILING_LIST (MLST, MLSTQ);
+
+    status = GET_FROM_ADDR (hdrq, lclp, domp, fromstr, realfrom);
+
+    IF NOT(.status)
+    THEN
+	BEGIN
+	IF (.status EQLU SS$_NOSUCHOBJECT)
+	THEN
+	    BEGIN
+	    TRACE ('  FORWARD_TO_LIST:  No From: header in message.');
+	    MLIST_ERROR (MLST, %ASCID'no From: header in message');
+	    END
+	ELSE	!Must be SS$_INVARG
+	    BEGIN
+	    TRACE ('  FORWARD_TO_LIST:  -- Not valid!!');
+	    MLIST_ERROR (MLST, %ASCID'invalid From: header in message');
+	    END;
+	WHILE NOT REMQUE (.HDRQ [QUE_L_HEAD], HDR) DO FREETXT (HDR);
+    	WHILE NOT REMQUE (.MLSTQ [QUE_L_HEAD], MLE) DO MEM_FREEMLE (MLE);
+    	FREE_STRINGS (str, fromstr, realfrom, lclp, domp, owner, reqaddr);
+	RETURN (SS$_NORMAL);
+	END;
+
+    IF (.digest)
+    THEN
+	BEGIN
+	!
+	!  If this is a -digest post, only let an owner or a system user
+	!  have access to the list.  A quick & dirty way to do that is to
+	!  temporarily declare that there is no WORLD or GROUP access to
+	!  the list.
+	!
+	oldwprot = .mlst [MLST_B_WPROT];	!Save original value
+	oldgprot = .mlst [MLST_B_GPROT];	!...
+	mlst [MLST_B_WPROT] = 0;		!Make it 0
+	mlst [MLST_B_GPROT] = 0;		!...
+	TRACE ('  FORWARD_TO_LIST:  Post to -Digest address.');
+	END;
+
+    status = CHECK_ACCESS (MLST, MLSTQ, FROMSTR, PROT_M_WRITE);
+    IF (.digest)
+    THEN
+	BEGIN
+	mlst [MLST_B_WPROT] = .oldwprot;	!Restore original value
+	mlst [MLST_B_GPROT] = .oldgprot;
+	!
+	!  If the access was denied and the post was sent to -digest,
+	!  make it a non-digest post and try the access again.  This
+	!  means that posts sent to -digest from normal subscribers
+	!  will be automatically re-routed to the normal list.
+	!
+	!  Posts from system users or owners will go through as expected.
+	!
+	IF NOT(.status)
+	THEN
+	    BEGIN
+	    TRACE ('  FORWARD_TO_LIST:  -Digest access denied.  Try regular post.');
+	    digest = 0;			!No longer a digest post
+	    status = CHECK_ACCESS (mlst, mlstq, fromstr, PROT_M_WRITE);
+	    END;
+	END;
+
+    IF NOT(.status) THEN
+    BEGIN
+	TRACE ('  FORWARD_TO_LIST:  Har, har: access denied.');
+	MLIST_ERROR (MLST,
+		%ASCID'Access denied.  Send subscription requests to',
+			reqaddr);
+	FREE_STRINGS (STR, FROMSTR, realfrom, DOMP, LCLP, reqaddr, owner);
+	WHILE NOT REMQUE (.HDRQ [QUE_L_HEAD], HDR) DO FREETXT (HDR);
+    	WHILE NOT REMQUE (.MLSTQ [QUE_L_HEAD], MLE) DO MEM_FREEMLE (MLE);
+	RETURN SS$_NORMAL;
+    END;
+
+!++
+! Insert a Reply-To header if list replies are to be sent back to the
+! list.  If not, no Reply-To: header is added.
+!--
+
+    IF (.mlst [MLST_V_RTOLIST])
+    THEN
+	BEGIN
+	!
+	!  Find the existing Reply-To:, if present.
+	!
+	HDR = .HDRQ [QUE_L_HEAD];
+	WHILE .HDR NEQA HDRQ [QUE_L_HEAD] DO
+	BEGIN
+	    IF .HDR [TXT_W_CODE] EQL MX_K_HDR_REPLY_TO THEN EXITLOOP;
+	    HDR = .HDR [TXT_L_FLINK];
+	END;
+
+	!
+	!  If there was a Reply-To:, use its address for the sender address.
+	!  If it's not there, then use the actual From: address.
+	!
+	IF (.hdr NEQA hdrq [QUE_L_HEAD])
+	THEN
+	    BEGIN
+	    REMQUE (.hdr, hdr);
+	    INIT_SDESC (sdsc, .hdr [TXT_W_LEN], hdr [TXT_T_TEXT]);
+	    IF NOT(.mlst [MLST_V_RTOSNDR])	!If not returning to both,
+	    THEN				!... then include X-Original
+		BEGIN				!... header
+		STR$CONCAT (str, %ASCID'X-Original-Reply-To: ', sdsc);
+		INSTXT (str, .hdr [TXT_L_BLINK], MX_K_HDR_OTHER);
+		END;
+	    END
+	ELSE
+	    INIT_SDESC (sdsc, .realfrom [DSC$W_LENGTH], .realfrom [DSC$A_POINTER]);
+
+	!
+	!  Build the actual Reply-To: string, based on whether or not the
+	!  post is to be returned to the LIST, the SENDER, or both.
+	!
+	IF (.mlst [MLST_W_RTNADR] NEQU 0)
+	THEN
+	    STR$COPY_R (str, mlst [MLST_W_RTNADR], mlst [MLST_T_RTNADR])
+	ELSE
+	    BEGIN
+	    LOCAL __sdsc : $BBLOCK [DSC$K_S_BLN];
+	    INIT_SDESC (__sdsc, .mlst [MLST_W_NAME], mlst [MLST_T_NAME]);
+    	    IF .mlst [MLST_W_HOSTNAME] NEQ 0 THEN
+    	    	STR$CONCAT (str, __sdsc, ascid_atsign, host)
+    	    ELSE
+	    	MX_FMT_LCL_ADDR (MX__FMT_FROM, __sdsc, str);
+	    END;
+	IF (.mlst [MLST_V_RTOSNDR])		!Return to both addresses....
+	THEN
+	    BEGIN
+	    STR$APPEND (str, ascid_comma_space);
+	    STR$APPEND (str, sdsc);
+	    END;
+
+	!STR now points to the final Reply-To: string.
+
+	IF (.hdr NEQA hdrq [QUE_L_HEAD])		!A Reply-To: was found
+	THEN
+	    BEGIN
+	    !
+	    !  Insert the new Reply-To: where the old one was in the hdrq.
+	    !
+	    INSTXT (str, .hdr [TXT_L_BLINK], MX_K_HDR_REPLY_TO);
+	    FREETXT (hdr);		!Now free the memory used by the old one
+	    END
+	ELSE
+	    BEGIN
+	    !
+	    !  There was no Reply-To:, so locate the From: header and insert
+	    !  the new Reply-To: after it in the header queue.
+	    !
+	    hdr = .hdrq [QUE_L_HEAD];
+	    WHILE .hdr NEQA hdrq [QUE_L_HEAD] DO
+		BEGIN
+		IF (.hdr [TXT_W_CODE] EQL MX_K_HDR_FROM)
+		THEN
+		    BEGIN
+		    INSTXT (str, .hdr, MX_K_HDR_REPLY_TO);		
+		    EXITLOOP;
+		    END;
+		HDR = .HDR [TXT_L_FLINK];
+		END;
+	    END;
+	END;
+
+!++
+! If a subject prefix is defined, add it to the subject line.
+!--
+    IF (.mlst [MLST_W_SPREFIX] NEQU 0)
+    THEN
+	BEGIN
+	!
+	!  Find the existing Subject:, if present.
+	!
+	HDR = .HDRQ [QUE_L_HEAD];
+	WHILE .HDR NEQA HDRQ [QUE_L_HEAD] DO
+	BEGIN
+	    IF .HDR [TXT_W_CODE] EQL MX_K_HDR_SUBJECT THEN EXITLOOP;
+	    HDR = .HDR [TXT_L_FLINK];
+	END;
+
+	IF (.hdr NEQA hdrq [QUE_L_HEAD])
+	THEN
+	    BEGIN
+	    !
+	    !  A Subject: line was found.  We need to search the line
+	    !  for our prefix (surrounded by [] with a trailing blank)
+	    !  and remove it, if it's there.
+	    !
+	    LOCAL __sdsc1 : $BBLOCK [DSC$K_S_BLN],
+	    	  __sdsc2 : $BBLOCK [DSC$K_S_BLN],
+		  __sprefix : $BBLOCK [MLST_S_SPREFIX+2],
+		  ptr : REF $BBLOCK;
+	    REMQUE (.hdr, hdr);
+	    INIT_SDESC (__sdsc1, .hdr [TXT_W_LEN], hdr [TXT_T_TEXT]);
+	    !Build the prefix string: "[prefix] "
+	    ptr = __sprefix;
+	    CH$WCHAR_A(%C'[', ptr);
+	    ptr = CH$MOVE (.mlst [MLST_W_SPREFIX], mlst [MLST_T_SPREFIX], .ptr);
+	    CH$WCHAR_A(%C']', ptr);
+	    CH$WCHAR_A(%CHAR(32), ptr);
+	    INIT_SDESC (__sdsc2, CH$DIFF(.ptr, __sprefix), __sprefix);
+	    STR$UPCASE (str, __sdsc1);			!Uppercase for compare
+	    STR$UPCASE (lclp, __sdsc2);
+	    ptr = CH$FIND_SUB (.str [DSC$W_LENGTH], .str [DSC$A_POINTER],
+				.lclp [DSC$W_LENGTH], .lclp [DSC$A_POINTER]);
+	    IF NOT(CH$FAIL(.ptr))
+	    THEN
+		BEGIN
+		!
+		!  Here, our prefix string was found, so copy the Subject:
+		!  line to a new buffer, omitting the prefix text.
+		!
+		LOCAL x, y, ptr2 : REF $BBLOCK;
+		y = CH$DIFF (.ptr, .str [DSC$A_POINTER]);	!Save offset
+		x = .__sdsc1 [DSC$W_LENGTH] - .__sdsc2 [DSC$W_LENGTH];
+		STR$FREE1_DX (str);
+		STR$GET1_DX (x, str);
+		ptr2 = CH$MOVE (.y, .__sdsc1 [DSC$A_POINTER], .str [DSC$A_POINTER]);
+		x = .__sdsc1 [DSC$W_LENGTH] - .y - .__sdsc2 [DSC$W_LENGTH];
+		CH$MOVE (.x, CH$PLUS (.__sdsc1 [DSC$A_POINTER],
+				.y + .__sdsc2 [DSC$W_LENGTH]), .ptr2);
+		INIT_SDESC (__sdsc1, .str [DSC$W_LENGTH], .str [DSC$A_POINTER]);
+		END;
+
+	    !
+	    !  Here, __sdsc1 is a static descriptor pointing to the subject
+	    !  line.  Eliminate any duplicate "RE: "s at the beginning of
+	    !  line, so we don't have "[prefix] RE: RE: RE: RE: RE: RE: YYZ".
+	    !
+	    ptr = .__sdsc1 [DSC$A_POINTER];
+	    WHILE (.__sdsc1 [DSC$W_LENGTH] GTRU 8) AND
+		  (CH$RCHAR(.ptr) EQLU %C'R' OR CH$RCHAR(.ptr) EQLU %C'r') AND
+		  (CH$RCHAR(.ptr+1) EQLU %C'E' OR CH$RCHAR(.ptr+1) EQLU %C'e') AND
+		  (CH$RCHAR(.ptr+2) EQLU %C':') AND
+		  (CH$RCHAR(.ptr+3) EQLU %C' ') AND
+		  (CH$RCHAR(.ptr+4) EQLU %C'R' OR CH$RCHAR(.ptr+4) EQLU %C'r') AND
+		  (CH$RCHAR(.ptr+5) EQLU %C'E' OR CH$RCHAR(.ptr+5) EQLU %C'e') AND
+		  (CH$RCHAR(.ptr+6) EQLU %C':') AND
+		  (CH$RCHAR(.ptr+7) EQLU %C' ') DO
+		BEGIN
+		__sdsc1 [DSC$W_LENGTH] = .__sdsc1 [DSC$W_LENGTH] - 4;
+		__sdsc1 [DSC$A_POINTER] = .__sdsc1 [DSC$A_POINTER] + 4;
+		ptr = .__sdsc1 [DSC$A_POINTER];
+		END;
+
+	    !
+	    !  Finally, __sdsc1 points to our subject line and __sdsc2 points
+	    !  to the subject prefix.
+	    !
+	    LIB$SYS_FAO (%ASCID'!AS!AS', 0, str, __sdsc2, __sdsc1);
+	    INSTXT (str, .hdr [TXT_L_BLINK], MX_K_HDR_SUBJECT);
+	    FREETXT (hdr);		!Now free the memory used by the old one
+	    END
+	ELSE
+	    BEGIN
+	    !
+	    !  No Subject: line is present, so lets give a default that
+	    !  consists only of our prefix.
+	    !
+	    LIB$SYS_FAO (%ASCID'[!AD]', 0, str, .mlst [MLST_W_SPREFIX],
+			mlst [MLST_T_SPREFIX]);
+	    INSTXT (str, .hdrq [QUE_L_TAIL], MX_K_HDR_SUBJECT);	!Queue it
+	    END;	
+	END;
+
+!++
+! access okay, so create new message
+!--
+    IF .mlst [MLST_V_NOHIDE] AND .mlst [MLST_W_ERRSTO] NEQ 0 THEN
+    BEGIN
+	INIT_SDESC (sdsc, .mlst [MLST_W_ERRSTO], mlst [MLST_T_ERRSTO]);
+	STR$CONCAT (owner, ascid_langle, sdsc, ascid_rangle);
+    END
+    ELSE
+    BEGIN
+    	INIT_SDESC (sdsc, .mlst [MLST_W_NAME], mlst [MLST_T_NAME]);
+    	STR$CONCAT (str, ascid_owner, sdsc);
+    	IF .mlst [MLST_W_HOSTNAME] NEQ 0 THEN
+    	    STR$CONCAT (owner, ascid_langle, str, ascid_atsign, host, ascid_rangle)
+    	ELSE
+    	    MX_FMT_LCL_ADDR (MX__FMT_ENVFROM, str, owner);
+    END;
+!As per IETF maillist recommendation, we don't add a Sender: header,
+!but OWNER is used below in the call to FORWARD_MESSAGE().
+!    INSTXT (owner, hdrq, MX_K_HDR_SENDER);
+
+    IF .MLST [MLST_W_DESC] NEQ 0 THEN
+    BEGIN
+	LOCAL SDSC2 : $BBLOCK [DSC$K_S_BLN];
+	INIT_SDESC (SDSC, .MLST [MLST_W_DESC], MLST [MLST_T_DESC]);
+	INIT_SDESC (SDSC2, .MLST [MLST_W_NAME], MLST [MLST_T_NAME]);
+    	IF .mlst [MLST_W_HOSTNAME] NEQ 0 THEN
+    	BEGIN
+    	    VERIFY_PHRASE (sdsc, str);
+    	    LIB$SYS_FAO (%ASCID'!AS!AS <!AS@!AS>', 0, str,
+    	    	ascid_x_listname, str, sdsc2, host);
+    	END
+    	ELSE
+    	BEGIN
+	    MX_FMT_LCL_ADDR (MX__FMT_FROM, sdsc2, str, sdsc);
+	    STR$PREFIX (STR, ascid_x_listname);
+    	END;
+    END
+    ELSE
+    BEGIN
+	INIT_SDESC (SDSC, .MLST [MLST_W_NAME], MLST [MLST_T_NAME]);
+    	IF .mlst [MLST_W_HOSTNAME] NEQ 0 THEN
+    	    STR$CONCAT (str, ascid_x_listname, sdsc, ascid_atsign, host)
+    	ELSE
+    	BEGIN
+    	    MX_FMT_LCL_ADDR (MX__FMT_FROM, sdsc, str);
+	    STR$PREFIX (STR, ascid_x_listname);
+    	END;
+    END;
+    INSTXT (STR, HDRQ, MX_K_HDR_OTHER);
+
+    !
+    !  Some SMTP Servers reject messages without Date: lines.  If
+    !  this post does not have a Date: line, then add one.
+    !
+    IF NOT(.have_date)
+    THEN
+	BEGIN
+	MX_MKDATE (0, str, 0);			!Make a Date: line
+	INSTXT (str, .hdrq [QUE_L_TAIL], MX_K_HDR_DATE);
+    	LIB$SYS_FAO (%ASCID'X-Date-Warning: Date header inserted by !AS', 0, str, CONFIG [CFG_Q_MXNODE]);
+    	INSTXT (str, .hdrq [QUE_L_TAIL], MX_K_HDR_OTHER);
+	END;
+
+    BEGIN
+    BIND
+	xhdrq	= mlst [MLST_Q_HDRQ]	: QUEDEF;
+
+	hdr = .xhdrq [QUE_L_HEAD];
+	WHILE (.hdr NEQA xhdrq) DO
+	    BEGIN
+	    STR$COPY_R (str, hdr [TXT_W_LEN], hdr [TXT_T_TEXT]);
+	    INSTXT (str, .hdrq [QUE_L_TAIL], MX_K_HDR_OTHER);
+	    hdr = .hdr [TXT_L_FLINK];
+	    END;
+    END;
+
+    IF (.mlst [MLST_L_LHDRFLAGS] NEQU 0)
+    THEN
+	BEGIN
+	IF (.mlst [MLST_V_LSUB])
+	THEN
+	    BEGIN
+	    IF (.mlst [MLST_W_LSUB] EQLU 0)
+	    THEN
+		BEGIN
+		LIB$SYS_FAO (%ASCID'<mailto:!AS?body=subscribe>', 0, str, reqaddr);
+		INSTXT (str, .hdrq [QUE_L_TAIL], MX_K_HDR_LIST_SUB);
+		END
+	    ELSE
+		BEGIN
+		INIT_SDESC (sdsc, .mlst [MLST_W_LSUB], mlst [MLST_T_LSUB]);
+		INSTXT (sdsc, .hdrq [QUE_L_TAIL], MX_K_HDR_LIST_SUB);
+		END;
+	    END;
+	IF (.mlst [MLST_V_LUNSUB])
+	THEN
+	    BEGIN
+	    IF (.mlst [MLST_W_LUNSUB] EQLU 0)
+	    THEN
+		BEGIN
+		LIB$SYS_FAO (%ASCID'<mailto:!AS?body=unsubscribe>', 0, str, reqaddr);
+		INSTXT (str, .hdrq [QUE_L_TAIL], MX_K_HDR_LIST_UNSUB);
+		END
+	    ELSE
+		BEGIN
+		INIT_SDESC (sdsc, .mlst [MLST_W_LUNSUB], mlst [MLST_T_LUNSUB]);
+		INSTXT (sdsc, .hdrq [QUE_L_TAIL], MX_K_HDR_LIST_UNSUB);
+		END;
+	    END;
+	IF (.mlst [MLST_V_LHELP])
+	THEN
+	    BEGIN
+	    INIT_SDESC (sdsc, .mlst [MLST_W_LHELP], mlst [MLST_T_LHELP]);
+	    INSTXT (sdsc, .hdrq [QUE_L_TAIL], MX_K_HDR_LIST_HELP);
+	    END;
+	END;
+
+    INIT_QUEUE (RCPTQ);
+    WHILE NOT REMQUE (.MLSTQ [QUE_L_HEAD], MLE) DO
+    BEGIN
+    	BIND addr = .mle [MLE_A_ADDR]	: TXTDEF;
+	LOCAL DONT;
+	IF NOT .MLE [MLE_V_NOMAIL] AND
+	   NOT .mle [MLE_V_DENY] THEN
+	BEGIN
+	    DONT = .MLE [MLE_V_NOREPRO];
+	    IF .DONT THEN
+	    BEGIN
+		IF .MLE [MLE_V_NOCASE] THEN
+		BEGIN
+		    LOCAL S : $BBLOCK [DSC$K_S_BLN];
+		    INIT_SDESC (S, .addr [TXT_W_LEN], addr [TXT_T_TEXT]);
+		    DONT = STR$CASE_BLIND_COMPARE (S, FROMSTR) EQL 0;
+		END
+		ELSE DONT = CH$EQL (.addr [TXT_W_LEN], addr [TXT_T_TEXT],
+		    .FROMSTR [DSC$W_LENGTH], .FROMSTR [DSC$A_POINTER], %C' ');
+	    END;
+	    !
+	    !  If message was to -Digest address, then don't include this
+	    !  recipient unless the digest bit is set in the MLE.
+	    !
+	    !  Conversely, if not a -Digest, include user only if not DIGEST.
+	    !
+	    IF NOT(.dont)		!If it's still OK, then check DIGEST
+	    THEN
+		BEGIN
+		IF (.digest)
+		THEN
+		    dont = NOT(.MLE [MLE_V_DIGEST])	!Don't if DIGEST not set
+		ELSE
+		    dont = (.MLE [MLE_V_DIGEST]);	!Don't if DIGEST set
+		END;
+
+	    IF NOT .DONT THEN
+	    BEGIN
+		MEM_GETRCPT (RCPT);
+    	    	rcpt [RCPT_A_ADDR] = MEM_GETTXT (.addr [TXT_W_LEN], addr [TXT_T_TEXT]);
+    	    	rcpt [RCPT_A_ORADDR] = XTEXT_ENCODE (rcpt [RCPT_A_ADDR]);
+    	    	rcpt [RCPT_A_ORTYPE] = MEM_GETTXT (6, UPLIT ('rfc822'));
+    	    	RCPT [RCPT_V_DSN_FAILURE] = 1;
+    	    	add_recipient_sorted (.RCPT, RCPTQ);
+	    END;
+	END;
+    	MEM_FREEMLE (MLE);
+    END;
+
+    TRACE ('  FORWARD_TO_LIST:  calling FORWARD_MESSAGE to do the grunt work.');
+    FORWARD_MESSAGE (.QCTX, QENT, owner, .USR_A, HDRQ, RCPTQ, .MLST [MLST_L_MAXFWD]);
+    WHILE NOT REMQUE (.RCPTQ [QUE_L_HEAD], RCPT) DO
+	MEM_FREERCPT (RCPT);
+
+    IF (.MLST [MLST_W_ARCHIVE] NEQ 0) AND NOT(.digest) THEN
+    BEGIN
+	TRACE ('  FORWARD_TO_LIST:  archiving the message.');
+	MLIST_ARCHIVE (MLST, QENT, HDRQ);
+    END;
+
+    FREE_STRINGS (STR, FROMSTR, realfrom, DOMP, LCLP, owner, reqaddr);
+    WHILE NOT REMQUE (.HDRQ [QUE_L_HEAD], HDR) DO FREETXT (HDR);
+
+    SS$_NORMAL
+
+END; ! FORWARD_TO_LIST
+
+%SBTTL 'MLIST_PROCESS_CMD'
+GLOBAL ROUTINE MLIST_PROCESS_CMD (MLST_A, MLSTQ_A, CMDCODE, CMDPARS_A,
+		FROMSTR_A, NAME_A, SENDER_A, HDRQ_A, QCTX, CHANGED_A,
+		NOTIFY, FLAGS, SFLAGS) =
+BEGIN
+!++
+! FUNCTIONAL DESCRIPTION:
+!
+!   When one of the command interfaces parses a command, this routine
+!   is called to perform the actual work.
+!
+! RETURNS:	cond_value, longword (unsigned), write only, by value
+!
+! PROTOTYPE:
+!
+!   MLIST_PROCESS_CMD
+!
+! IMPLICIT INPUTS:  None.
+!
+! IMPLICIT OUTPUTS: None.
+!
+! COMPLETION CODES:
+!
+!   SS$_NORMAL:		normal successful completion.
+!
+! SIDE EFFECTS:
+!
+!   None.
+!--
+    BIND
+	MLST	= .MLST_A	: MLSTDEF,
+	MLSTQ	= .MLSTQ_A	: QUEDEF,
+	CMDPARS	= .CMDPARS_A	: $BBLOCK [DSC$K_S_BLN],
+	FROMSTR	= .FROMSTR_A	: $BBLOCK [DSC$K_S_BLN],
+	NAME	= .NAME_A	: $BBLOCK [DSC$K_S_BLN],
+	SENDER	= .SENDER_A : $BBLOCK [DSC$K_S_BLN],
+	HDRQ	= .HDRQ_A	: QUEDEF,
+	CHANGED	= .CHANGED_A;
+
+    LOCAL
+	STR : $BBLOCK [DSC$K_S_BLN],
+	MLE : REF MLEDEF;
+
+    INIT_DYNDESC (STR);
+
+    CASE .CMDCODE FROM MLCMD__LO TO MLCMD__HI OF
+    SET
+
+    [MLCMD__ADD] :
+	IF NOT CHECK_ACCESS (MLST, MLSTQ, FROMSTR, PROT_M_CONTROL) THEN
+	    MLIST_ERROR (MLST, %ASCID'ADD failed: insufficient privilege')
+	ELSE
+	    IF .CMDPARS [DSC$W_LENGTH] EQLA 0 THEN
+		MLIST_ERROR (MLST, %ASCID'ADD failed: no address specified')
+	    ELSE
+		MLIST_ADD (.QCTX, MLST, MLSTQ, CMDPARS, CHANGED, .NOTIFY,
+			   .FLAGS, .SFLAGS);
+
+    [MLCMD__SUBSCRIBE] :
+	IF NOT CHECK_ACCESS (MLST, MLSTQ, FROMSTR, PROT_M_EXECUTE) THEN
+	BEGIN
+	    LOCAL TMPQ : QUEDEF, TXT : REF TXTDEF;
+	    IF .NAME [DSC$W_LENGTH] GTR 0 THEN
+		IF CH$RCHAR (.FROMSTR [DSC$A_POINTER]) EQL %C'<' THEN
+		    STR$CONCAT (STR, NAME, ascid_space, FROMSTR)
+		ELSE
+		    STR$CONCAT (STR, NAME, ascid_space_langle, FROMSTR, ascid_rangle)
+	    ELSE STR$COPY_DX (STR, FROMSTR);
+	    MLIST_NOTIFY_OWNER (.QCTX, MLST, MLCMD__SUBSCRIBE, STR, CMDPARS);
+	    INIT_QUEUE (TMPQ);
+	    INSTXT (FROMSTR, TMPQ);
+	    MLIST_NOTIFY_COMPLETE (.QCTX, MLST, TMPQ, MLCMD__SUBFWD);
+	    REMQUE (.TMPQ [QUE_L_HEAD], TXT);
+	    FREETXT (TXT);
+	END
+	ELSE
+	BEGIN
+	    IF .CMDPARS [DSC$W_LENGTH] GTR 0 THEN
+	    BEGIN
+		VERIFY_PHRASE (CMDPARS, CMDPARS);
+		IF CH$RCHAR (.FROMSTR [DSC$A_POINTER]) EQL %C'<' THEN
+		    STR$CONCAT (STR, CMDPARS, ascid_space, FROMSTR)
+		ELSE
+		    STR$CONCAT (STR, CMDPARS, ascid_space_langle, FROMSTR, ascid_rangle);
+	    END
+	    ELSE IF .NAME [DSC$W_LENGTH] GTR 0 THEN
+		IF CH$RCHAR (.FROMSTR [DSC$A_POINTER]) EQL %C'<' THEN
+		    STR$CONCAT (STR, NAME, ascid_space, FROMSTR)
+		ELSE
+		    STR$CONCAT (STR, NAME, ascid_space_langle, FROMSTR, ascid_rangle)
+	    ELSE STR$COPY_DX (STR, FROMSTR);
+	    MLIST_ADD (.QCTX, MLST, MLSTQ, STR, CHANGED, 1, 0, 0);
+	END;
+
+    [MLCMD__REMOVE] :
+	IF NOT CHECK_ACCESS (MLST, MLSTQ, FROMSTR, PROT_M_CONTROL) THEN
+	    MLIST_ERROR (MLST, %ASCID'REMOVE failed: insufficient privilege')
+	ELSE
+	    IF .CMDPARS [DSC$W_LENGTH] EQL 0 THEN
+		MLIST_ERROR (MLST, %ASCID'REMOVE failed: no address specified')
+	    ELSE
+		MLIST_REMOVE (.QCTX, MLST, MLSTQ, CMDPARS, CHANGED, .NOTIFY,
+				.flags, .sflags);
+
+    [MLCMD__MODIFY] :
+	IF NOT CHECK_ACCESS (MLST, MLSTQ, FROMSTR, PROT_M_CONTROL) THEN
+	    MLIST_ERROR (MLST, %ASCID'MODIFY failed: insufficient privilege')
+	ELSE
+	    IF .CMDPARS [DSC$W_LENGTH] EQL 0 THEN
+		MLIST_ERROR (MLST, %ASCID'MODIFY failed: no address specified')
+	    ELSE
+		MLIST_MODIFY (.QCTX, MLST, MLSTQ, CMDPARS, CHANGED, .NOTIFY,
+				.flags, .sflags);
+
+    [MLCMD__SIGNOFF] :
+	IF NOT CHECK_ACCESS (MLST, MLSTQ, FROMSTR, PROT_M_DELETE) THEN
+	BEGIN
+	    MLIST_ERROR (MLST, %ASCID %STRING ('SIGNOFF could not',
+		    ' be handled automatically;',
+		    ' request forwarded'),
+		    %ASCID %STRING ('to human list owner for manual removal.'));
+	    MLIST_NOTIFY_OWNER (.QCTX, MLST, MLCMD__SIGNOFF, FROMSTR, CMDPARS);
+	END
+	ELSE
+	    MLIST_REMOVE (.QCTX, MLST, MLSTQ, FROMSTR, CHANGED, 1);
+
+    [MLCMD__REVIEW] :
+	IF NOT CHECK_ACCESS (MLST, MLSTQ, FROMSTR, PROT_M_READ) THEN
+	    MLIST_ERROR (MLST, %ASCID'REVIEW failed: insufficient privilege')
+	ELSE
+	BEGIN
+	    LOCAL CTRL;
+	    CTRL = CHECK_ACCESS (MLST, MLSTQ, FROMSTR, PROT_M_CONTROL);
+	    MLIST_REVIEW (.QCTX, MLST, MLSTQ, HDRQ, SENDER, .CTRL, .SFLAGS<16,1,0>);
+	END;
+
+    [MLCMD__SET] :
+	MLIST_SET (.QCTX, MLST, MLSTQ, FROMSTR, CMDPARS, CHANGED, 1);
+
+    [MLCMD__QUERY] :
+	MLIST_QUERY (.QCTX, MLST, MLSTQ, FROMSTR, SENDER, HDRQ);
+
+    [MLCMD__LIST] :
+	MLIST_LIST (.QCTX, HDRQ, FROMSTR, SENDER);
+
+    [MLCMD__HELP] :
+	MLIST_SEND_HELP (.QCTX, HDRQ, SENDER);
+
+    [INRANGE,OUTRANGE] :;
+
+    TES;
+
+    FREE_STRINGS (STR);
+
+    SS$_NORMAL
+
+END; ! MLIST_PROCESS_CMD
+
+%SBTTL 'CHECK_ACCESS'
+GLOBAL ROUTINE CHECK_ACCESS (MLST_A, MLSTQ_A, FROMSTR_A, MASK) =
+BEGIN
+!++
+! FUNCTIONAL DESCRIPTION:
+!
+!   checks to see if the specified user/address pair is
+!
+! RETURNS:	cond_value, longword (unsigned), write only, by value
+!
+! PROTOTYPE:
+!
+!   CHECK_ACCESS  mlst, fromadr, mask
+!
+! IMPLICIT INPUTS:  None.
+!
+! IMPLICIT OUTPUTS: None.
+!
+! COMPLETION CODES:
+!
+!   SS$_NORMAL:		normal successful completion.
+!
+! SIDE EFFECTS:
+!
+!   None.
+!--
+    MAP
+	MASK	: BLOCK [4,BYTE];
+
+    BIND
+	MLST	= .MLST_A		: MLSTDEF,
+	WPROT	= MLST [MLST_B_WPROT]	: BLOCK [1,BYTE],
+	GPROT	= MLST [MLST_B_GPROT]	: BLOCK [1,BYTE],
+	OPROT	= MLST [MLST_B_OPROT]	: BLOCK [1,BYTE],
+	SPROT	= MLST [MLST_B_SPROT]	: BLOCK [1,BYTE],
+	OWNQ	= MLST [MLST_Q_OWNQ]	: QUEDEF,
+	MLSTQ	= .MLSTQ_A		: QUEDEF,
+	FROMSTR	= .FROMSTR_A		: BLOCK [,BYTE];
+
+    LOCAL
+	MLE : REF MLEDEF,
+	ADR : REF TXTDEF,
+	STR : $BBLOCK [DSC$K_S_BLN],
+	FOUND;
+
+    TRACE ('  CHECK_ACCESS: checking !AS for access mask=!XL',
+	.FROMSTR_A, .MASK [0,0,5,0]);
+
+    IF (.MASK [0,0,5,0] AND .WPROT [0,0,5,0]) NEQ 0 THEN
+    BEGIN
+	TRACE ('  CHECK_ACCESS: Access granted under WORLD class.');
+	RETURN 1;
+    END;
+
+    INIT_DYNDESC (STR);
+
+    BEGIN
+	LOCAL
+	    LCLP : $BBLOCK [DSC$K_S_BLN],
+	    DOMP : $BBLOCK [DSC$K_S_BLN],
+	    TXT	 : REF TXTDEF,
+	    RTEQ : QUEDEF,
+	    SDSC : $BBLOCK [DSC$K_S_BLN];
+
+	INIT_DYNDESC (LCLP, DOMP);
+	INIT_QUEUE (RTEQ);
+	IF NOT PARSE821 (FROMSTR, RTEQ, LCLP, DOMP) THEN
+	    PARSE_MBOX (FROMSTR, LCLP, DOMP);
+	STR$UPCASE (DOMP, DOMP);
+	IF .RTEQ [QUE_L_HEAD] NEQA RTEQ THEN
+	BEGIN
+	    TXT = .RTEQ [QUE_L_HEAD];
+	    WHILE .TXT NEQA RTEQ DO
+	    BEGIN
+		INIT_SDESC (SDSC, .TXT [TXT_W_LEN], TXT [TXT_T_TEXT]);
+		STR$UPCASE (SDSC, SDSC);
+		TXT = .TXT [TXT_L_FLINK];
+	    END;
+	    FORMAT821 (RTEQ, LCLP, DOMP, STR);
+	    WHILE NOT REMQUE (.RTEQ [QUE_L_HEAD], TXT) DO FREETXT (TXT);
+	END
+	ELSE STR$CONCAT (STR, LCLP, ascid_atsign, DOMP);
+	FREE_STRINGS (LCLP, DOMP);
+    END;
+
+    MLE = .MLSTQ [QUE_L_HEAD];
+    FOUND = (WHILE .MLE NEQA MLSTQ [QUE_L_HEAD] DO
+	    BEGIN
+    	    	BIND Xaddr = .MLE [MLE_A_ADDR]	: TXTDEF;
+		IF .MLE [MLE_V_NOCASE] THEN
+		BEGIN
+		    LOCAL S1 : $BBLOCK [DSC$K_S_BLN];
+		    INIT_SDESC (S1, .Xaddr [TXT_W_LEN], Xaddr [TXT_T_TEXT]);
+		    IF STR$CASE_BLIND_COMPARE (S1, STR) EQL 0 THEN
+			EXITLOOP .MLE
+		    ELSE
+			IF .MLE [MLE_V_ACCESS]
+			THEN
+			BEGIN
+			    LOCAL
+				UPS1	    : $BBLOCK [DSC$K_S_BLN],
+				UPSTR	    : $BBLOCK [DSC$K_S_BLN];
+
+			    INIT_DYNDESC (UPS1) ;
+			    INIT_DYNDESC (UPSTR) ;
+			    STR$UPCASE (UPS1, S1);
+			    STR$UPCASE (UPSTR, STR);	! Put the strings into canonical form (both upper case).
+			    IF STR$MATCH_WILD (UPSTR, UPS1)
+			    THEN
+			    BEGIN
+				FREE_STRINGS(UPS1) ;
+				FREE_STRINGS(UPSTR) ;
+				TRACE ('  CHECK_ACCESS:    Wild Card Match: !AS with !AS', UPSTR, UPS1);
+				EXITLOOP .MLE		! If the wild card matched, free the temporary strings and bail out.
+			    END ;			! End IF STR$MATCH_WILD (UPSTR, UPS1)
+
+			    FREE_STRINGS(UPS1) ;
+			    FREE_STRINGS(UPSTR) ;	! Just get rid of the strings.
+			END ;				! End IF .MLE [MLE_V_ACCESS]
+		END
+		ELSE
+		BEGIN
+		    IF CH$EQL (.STR [DSC$W_LENGTH], .STR [DSC$A_POINTER],
+		    .Xaddr [TXT_W_LEN], Xaddr [TXT_T_TEXT], %C' ')
+		    THEN EXITLOOP .MLE
+		    ELSE
+			IF .MLE [MLE_V_ACCESS]
+			THEN
+			BEGIN
+			    LOCAL
+				ADDR	: BLOCK[DSC$K_S_BLN,BYTE] ;
+
+			    INIT_SDESC (ADDR, .Xaddr [TXT_W_LEN], Xaddr [TXT_T_TEXT]);
+			    IF STR$MATCH_WILD (STR, ADDR)
+			    THEN
+			    BEGIN
+				TRACE ('  CHECK_ACCESS:    Wild Card Match: !AS with !AS', STR, ADDR);
+				EXITLOOP .MLE ;		! If the wild card matched, bail out.
+			    END ;			! End IF str$match_wild (STR, addr)
+			END ;				! End IF .MLE [MLE_V_ACCESS]
+		END ;
+		MLE = .MLE [MLE_L_FLINK];
+	    END) NEQ -1;
+
+    IF .FOUND THEN
+    BEGIN
+	TRACE ('  CHECK_ACCESS:    Found address on subscriber list.');
+	IF (.MASK [0,0,5,0] AND .GPROT [0,0,5,0]) NEQ 0 THEN
+	BEGIN
+	    IF (.mle [MLE_V_DENY])	!DENY means they can't do anything
+	    THEN
+		BEGIN
+		TRACE ('  CHECK_ACCESS:    -- entry marked DENY.  Requested access denied.');
+		found = 0;
+		END
+	    ELSE
+		IF (.mle [MLE_V_NOPOST]) AND	!NOPOST means no write access
+		   ((.mask [0,0,5,0] AND PROT_M_WRITE) NEQU 0)
+		THEN
+		    BEGIN
+		    TRACE ('  CHECK_ACCESS:    -- entry marked NOPOST.  Requested access denied.');
+		    found = 0;
+		    END
+		ELSE
+		    TRACE ('  CHECK_ACCESS:    -- access granted under GROUP class.');
+	    FREE_STRINGS (STR);
+	    RETURN (.found);
+	END;
+    END;
+
+    ADR = .OWNQ [QUE_L_HEAD];
+    FOUND = (WHILE .ADR NEQA OWNQ [QUE_L_HEAD] DO
+	    BEGIN
+		IF .mlst [MLST_V_NOCASE]
+		THEN
+		    BEGIN
+		    LOCAL s1 : $BBLOCK [DSC$K_S_BLN];
+		    INIT_SDESC (S1, .adr [TXT_W_LEN], adr [TXT_T_TEXT]);
+		    IF (STR$CASE_BLIND_COMPARE (S1, STR) EQLU 0)
+		    THEN
+			EXITLOOP .adr;
+		    END
+		ELSE
+		    IF CH$EQL (.STR [DSC$W_LENGTH], .STR [DSC$A_POINTER],
+				.ADR [TXT_W_LEN], ADR [TXT_T_TEXT], %C' ')
+		    THEN
+			EXITLOOP .ADR;
+		ADR = .ADR [TXT_L_FLINK];
+	    END) NEQ -1;
+
+    IF .FOUND THEN
+    BEGIN
+	TRACE ('  CHECK_ACCESS:    Found address on owner list.');
+	IF (.MASK [0,0,5,0] AND .OPROT [0,0,5,0]) NEQ 0 THEN
+	BEGIN
+	    TRACE ('  CHECK_ACCESS:    -- access granted under OWNER class.');
+	    FREE_STRINGS (STR);
+	    RETURN 1;
+	END;
+    END;
+
+    ADR = .SYSUSERS [QUE_L_HEAD];
+    FOUND = (WHILE .ADR NEQA SYSUSERS [QUE_L_HEAD] DO
+	    BEGIN
+		IF CH$EQL (.STR [DSC$W_LENGTH], .STR [DSC$A_POINTER],
+		    .ADR [TXT_W_LEN], ADR [TXT_T_TEXT], %C' ')
+		THEN EXITLOOP .ADR;
+		ADR = .ADR [TXT_L_FLINK];
+	    END) NEQ -1;
+
+    FREE_STRINGS (STR);
+
+    IF .FOUND THEN
+    BEGIN
+	TRACE ('  CHECK_ACCESS:    Found address on system_users list.');
+	IF (.MASK [0,0,5,0] AND .SPROT [0,0,5,0]) NEQ 0 THEN
+	BEGIN
+	    TRACE ('  CHECK_ACCESS:    -- access granted under SYSTEM class.');
+	    RETURN 1;
+	END;
+    END;
+
+    TRACE ('  CHECK_ACCESS:    Access check failed.  Requested access denied.');
+    0
+
+END; ! CHECK_ACCESS
+
+%SBTTL 'READ_MAILING_LIST'
+GLOBAL ROUTINE READ_MAILING_LIST (MLST_A, MLSTQ_A) =
+BEGIN
+!++
+! FUNCTIONAL DESCRIPTION:
+!
+!   Reads the file containing the list of addresses in the mailing list.
+!
+! RETURNS:	cond_value, longword (unsigned), write only, by value
+!
+! PROTOTYPE:
+!
+!   READ_MAILING_LIST  mlst, mlstq
+!
+! IMPLICIT INPUTS:  None.
+!
+! IMPLICIT OUTPUTS: None.
+!
+! COMPLETION CODES:
+!
+!   SS$_NORMAL:		normal successful completion.
+!
+! SIDE EFFECTS:
+!
+!   None.
+!--
+    BIND
+	MLST	= .MLST_A	: MLSTDEF,
+	MLSTQ	= .MLSTQ_A	: QUEDEF;
+
+    LOCAL
+	STR 	: $BBLOCK [DSC$K_S_BLN],
+	LCLP	: $BBLOCK [DSC$K_S_BLN],
+	DOMP	: $BBLOCK [DSC$K_S_BLN],
+	NAM 	: $BBLOCK [DSC$K_S_BLN],
+	SDSC	: $BBLOCK [DSC$K_S_BLN],
+	RTEQ	: QUEDEF,
+	TXT 	: REF TXTDEF,
+	FAB 	: $FAB_DECL,
+	RAB 	: $RAB_DECL,
+	XAB 	: $XABFHC_DECL,
+	MLE 	: REF MLEDEF,
+	WORK_MLE : REF MLEDEF,
+	convert_pre_v3, convert_v31,
+	STATUS;
+
+    convert_pre_v3 = convert_v31 = 0;
+    SDSC [DSC$B_DTYPE] = DSC$K_DTYPE_T;
+    SDSC [DSC$B_CLASS] = DSC$K_CLASS_S;
+    INIT_DYNDESC (STR, LCLP, DOMP, NAM);
+    INIT_QUEUE (RTEQ);
+
+    LIB$SYS_FAO (ascid_mlist_filename, 0, STR,
+	.MLST [MLST_W_NAME], MLST [MLST_T_NAME]);
+    $FAB_INIT (FAB=FAB, XAB=XAB, FNA=.STR [DSC$A_POINTER],
+	FNS=.STR [DSC$W_LENGTH], FAC=GET, SHR=SHRGET);
+    $XABFHC_INIT (XAB=XAB);
+
+    STATUS = $OPEN (FAB=FAB);
+    IF NOT .STATUS THEN
+    BEGIN
+	LIB$SYS_FAO (%ASCID'MX_MLIST_DIR:!AD.MLIST', 0, STR,
+	    .MLST [MLST_W_NAME], MLST [MLST_T_NAME]);
+	$FAB_INIT (FAB=FAB, XAB=XAB, FNA=.STR [DSC$A_POINTER],
+	    FNS=.STR [DSC$W_LENGTH], FAC=GET, SHR=SHRGET);
+	$XABFHC_INIT (XAB=XAB);
+
+	STATUS = $OPEN (FAB=FAB);
+	IF NOT .STATUS THEN
+	BEGIN
+	    FREE_STRINGS (STR);
+	    RETURN .STATUS;
+	END;
+	convert_pre_v3 = 1;
+    END;
+
+    IF (.fab [FAB$B_RFM] EQLU FAB$C_FIX)
+    THEN
+	convert_v31 = 1;
+
+    FREE_STRINGS (STR);
+    $RAB_INIT (RAB=RAB, FAB=FAB, ROP=RAH);
+    STATUS = $CONNECT (RAB=RAB);
+    IF NOT .STATUS THEN
+    BEGIN
+	$CLOSE (FAB=FAB);
+	RETURN .STATUS;
+    END;
+
+    rab [RAB$W_USZ] = (IF .fab [FAB$W_MRS] EQL 0 THEN
+    	    	    IF .xab [XAB$W_LRL] EQL 0 THEN 16384
+    	    	    ELSE .xab [XAB$W_LRL] ELSE .fab [FAB$W_MRS]);
+
+    STATUS = LIB$GET_VM (%REF (.RAB [RAB$W_USZ]), RAB [RAB$L_UBF]);
+    IF NOT .STATUS THEN
+    BEGIN
+    	$CLOSE (FAB=FAB);
+	RETURN .STATUS;
+    END;
+
+    WHILE $GET (RAB=rab) DO
+    BEGIN
+    	BIND
+    	    inmle = .rab [RAB$L_UBF] : MLEDEF,
+    	    inbuf = .rab [RAB$L_UBF] : BLOCK [,BYTE]; ! for generic access
+
+    	LOCAL
+    	    ptr,
+    	    len     : WORD;
+
+    	COMPILETIME
+    	    addr_offset = %FIELDEXPAND (MLE_A_ADDR, 0);
+
+	IF NOT .convert_pre_v3
+	THEN
+	    IF .convert_v31				!Before v3.2, the
+	    THEN					!... whole MLE was
+		BEGIN					!... written out
+		!
+		!  The MLE structure changed with V3.3 - the NAME and
+    	    	!  address fields were changed to be 256 bytes instead
+    	    	!  of 255 bytes each, to ensure they'd be aligned on Alphas.
+    	    	!  each field was preceded by a word-sized length.
+		!
+    	    	len = .inbuf [addr_offset,0,16,0];
+    	    	status = MEM_GETMLE (mle, .len);
+    	    	IF NOT .status THEN EXITLOOP;
+    	    	CH$MOVE (addr_offset, inmle, .mle);
+    	    	BEGIN
+    	    	    BIND adr = .mle [MLE_A_ADDR] : TXTDEF;
+    	    	    CH$MOVE (.len, CH$PLUS (inbuf, addr_offset+2), adr [TXT_T_TEXT]);
+    	    	END;
+    	    	!  Use CH$MOVE here since it's not word-aligned
+    	    	ptr = CH$PLUS (inbuf, addr_offset+2+.len);
+    	    	CH$MOVE (2, .ptr, len);
+    	    	IF .len NEQ 0 THEN
+    	    	    mle [MLE_A_NAME] = MEM_GETTXT (.len, CH$PLUS (.ptr, 2));
+		END					!... and we're finished
+	    ELSE
+		BEGIN
+    	    	    IF .inmle [MLE_L_FLINK] EQL 0        ! this is a V5.0-format entry
+    	    	    THEN
+    	    	    	BEGIN
+    	    	    	status = MEM_GETMLE (mle);
+    	    	    	IF NOT .status THEN EXITLOOP;
+    	    	    	CH$MOVE (MLE_S_MLEDEF, inmle, .mle);
+    	    	    	mle [MLE_A_ADDR] = MEM_GETTXT (.inmle [MLE_A_ADDR], CH$PLUS (inmle, MLE_S_MLEDEF));
+    	    	    	IF .inmle [MLE_A_NAME] NEQ 0 THEN
+    	    	    	    mle [MLE_A_NAME] = MEM_GETTXT (.inmle [MLE_A_NAME],
+    	    	    	    	    CH$PLUS (inmle, MLE_S_MLEDEF+.inmle [MLE_A_ADDR]));
+    	    	    	END
+    	    	    ELSE    	    	    	    	  ! pre-V5.0 entry
+    	    	    	BEGIN
+		    	!
+		    	!  Now copy the ADDR, NAME, and FORWARD, which are all
+		    	!  stored as ASCIC strings.
+		    	!
+		    	ptr = CH$PLUS (inmle, addr_offset);
+		    	len = CH$RCHAR_A (ptr);		!Get ADDR length
+    	    	    	status = MEM_GETMLE (mle, .len);
+    	    	    	IF NOT .status THEN EXITLOOP;
+    	    	    	CH$MOVE (addr_offset, inmle, .mle);
+    	    	    	BEGIN
+    	    	    	    BIND adr = .mle [MLE_A_ADDR] : TXTDEF;
+    	    	    	    CH$MOVE (.len, .ptr, adr [TXT_T_TEXT]);
+    	    	    	END;
+    	    	    	ptr = CH$PLUS (.ptr, .len);
+    	    	    	len = CH$RCHAR_A (ptr);
+    	    	    	IF .len NEQ 0 THEN mle [MLE_A_NAME] = MEM_GETTXT (.len, .ptr);
+		    	END;
+		 END
+	ELSE
+	    BEGIN
+	    INIT_SDESC (SDSC, .RAB [RAB$W_RSZ], .RAB [RAB$L_UBF]);
+	    FREE_STRINGS (NAM);
+	    IF NOT PARSE821 (SDSC, RTEQ, LCLP, DOMP)
+    	    THEN
+		    PARSE_MBOX (SDSC, LCLP, DOMP, NAM);
+	    IF .RTEQ [QUE_L_HEAD] NEQA RTEQ
+    	    THEN
+		BEGIN
+		TXT = .RTEQ [QUE_L_HEAD];
+		WHILE .TXT NEQA RTEQ DO
+		    BEGIN
+	    	    INIT_SDESC (SDSC, .TXT [TXT_W_LEN], TXT [TXT_T_TEXT]);
+		    STR$UPCASE (SDSC, SDSC);
+		    TXT = .TXT [TXT_L_FLINK];
+		    END;
+		FORMAT821 (RTEQ, LCLP, DOMP, STR);
+		WHILE NOT REMQUE (.RTEQ [QUE_L_HEAD], TXT) DO FREETXT (TXT);
+		END
+	    ELSE
+    	    	STR$CONCAT (STR, LCLP, ascid_atsign, DOMP);
+    	    status = MEM_GETMLE (mle, .str [DSC$W_LENGTH]);
+    	    IF NOT .status THEN EXITLOOP;
+    	    BEGIN
+    	    	BIND adr = .mle [MLE_A_ADDR] : TXTDEF;
+    	    	CH$MOVE (.str [DSC$W_LENGTH], .str [DSC$A_POINTER], adr [TXT_T_TEXT]);
+    	    END;
+	    IF .NAM [DSC$W_LENGTH] GTR 0 THEN
+		BEGIN
+		VERIFY_PHRASE (NAM, NAM);
+    	    	mle [MLE_A_NAME] = MEM_GETTXT (.nam [DSC$W_LENGTH], .nam [DSC$A_POINTER]);
+		END;
+	    END; ! else convert_pre_v3
+
+    	INSQUE (.mle, .mlstq [QUE_L_TAIL]);
+
+    END; ! while $get
+
+    $CLOSE (FAB=FAB);
+
+    LIB$FREE_VM (%REF (.RAB [RAB$W_USZ]), RAB [RAB$L_UBF]);
+
+    FREE_STRINGS (STR, LCLP, DOMP, NAM);
+
+    IF .STATUS EQL RMS$_EOF THEN
+	SS$_NORMAL
+    ELSE
+	.STATUS
+
+END; ! READ_MAILING_LIST
+
+%SBTTL 'WRITE_MAILING_LIST'
+GLOBAL ROUTINE WRITE_MAILING_LIST (MLST_A, MLSTQ_A) =
+BEGIN
+!++
+! FUNCTIONAL DESCRIPTION:
+!
+!   Writes the file containing the list of addresses in the mailing list.
+!
+! RETURNS:	cond_value, longword (unsigned), write only, by value
+!
+! PROTOTYPE:
+!
+!   WRITE_MAILING_LIST	mlst, mlstq
+!
+! IMPLICIT INPUTS:  None.
+!
+! IMPLICIT OUTPUTS: None.
+!
+! COMPLETION CODES:
+!
+!   SS$_NORMAL:		normal successful completion.
+!
+! SIDE EFFECTS:
+!
+!   None.
+!--
+    BIND
+	MLST	= .MLST_A	: MLSTDEF,
+	MLSTQ	= .MLSTQ_A	: QUEDEF;
+
+    LOCAL                   
+	STR 	    : $BBLOCK [DSC$K_S_BLN],
+	STR2	    : $BBLOCK [DSC$K_S_BLN],
+	STR3	    : $BBLOCK [DSC$K_S_BLN],
+	MLE 	    : REF MLEDEF,
+	work_mle    : REF MLEDEF,
+    	mlesize,
+	TXT : REF TXTDEF,
+	FAB : $FAB_DECL,
+	RAB : $RAB_DECL,
+	FCTX,
+	STATUS;
+
+    INIT_DYNDESC (STR);
+    LIB$SYS_FAO (ascid_mlist_filename, 0, STR,
+	.MLST [MLST_W_NAME], MLST [MLST_T_NAME]);
+    $FAB_INIT (FAB=FAB, FNA=.STR [DSC$A_POINTER], RFM=VAR,
+	FNS=.STR [DSC$W_LENGTH], FAC=PUT, MRS=0);
+
+    STATUS = $CREATE (FAB=FAB);
+
+    FREE_STRINGS (STR);
+
+    IF NOT .STATUS THEN RETURN .status;
+    $RAB_INIT (RAB=RAB, FAB=FAB, ROP=RAH);
+    STATUS = $CONNECT (RAB=RAB);
+    IF NOT .STATUS THEN
+    BEGIN
+    	FAB [FAB$V_DLT] = 1;
+	$CLOSE (FAB=FAB);
+	RETURN .STATUS;
+    END;
+
+    mlesize = 2048;
+    mle = .mlstq [QUE_L_HEAD];
+    WHILE .mle NEQA mlstq [QUE_L_HEAD] DO
+    BEGIN
+    	BIND
+    	    a = mle [MLE_A_ADDR]    : REF TXTDEF,
+    	    n = mle [MLE_A_NAME]    : REF TXTDEF;
+
+    	LOCAL
+    	    size;
+    	size = MLE_S_MLEDEF + .a [TXT_W_LEN];
+    	IF .n NEQA 0 THEN size = .size + .n [TXT_W_LEN];
+
+    	IF .mlesize LSS .size THEN
+    	    mlesize = (.size + 511)/512 * 512;
+
+    	mle = .mle [MLE_L_FLINK];
+
+    END;
+
+    IF .mlesize GTRU 16384 THEN mlesize = 16384;
+
+    status = LIB$GET_VM (mlesize, WORK_MLE);
+    IF NOT .status THEN
+    BEGIN
+    	FAB [FAB$V_DLT] = 1;
+    	$CLOSE (FAB=FAB);
+    	RETURN .status;
+    END;
+
+    RAB [RAB$W_RSZ] = MLE_S_MLEDEF;
+    RAB [RAB$L_RBF] = .WORK_MLE;
+    MLE = .MLSTQ [QUE_L_HEAD];
+    WHILE .MLE NEQA MLSTQ [QUE_L_HEAD] DO
+    BEGIN
+    	BIND
+    	    adr = mle [MLE_A_ADDR]  : REF TXTDEF,
+    	    nam = mle [MLE_A_NAME]  : REF TXTDEF;
+	!
+	!  As of MX v3.2, the info stored in .MAILING_LIST files consists
+	!  of a static portion, followed by three .ASCIC strings (the
+	!  address, the name, and the forwarding address).  Format the
+	!  the info in the MLE structure into that format.
+    	!
+    	!  As of V5.0, the address & name fields are no longer part of
+    	!  the MLE structure itself, so we just use the two address
+    	!  fields to store the lengths.
+	!
+	LOCAL ptr : REF $BBLOCK, len;
+	!
+	!  Copy the structure to the buffer.  Zero out the
+    	!  FLINK and BLINK fields -- we will use that as an
+        !  indicator that this is a V5.0-format record.
+	!
+	CH$MOVE (MLE_S_MLEDEF, .mle, .work_mle);
+    	work_mle [MLE_L_FLINK] = work_mle [MLE_L_BLINK] = 0;
+	!
+	!  Now append the two strings.  If the length will
+        !  exceed our 16K max for a record, we truncate.  Too bad!
+	!
+    	len = .adr [TXT_W_LEN];
+    	IF .len GTR 16384-MLE_S_MLEDEF THEN
+    	    len = 16384-MLE_S_MLEDEF;
+    	work_mle [MLE_A_ADDR] = .len;
+    	CH$MOVE (.len, adr [TXT_T_TEXT], CH$PLUS (.work_mle, MLE_S_MLEDEF));
+    	IF .nam NEQA 0 THEN
+    	BEGIN
+    	    len = MIN (.nam [TXT_W_LEN],16384-(MLE_S_MLEDEF + .work_mle [MLE_A_ADDR]));
+    	    work_mle [MLE_A_NAME] = .len;
+    	    CH$MOVE (.len, nam [TXT_T_TEXT],
+    	    	CH$PLUS (.work_mle, MLE_S_MLEDEF+.work_mle [MLE_A_ADDR]));
+    	END;
+	RAB [RAB$W_RSZ] = MLE_S_MLEDEF + .work_mle [MLE_A_ADDR] + .work_mle [MLE_A_NAME];
+	STATUS = $PUT (RAB=RAB);
+	IF NOT .STATUS THEN EXITLOOP;
+	MLE = .MLE [MLE_L_FLINK];
+    END;
+
+    LIB$FREE_VM (mlesize, WORK_MLE);
+
+    IF NOT .STATUS THEN FAB [FAB$V_DLT] = 1;
+    $CLOSE (FAB=FAB);
+    IF NOT .STATUS THEN RETURN .STATUS;
+
+    INIT_DYNDESC (STR2, STR3);
+    LIB$SYS_FAO (%ASCID'MX_MLIST_DIR:!AD.MAILING_LIST', 0, STR,
+	.MLST [MLST_W_NAME], MLST [MLST_T_NAME]);
+    FCTX = 0;
+    IF LIB$FIND_FILE (STR, STR2, FCTX, %ASCID';*') THEN
+    BEGIN
+	WHILE LIB$FIND_FILE (STR, STR3, FCTX, %ASCID';*') DO
+	    LIB$DELETE_FILE (STR3);
+	LIB$RENAME_FILE (STR2, %ASCID'*.*;1');
+    END;
+    IF .FCTX NEQU 0 THEN LIB$FIND_FILE_END (FCTX);
+
+! Get rid of the old-style mailing list files
+
+    LIB$SYS_FAO (%ASCID'MX_MLIST_DIR:!AD.MLIST', 0, STR,
+	.MLST [MLST_W_NAME], MLST [MLST_T_NAME]);
+    FCTX = 0;
+    WHILE LIB$FIND_FILE (STR, STR3, FCTX, %ASCID';*') DO
+	LIB$DELETE_FILE (STR3);
+    IF .FCTX NEQU 0 THEN LIB$FIND_FILE_END (FCTX);
+
+    FREE_STRINGS (STR, STR2, STR3);
+
+    SS$_NORMAL
+
+END; ! WRITE_MAILING_LIST
+
+%SBTTL 'MLIST_ADD'
+ROUTINE MLIST_ADD (QCTX, MLST_A, MLSTQ_A, ADRLST_A, CHANGED_A, NOTIFY,
+		   FLAGS, SFLAGS) =
+BEGIN
+!++
+! FUNCTIONAL DESCRIPTION:
+!
+!   Adds the specified user(s) to the mailing list, if they are
+!   not already on the list.
+!
+! RETURNS:	cond_value, longword (unsigned), write only, by value
+!
+! PROTOTYPE:
+!
+!   MLIST_ADD  mlst, adrlst
+!
+! IMPLICIT INPUTS:  None.
+!
+! IMPLICIT OUTPUTS: None.
+!
+! COMPLETION CODES:
+!
+!   SS$_NORMAL:		normal successful completion.
+!
+! SIDE EFFECTS:
+!
+!   None.
+!--
+    BIND
+	MLST	= .MLST_A   : MLSTDEF,
+	MLSTQ	= .MLSTQ_A  : QUEDEF,
+	ADRLST	= .ADRLST_A : $BBLOCK [DSC$K_S_BLN];
+
+    LOCAL
+	TMPQ	: QUEDEF,
+	SUCQ	: QUEDEF,
+	ERRQ	: QUEDEF,
+	TMPQ2	: QUEDEF,
+	RTEQ	: QUEDEF,
+	ADR : REF TXTDEF,
+	SUB : REF MLEDEF,
+	TXT : REF TXTDEF,
+	ADR2	: REF TXTDEF,
+	SDSC	: $BBLOCK [DSC$K_S_BLN],
+	STR : $BBLOCK [DSC$K_S_BLN],
+	DOMP	: $BBLOCK [DSC$K_S_BLN],
+	LCLP	: $BBLOCK [DSC$K_S_BLN],
+	NAM : $BBLOCK [DSC$K_S_BLN],
+	STATUS;
+
+    INIT_DYNDESC (STR, DOMP, LCLP, NAM);
+    SDSC [DSC$B_DTYPE] = DSC$K_DTYPE_T;
+    SDSC [DSC$B_CLASS] = DSC$K_CLASS_S;
+    INIT_QUEUE (TMPQ, SUCQ, ERRQ, TMPQ2, RTEQ);
+
+    PARSE_ADDRLIST (ADRLST, TMPQ, 1);
+    PARSE_ADDRLIST (ADRLST, TMPQ2, 0);
+    WHILE NOT REMQUE (.TMPQ [QUE_L_HEAD], ADR) DO
+    BEGIN
+	REMQUE (.TMPQ2 [QUE_L_HEAD], ADR2);
+	INIT_SDESC (SDSC, .ADR2 [TXT_W_LEN], ADR2 [TXT_T_TEXT]);
+	STATUS = PARSE821 (SDSC, RTEQ, LCLP, DOMP);
+	IF .STATUS AND .RTEQ [QUE_L_HEAD] NEQA RTEQ THEN
+	BEGIN
+	    INIT_SDESC (SDSC, .ADR [TXT_W_LEN], ADR [TXT_T_TEXT]);
+	    IF NOT PARSE_MBOX (SDSC, STR, STR, NAM) THEN FREE_STRINGS (NAM);
+	    TXT = .RTEQ [QUE_L_HEAD];
+	    WHILE .TXT NEQA RTEQ DO
+	    BEGIN
+		INIT_SDESC (SDSC, .TXT [TXT_W_LEN], TXT [TXT_T_TEXT]);
+		STR$UPCASE (SDSC, SDSC);
+		TXT = .TXT [TXT_L_FLINK];
+	    END;
+	END
+	ELSE
+	BEGIN
+	    INIT_SDESC (SDSC, .ADR [TXT_W_LEN], ADR [TXT_T_TEXT]);
+	    STATUS = PARSE_MBOX (SDSC, LCLP, DOMP, NAM);
+	    WHILE NOT REMQUE (.RTEQ [QUE_L_HEAD], TXT) DO FREETXT (TXT);
+	END;
+
+	IF .STATUS THEN
+	BEGIN
+	    STR$UPCASE (DOMP, DOMP);
+	    IF .RTEQ [QUE_L_HEAD] EQLA RTEQ THEN
+		STR$CONCAT (STR, LCLP, ascid_atsign, DOMP)
+	    ELSE
+		FORMAT821 (RTEQ, LCLP, DOMP, STR);
+
+	    IF .NAM [DSC$W_LENGTH] EQL 0 THEN
+		TRACE ('  MLIST_ADD: Adding !AS to list.', STR)
+	    ELSE
+		TRACE ('  MLIST_ADD: Adding !AS (Name=!AS) to list.', STR, NAM);
+
+	    SUB = .MLSTQ [QUE_L_HEAD];
+	    WHILE .SUB NEQA MLSTQ [QUE_L_HEAD] DO
+	    BEGIN
+    	    	BIND a = .SUB [MLE_A_ADDR] : TXTDEF;
+		SDSC [DSC$W_LENGTH] = .a [TXT_W_LEN];
+		SDSC [DSC$A_POINTER] = a [TXT_T_TEXT];
+                IF .mlst [MLST_V_NOCASE] OR .sub [MLE_V_NOCASE] THEN
+                BEGIN
+                    IF STR$CASE_BLIND_COMPARE (str, sdsc) EQL 0 THEN EXITLOOP;
+                END
+                ELSE
+                BEGIN
+		    IF STR$COMPARE_EQL (STR, SDSC) EQL 0 THEN EXITLOOP;
+                END;
+		SUB = .SUB [MLE_L_FLINK];
+	    END;
+
+            IF .SUB EQLA MLSTQ [QUE_L_HEAD] AND
+                (.NOTIFY<1,2,0> EQL 1 OR (.NOTIFY<1,2,0> EQL 0 AND .mlst [MLST_V_SUBCNFRM])) THEN
+            BEGIN
+                TRACE ('  MLIST_ADD: confirmation required; creating transaction file.');
+                status = MLIST_CREATE_TRANSACTION (.qctx, mlst, adrlst, str, .NOTIFY<0,1,0>, .FLAGS, .SFLAGS);
+                IF NOT .status THEN
+                BEGIN
+                    adr [TXT_W_CODE] = MLERR__PROCERR;
+                    INSQUE_TAIL (.adr, errq);
+                END;
+            END
+	    ELSE IF .SUB EQLA MLSTQ [QUE_L_HEAD] THEN
+	    BEGIN
+		LOCAL MLE : REF MLEDEF;
+
+    	    	status = MEM_GETMLE (MLE, .STR [DSC$W_LENGTH]);
+    	    	IF .status THEN
+    	    	BEGIN
+    	    	    BIND a = .MLE [MLE_A_ADDR] : TXTDEF;
+		    MLE [MLE_V_NOMAIL] = .FLAGS<0,1,0> OR
+			(IF .sflags<0,1,0> THEN 0 ELSE .mlst [MLST_V_SS_NOMAIL]);
+		    MLE [MLE_V_CONCEAL] = .FLAGS<1,1,0> OR
+			(IF .sflags<1,1,0> THEN 0 ELSE .mlst [MLST_V_SS_CONCEAL]);
+		    MLE [MLE_V_NOREPRO] = .FLAGS<2,1,0> OR
+			(IF .sflags<2,1,0> THEN 0 ELSE .mlst [MLST_V_SS_NOREPRO]);
+		    MLE [MLE_V_NOCASE] = .FLAGS<3,1,0> OR
+			(IF .sflags<3,1,0> THEN 0 ELSE .mlst [MLST_V_NOCASE]);
+		    MLE [MLE_V_ACCESS] = .FLAGS<4,1,0>;
+		    MLE [MLE_V_DIGEST] = .FLAGS<5,1,0> OR
+			(IF .sflags<5,1,0> THEN 0 ELSE .mlst [MLST_V_SS_DIGEST]);
+		    MLE [MLE_V_DENY] = .FLAGS<6,1,0>;
+		    MLE [MLE_V_NOPOST] = .FLAGS<7,1,0> OR
+			(IF .sflags<7,1,0> THEN 0 ELSE .mlst [MLST_V_SS_NOPOST]);
+		    CH$MOVE (.STR [DSC$W_LENGTH], .STR [DSC$A_POINTER], a [TXT_T_TEXT]);
+		    IF .NAM [DSC$W_LENGTH] GTR 0 THEN
+		    BEGIN
+		    	VERIFY_PHRASE (NAM, NAM);
+    	    	    	MLE [MLE_A_NAME] = MEM_GETTXT (.NAM [DSC$W_LENGTH], .NAM [DSC$A_POINTER]);
+		    END;
+		    .CHANGED_A = 1;				! The queue has been changed (SUCQ may not reflect that fact at this point).
+		    INSQUE (.MLE, .MLSTQ [QUE_L_TAIL]);
+		    IF NOT .MLE [MLE_V_ACCESS] AND NOT (.mle [MLE_V_DENY]) THEN
+		    	INSTXT (STR, .SUCQ [QUE_L_TAIL]);	! Enqueue only NON-ACCESS entries for later notification.
+	    	    FREETXT (ADR);
+		    TRACE ('  MLIST_ADD:    successfully added.');
+                    IF .mlst [MLST_V_NTFYADD] THEN
+	                MLIST_NOTIFY_OWNER (.QCTX, MLST, 0, str, %ASCID'Added to list');
+    	    	END
+    	    	ELSE
+    	    	BEGIN
+    	    	    ADR [TXT_W_CODE] = MLERR__PROCERR;
+    	    	    INSQUE (.ADR, .ERRQ [QUE_L_TAIL]);
+		    TRACE ('  MLIST_ADD:    could not allocate a mailing list entry.');
+    	    	END;
+	    END
+    	    ELSE
+    	    BEGIN
+	    	IF .sub [MLE_V_DENY] THEN
+    	    	    FREETXT (ADR)  ! don't tell them
+    	    	ELSE
+    	    	BEGIN
+    	    	    ADR [TXT_W_CODE] = MLERR__ALRSUB;
+    	    	    INSQUE (.ADR, .ERRQ [QUE_L_TAIL]);
+    	    	END;
+		TRACE ('  MLIST_ADD:    oops -- already on list.');
+    	    END;
+	END
+	ELSE
+	BEGIN
+	    TRACE ('  MLIST_ADD:  Invalid address: !AS', SDSC);
+	    ADR [TXT_W_CODE] = MLERR__INVADDR;
+	    INSQUE (.ADR, .ERRQ [QUE_L_TAIL]);
+	END;
+	WHILE NOT REMQUE (.RTEQ [QUE_L_HEAD], TXT) DO FREETXT (TXT);
+	FREETXT (ADR2);
+    END;
+
+    IF .SUCQ [QUE_L_HEAD] NEQA SUCQ [QUE_L_HEAD] THEN
+    BEGIN
+	.CHANGED_A = 1;
+	IF .NOTIFY<0,1,0> THEN MLIST_NOTIFY_COMPLETE (.QCTX, MLST, SUCQ, MLCMD__ADD);
+	WHILE NOT REMQUE (.SUCQ [QUE_L_HEAD], ADR) DO FREETXT (ADR);
+    END;
+
+    IF .ERRQ [QUE_L_HEAD] NEQA ERRQ [QUE_L_HEAD] THEN
+    BEGIN
+	MLIST_CTRL_ERROR (MLST, ERRQ, MLCMD__ADD);
+	WHILE NOT REMQUE (.ERRQ [QUE_L_HEAD], ADR) DO FREETXT (ADR);
+    END;
+
+    FREE_STRINGS (STR, DOMP, LCLP, NAM);
+
+    SS$_NORMAL
+
+END; ! MLIST_ADD
+
+%SBTTL 'MLIST_REMOVE'
+ROUTINE MLIST_REMOVE (QCTX, MLST_A, MLSTQ_A, ADRLST_A, CHANGED_A, NOTIFY,
+	flags, sflags) =
+BEGIN
+!++
+! FUNCTIONAL DESCRIPTION:
+!
+!   Removes the specified user(s) from the mailing list, if they are
+!   on the list.
+!
+! RETURNS:	cond_value, longword (unsigned), write only, by value
+!
+! PROTOTYPE:
+!
+!   MLIST_REMOVE  mlst, adrlst
+!
+! IMPLICIT INPUTS:  None.
+!
+! IMPLICIT OUTPUTS: None.
+!
+! COMPLETION CODES:
+!
+!   SS$_NORMAL:		normal successful completion.
+!
+! SIDE EFFECTS:
+!
+!   None.
+!--
+    BIND
+	MLST	= .MLST_A   : MLSTDEF,
+	MLSTQ	= .MLSTQ_A  : QUEDEF,
+	ADRLST	= .ADRLST_A : $BBLOCK [DSC$K_S_BLN];
+
+    LOCAL
+	TMPQ	: QUEDEF,
+	SUCQ	: QUEDEF,
+	ERRQ	: QUEDEF,
+	RTEQ	: QUEDEF,
+	TXT : REF TXTDEF,
+	ADR : REF TXTDEF,
+	SUB : REF MLEDEF,
+	SDSC	: $BBLOCK [DSC$K_S_BLN],
+	STR : $BBLOCK [DSC$K_S_BLN],
+	DOMP	: $BBLOCK [DSC$K_S_BLN],
+	LCLP	: $BBLOCK [DSC$K_S_BLN],
+	STATUS;
+
+    INIT_DYNDESC (STR, DOMP, LCLP);
+    SDSC [DSC$B_DTYPE] = DSC$K_DTYPE_T;
+    SDSC [DSC$B_CLASS] = DSC$K_CLASS_S;
+    INIT_QUEUE (TMPQ, SUCQ, ERRQ, RTEQ);
+
+    PARSE_ADDRLIST (ADRLST, TMPQ);
+    WHILE NOT REMQUE (.TMPQ [QUE_L_HEAD], ADR) DO
+    BEGIN
+	SDSC [DSC$W_LENGTH] = .ADR [TXT_W_LEN];
+	SDSC [DSC$A_POINTER] = ADR [TXT_T_TEXT];
+	STATUS = PARSE821 (SDSC, RTEQ, LCLP, DOMP);
+	IF NOT .STATUS THEN STATUS = PARSE_MBOX (SDSC, LCLP, DOMP);
+	IF .STATUS THEN
+	BEGIN
+	    STR$UPCASE (DOMP, DOMP);
+	    IF .RTEQ [QUE_L_HEAD] NEQA RTEQ THEN
+	    BEGIN
+		TXT = .RTEQ [QUE_L_HEAD];
+		WHILE .TXT NEQA RTEQ DO
+		BEGIN
+		    INIT_SDESC (SDSC, .TXT [TXT_W_LEN], TXT [TXT_T_TEXT]);
+		    STR$UPCASE (SDSC, SDSC);
+		    TXT = .TXT [TXT_L_FLINK];
+		END;
+		FORMAT821 (RTEQ, LCLP, DOMP, STR);
+    	    	WHILE NOT REMQUE (.RTEQ [QUE_L_HEAD], TXT) DO FREETXT (TXT);
+	    END
+	    ELSE
+		STR$CONCAT (STR, LCLP, ascid_atsign, DOMP);
+
+	    TRACE ('  MLIST_REMOVE:  Removing !AS from list.', STR);
+	    SUB = .MLSTQ [QUE_L_HEAD];
+	    WHILE .SUB NEQA MLSTQ [QUE_L_HEAD] DO
+	    BEGIN
+    	    	BIND addr = .SUB [MLE_A_ADDR] : TXTDEF;
+		SDSC [DSC$W_LENGTH] = .addr [TXT_W_LEN];
+		SDSC [DSC$A_POINTER] = addr [TXT_T_TEXT];
+		IF (.SUB [MLE_V_NOCASE]) OR (.FLAGS<3,1,0>)
+		   OR (.mlst [MLST_V_NOCASE]) THEN
+		BEGIN
+		    IF STR$CASE_BLIND_COMPARE (STR, SDSC) EQL 0 THEN EXITLOOP;
+		END
+		ELSE
+		    IF STR$COMPARE_EQL (STR, SDSC) EQL 0 THEN EXITLOOP;
+		SUB = .SUB [MLE_L_FLINK];
+	    END;
+	    IF .SUB EQLA MLSTQ [QUE_L_HEAD] THEN
+	    BEGIN
+		TRACE ('  MLIST_REMOVE:    oops -- was not on list.');
+		INSTXT (STR, .ERRQ [QUE_L_TAIL], MLERR__NOTSUB)
+	    END
+	    ELSE
+	    BEGIN
+		.CHANGED_A = 1;				! The mailing list has been altered in some way.
+		IF NOT .SUB [MLE_V_ACCESS] AND
+		   NOT (.sub [MLE_V_DENY])
+		THEN
+		    INSTXT (STR, .SUCQ [QUE_L_TAIL]);	! Add to the success queue all items for which notifications are
+							! appropriate.	Access control items are always omitted.
+		REMQUE (.SUB, SUB);
+    	    	MEM_FREEMLE (SUB);
+		TRACE ('  MLIST_REMOVE:     successfully removed.');
+                IF .mlst [MLST_V_NTFYREM] THEN
+                    MLIST_NOTIFY_OWNER (.QCTX, MLST, 0, str, %ASCID'Removed from list');
+	    END;
+	    FREETXT (ADR);
+	END
+	ELSE
+	BEGIN
+	    ADR [TXT_W_CODE] = MLERR__INVADDR;
+	    INSQUE (.ADR, .ERRQ [QUE_L_TAIL]);
+	END;
+    END;
+
+    IF .SUCQ [QUE_L_HEAD] NEQA SUCQ [QUE_L_HEAD] THEN
+    BEGIN
+	.CHANGED_A = 1;
+	IF .NOTIFY THEN MLIST_NOTIFY_COMPLETE (.QCTX, MLST, SUCQ, MLCMD__REMOVE);
+	WHILE NOT REMQUE (.SUCQ [QUE_L_HEAD], ADR) DO FREETXT (ADR);
+    END;
+
+    IF .ERRQ [QUE_L_HEAD] NEQA ERRQ [QUE_L_HEAD] THEN
+    BEGIN
+	MLIST_CTRL_ERROR (MLST, ERRQ, MLCMD__REMOVE);
+	WHILE NOT REMQUE (.ERRQ [QUE_L_HEAD], ADR) DO FREETXT (ADR);
+    END;
+
+    FREE_STRINGS (STR, DOMP, LCLP);
+
+    SS$_NORMAL
+
+END; ! MLIST_REMOVE
+
+%SBTTL 'MLIST_MODIFY'
+ROUTINE MLIST_MODIFY (QCTX, MLST_A, MLSTQ_A, ADRLST_A, CHANGED_A, NOTIFY,
+	flags, sflags) =
+BEGIN
+!++
+! FUNCTIONAL DESCRIPTION:
+!
+!   Removes the specified user(s) from the mailing list, if they are
+!   on the list.
+!
+! RETURNS:	cond_value, longword (unsigned), write only, by value
+!
+! PROTOTYPE:
+!
+!   MLIST_MODIFY  mlst, adrlst
+!
+! IMPLICIT INPUTS:  None.
+!
+! IMPLICIT OUTPUTS: None.
+!
+! COMPLETION CODES:
+!
+!   SS$_NORMAL:		normal successful completion.
+!
+! SIDE EFFECTS:
+!
+!   None.
+!--
+    BIND
+	MLST	= .MLST_A   : MLSTDEF,
+	MLSTQ	= .MLSTQ_A  : QUEDEF,
+	ADRLST	= .ADRLST_A : $BBLOCK [DSC$K_S_BLN];
+
+    LOCAL
+	TMPQ	: QUEDEF,
+	ERRQ	: QUEDEF,
+	RTEQ	: QUEDEF,
+	TXT : REF TXTDEF,
+	ADR : REF TXTDEF,
+	SUB : REF MLEDEF,
+	SDSC	: $BBLOCK [DSC$K_S_BLN],
+	STR : $BBLOCK [DSC$K_S_BLN],
+	DOMP	: $BBLOCK [DSC$K_S_BLN],
+	LCLP	: $BBLOCK [DSC$K_S_BLN],
+	STATUS;
+
+    INIT_DYNDESC (STR, DOMP, LCLP);
+    SDSC [DSC$B_DTYPE] = DSC$K_DTYPE_T;
+    SDSC [DSC$B_CLASS] = DSC$K_CLASS_S;
+    INIT_QUEUE (TMPQ, ERRQ, RTEQ);
+
+    PARSE_ADDRLIST (ADRLST, TMPQ);
+    WHILE NOT REMQUE (.TMPQ [QUE_L_HEAD], ADR) DO
+    BEGIN
+	SDSC [DSC$W_LENGTH] = .ADR [TXT_W_LEN];
+	SDSC [DSC$A_POINTER] = ADR [TXT_T_TEXT];
+	STATUS = PARSE821 (SDSC, RTEQ, LCLP, DOMP);
+	IF NOT .STATUS THEN STATUS = PARSE_MBOX (SDSC, LCLP, DOMP);
+	IF .STATUS THEN
+	BEGIN
+	    STR$UPCASE (DOMP, DOMP);
+	    IF .RTEQ [QUE_L_HEAD] NEQA RTEQ THEN
+	    BEGIN
+		TXT = .RTEQ [QUE_L_HEAD];
+		WHILE .TXT NEQA RTEQ DO
+		BEGIN
+		    INIT_SDESC (SDSC, .TXT [TXT_W_LEN], TXT [TXT_T_TEXT]);
+		    STR$UPCASE (SDSC, SDSC);
+		    TXT = .TXT [TXT_L_FLINK];
+		END;
+		FORMAT821 (RTEQ, LCLP, DOMP, STR);
+    	    	WHILE NOT REMQUE (.RTEQ [QUE_L_HEAD], TXT) DO FREETXT (TXT);
+	    END
+	    ELSE
+		STR$CONCAT (STR, LCLP, ascid_atsign, DOMP);
+
+	    TRACE ('  MLIST_MODIFY:  Modifying entry for !AS.', STR);
+	    SUB = .MLSTQ [QUE_L_HEAD];
+	    WHILE .SUB NEQA MLSTQ [QUE_L_HEAD] DO
+	    BEGIN
+    	    	BIND addr = .SUB [MLE_A_ADDR] : TXTDEF;
+		SDSC [DSC$W_LENGTH] = .addr [TXT_W_LEN];
+		SDSC [DSC$A_POINTER] = addr [TXT_T_TEXT];
+		IF (.SUB [MLE_V_NOCASE]) OR (.FLAGS<3,1,0>)
+		   OR (.mlst [MLST_V_NOCASE]) THEN
+		BEGIN
+		    IF STR$CASE_BLIND_COMPARE (STR, SDSC) EQL 0 THEN EXITLOOP;
+		END
+		ELSE
+		    IF STR$COMPARE_EQL (STR, SDSC) EQL 0 THEN EXITLOOP;
+		SUB = .SUB [MLE_L_FLINK];
+	    END;
+	    IF .SUB EQLA MLSTQ [QUE_L_HEAD] THEN
+	    BEGIN
+		TRACE ('  MLIST_MODIFY:    oops -- was not on list.');
+		INSTXT (STR, .ERRQ [QUE_L_TAIL], MLERR__NOTSUB)
+	    END
+	    ELSE
+	    BEGIN
+		.CHANGED_A = 1;
+    	    	IF .sflags<0,1,0> THEN
+		    sub [MLE_V_NOMAIL] = .FLAGS<0,1,0>;
+    	    	IF .sflags<1,1,0> THEN
+		    sub [MLE_V_CONCEAL] = .FLAGS<1,1,0>;
+    	    	IF .sflags<2,1,0> THEN
+		    sub [MLE_V_NOREPRO] = .FLAGS<2,1,0>;
+    	    	IF .sflags<3,1,0> THEN
+		    sub [MLE_V_NOCASE] = .FLAGS<3,1,0>;
+    	    	IF .sflags<4,1,0> THEN
+		    sub [MLE_V_ACCESS] = .FLAGS<4,1,0>;
+    	    	IF .sflags<5,1,0> THEN
+		    sub [MLE_V_DIGEST] = .FLAGS<5,1,0>;
+    	    	IF .sflags<6,1,0> THEN
+		    sub [MLE_V_DENY] = .FLAGS<6,1,0>;
+    	    	IF .sflags<7,1,0> THEN
+		    sub [MLE_V_NOPOST] = .FLAGS<7,1,0>;
+		TRACE ('  MLIST_MODIFY:     successfully modified.');
+                IF .mlst [MLST_V_NTFYCHG] THEN
+                    MLIST_NOTIFY_OWNER (.QCTX, MLST, 0, str, %ASCID'Settings modified for');
+	    END;
+	    FREETXT (ADR);
+	END
+	ELSE
+	BEGIN
+	    ADR [TXT_W_CODE] = MLERR__INVADDR;
+	    INSQUE (.ADR, .ERRQ [QUE_L_TAIL]);
+	END;
+    END;
+
+!    IF .SUCQ [QUE_L_HEAD] NEQA SUCQ [QUE_L_HEAD] THEN
+!    BEGIN
+!	.CHANGED_A = 1;
+!	IF .NOTIFY THEN MLIST_NOTIFY_COMPLETE (.QCTX, MLST, SUCQ, MLCMD__MODIFY);
+!	WHILE NOT REMQUE (.SUCQ [QUE_L_HEAD], ADR) DO FREETXT (ADR);
+!    END;
+
+    IF .ERRQ [QUE_L_HEAD] NEQA ERRQ [QUE_L_HEAD] THEN
+    BEGIN
+	MLIST_CTRL_ERROR (MLST, ERRQ, MLCMD__MODIFY);
+	WHILE NOT REMQUE (.ERRQ [QUE_L_HEAD], ADR) DO FREETXT (ADR);
+    END;
+
+    FREE_STRINGS (STR, DOMP, LCLP);
+
+    SS$_NORMAL
+
+END; ! MLIST_MODIFY
+
+%SBTTL 'MLIST_REVIEW'
+ROUTINE MLIST_REVIEW (QCTX, MLST_A, MLSTQ_A, ORGHDRQ_A, SENDER_A, CTRL, BRIEF) =
+BEGIN
+!++
+! FUNCTIONAL DESCRIPTION:
+!
+!   Sends information about the mailing list to the proper reply
+!   address in ORGHDRQ.
+!
+! RETURNS:	cond_value, longword (unsigned), write only, by value
+!
+! PROTOTYPE:
+!
+!   MLIST_REVIEW  mlst
+!
+! IMPLICIT INPUTS:  None.
+!
+! IMPLICIT OUTPUTS: None.
+!
+! COMPLETION CODES:
+!
+!   SS$_NORMAL:		normal successful completion.
+!
+! SIDE EFFECTS:
+!
+!   None.
+!--
+    BIND
+	MLST	= .MLST_A		: MLSTDEF,
+	OWNQ	= MLST [MLST_Q_OWNQ]	: QUEDEF,
+	MODQ	= MLST [MLST_Q_MODQ]	: QUEDEF,
+	MLSTQ	= .MLSTQ_A		: QUEDEF,
+	ORGHDRQ	= .ORGHDRQ_A		: QUEDEF,
+	SENDER	= .SENDER_A 	: BLOCK [,BYTE];
+
+    TABLE (CLNAME, 'WORLD', 'GROUP', 'OWNER', 'SYSTEM');
+
+    MACRO
+	WRT (STR) =
+	BEGIN
+	    BIND _S = STR : $BBLOCK [DSC$K_S_BLN];
+	    MX_FILE_WRITE (.UNIT, _S);
+	    NEWENT [QENT_L_SIZE] = .NEWENT [QENT_L_SIZE] + ._S [DSC$W_LENGTH];
+	END%;
+    LOCAL
+	HDR 	: REF TXTDEF,
+	TXT 	: REF TXTDEF,
+	MLE 	: REF MLEDEF,
+	RCPT	: REF RCPTDEF,
+	HDRQ	: QUEDEF,
+	TMPQ	: QUEDEF,
+    	envl	: ENVLDEF,
+	NEWENT	: QENTDEF,
+	STR2	: $BBLOCK [DSC$K_S_BLN],
+	REPLYTO	: $BBLOCK [DSC$K_S_BLN],
+	SNDR822	: $BBLOCK [DSC$K_S_BLN],
+	STR 	: $BBLOCK [DSC$K_S_BLN],
+    	host	: $BBLOCK [DSC$K_S_BLN],
+	SDSC	: $BBLOCK [DSC$K_S_BLN],
+	STATUS,
+	UNIT;
+
+    INIT_DYNDESC (STR2, REPLYTO, SNDR822, STR);
+    SDSC [DSC$B_DTYPE] = DSC$K_DTYPE_T;
+    SDSC [DSC$B_CLASS] = DSC$K_CLASS_S;
+    CH$FILL (%CHAR (0), ENVL_S_ENVLDEF, envl);
+    INIT_QUEUE (HDRQ, TMPQ, envl [ENVL_Q_RCPTQUE]);
+
+    FLQ_INIT_QENT (NEWENT);
+    NEWENT [QENT_L_STATUS] = FLQ_K_STINP;
+    NEWENT [QENT_V_LOCK] = 1;
+    newent [QENT_L_DSTPRC] = FLQ_K_MX_ROUTER;
+    newent [QENT_L_ORIGIN] = MX_K_ORG_LOCAL;
+    newent [QENT_W_ORGADR] = 2;
+    CH$MOVE(2, UPLIT(%ASCII'<>'), newent [QENT_T_ORGADR]);
+    STATUS = FLQ_ADD (QCTX, NEWENT);
+    IF NOT .STATUS THEN
+    BEGIN
+	TRACE ('  MLIST_REVIEW:  Status=!XL adding review msg queue entry.',
+	    .STATUS);
+	RETURN .STATUS;
+    END;
+
+    IF .mlst [MLST_W_HOSTNAME] NEQ 0 THEN
+    	INIT_SDESC (host, .mlst [MLST_W_HOSTNAME], mlst [MLST_T_HOSTNAME]);
+
+    HDR = .ORGHDRQ [QUE_L_HEAD];
+    WHILE .HDR NEQ ORGHDRQ [QUE_L_HEAD] DO
+    BEGIN
+	CASE .HDR [TXT_W_CODE] FROM MX_K_HDR_FIRSTCODE TO MX_K_HDR_LASTCODE OF
+	SET
+	    [MX_K_HDR_FROM] :
+		STR$COPY_R (STR2, HDR [TXT_W_LEN], HDR [TXT_T_TEXT]);
+	    [MX_K_HDR_REPLY_TO] :
+		STR$COPY_R (REPLYTO, HDR [TXT_W_LEN], HDR [TXT_T_TEXT]);
+	    [MX_K_HDR_SENDER] :
+		STR$COPY_R (SNDR822, HDR [TXT_W_LEN], HDR [TXT_T_TEXT]);
+	    [INRANGE,OUTRANGE] :;
+	TES;
+	HDR = .HDR [TXT_L_FLINK];
+    END;
+
+    STR$COPY_DX (STR,
+	(IF .REPLYTO [DSC$W_LENGTH] NEQ 0 THEN REPLYTO
+	    ELSE IF .STR2 [DSC$W_LENGTH] NEQ 0 THEN STR2
+	    ELSE IF .SNDR822 [DSC$W_LENGTH] NEQ 0 THEN SNDR822
+	    ELSE .SENDER_A));
+
+    TRACE ('  MLIST_REVIEW:  Sending review to: !AS', STR);
+
+    MX_MKDATE (0, STR2, 0);
+    LIB$SYS_FAO (%ASCID'by !AS (!AS) id !UL; !AS', 0, SNDR822,
+	CONFIG [CFG_Q_MXNODE], MX_VERSION (), .NEWENT [QENT_L_ENTNUM], STR2);
+    INSTXT (SNDR822, .HDRQ [QUE_L_TAIL], MX_K_HDR_RECEIVED);
+    INSTXT (STR2, .HDRQ [QUE_L_TAIL], MX_K_HDR_DATE);
+    MAKE_MESSAGE_ID (NEWENT [QENT_L_ENTNUM], str2);
+    INSTXT (STR2, .HDRQ [QUE_L_TAIL], MX_K_HDR_MESSAGE_ID);
+
+    IF .mlst [MLST_W_HOSTNAME] NEQ 0 THEN
+    	STR$CONCAT (str2, ascid_langle, ascid_postmaster, ascid_atsign, host, ascid_rangle)
+    ELSE
+    	MX_FMT_LCL_ADDR (MX__FMT_ENVFROM, ascid_postmaster, STR2);
+    INSTXT (STR2, .HDRQ [QUE_L_TAIL], MX_K_HDR_SENDER);
+
+    IF .mlst [MLST_W_HOSTNAME] NEQ 0 THEN
+    	STR$CONCAT (str2, ascid_mxserver, ascid_atsign, host)
+    ELSE
+    	MX_FMT_LCL_ADDR (MX__FMT_FROM, ascid_mxserver, str2);
+    STORE_ORGADR (newent, str2);
+
+    IF .mlst [MLST_W_HOSTNAME] NEQ 0 THEN
+    	LIB$SYS_FAO (%ASCID %STRING (pname, ' <!AS@!AS>'), 0, str2, ascid_mxserver, host)
+    ELSE
+    	MX_FMT_LCL_ADDR (MX__FMT_FROM, ascid_mxserver, str2, ascid_pname);
+    INSTXT (STR2, .HDRQ [QUE_L_TAIL], MX_K_HDR_FROM);
+
+    INSTXT (STR, .HDRQ [QUE_L_TAIL], MX_K_HDR_TO);
+    LIB$SYS_FAO (%ASCID'Review of mailing list !AD', 0, STR2,
+	.MLST [MLST_W_NAME], MLST [MLST_T_NAME]);
+    INSTXT (STR2, .HDRQ [QUE_L_TAIL], MX_K_HDR_SUBJECT);
+
+    STATUS = PARSE_ADDRLIST (STR, TMPQ, 0);
+    IF NOT .STATUS THEN
+    BEGIN
+	LOCAL I;
+	IF (I = STR$POSITION (STR, ascid_langle)) NEQ 0 THEN
+	BEGIN
+	    STR$RIGHT (SNDR822, STR, I);
+	    STATUS = PARSE_ADDRLIST (SNDR822, TMPQ, 0);
+	END;
+    END;
+
+    WHILE NOT REMQUE (.TMPQ [QUE_L_HEAD], TXT) DO
+    BEGIN
+	MEM_GETRCPT (RCPT);
+	IF CH$RCHAR (TXT [TXT_T_TEXT]) EQL %C'<' THEN
+    	BEGIN
+    	    rcpt [RCPT_A_ADDR] = .txt;
+    	    TXT = 0;
+	END
+	ELSE
+	BEGIN
+	    SDSC [DSC$A_POINTER] = TXT [TXT_T_TEXT];
+	    SDSC [DSC$W_LENGTH] = .TXT [TXT_W_LEN];
+	    STR$CONCAT (STR, ascid_langle, SDSC, ascid_rangle);
+	    RCPT [RCPT_A_ADDR] = MEM_GETTXT (.str [DSC$W_LENGTH], .str [DSC$A_POINTER]);
+	END;
+    	rcpt [RCPT_V_DSN_NEVER] = 1;
+	INSQUE_TAIL (.RCPT, envl [ENVL_Q_RCPTQUE]);
+    	envl [ENVL_L_RCPTCOUNT] = .envl [ENVL_L_RCPTCOUNT] + 1;
+	IF .TXT NEQA 0 THEN FREETXT (TXT);
+    END;
+
+    WRITE_HDRS (.QCTX, NEWENT, ascid_hdr_info, HDRQ);
+    WHILE NOT REMQUE (.HDRQ [QUE_L_HEAD], TXT) DO FREETXT (TXT);
+
+    IF .SYSUSERS [QUE_L_HEAD] EQLA SYSUSERS
+    THEN
+	BEGIN
+    	IF .mlst [MLST_W_HOSTNAME] NEQ 0 THEN
+    	    STR$CONCAT (str2, ascid_langle, ascid_postmaster, ascid_atsign, host, ascid_rangle)
+    	ELSE
+	    MX_FMT_LCL_ADDR (MX__FMT_ENVFROM, ascid_postmaster, STR2);
+	END
+    ELSE
+    BEGIN
+	LOCAL SU : REF TXTDEF;
+	SU = .SYSUSERS [QUE_L_HEAD];
+	IF CH$RCHAR (SU [TXT_T_TEXT]) EQL %C'<' THEN
+	    STR$COPY_R (STR2, SU [TXT_W_LEN], SU [TXT_T_TEXT])
+	ELSE LIB$SYS_FAO (%ASCID'<!AD>', 0, STR2, .SU [TXT_W_LEN],
+		SU [TXT_T_TEXT]);
+    END;
+
+    envl [ENVL_V_ORIGIN] = 1;
+    envl [ENVL_L_ORIGIN] = MX_K_ORG_LOCAL;
+    envl [ENVL_V_ORGSENDER] = 1;
+    envl [ENVL_A_ORGSENDER] = MEM_GETTXT (.mlst [MLST_W_NAME], mlst [MLST_T_NAME]);
+    envl [ENVL_V_FROMADR] = 1;
+    envl [ENVL_A_FROMADR] = MEM_GETTXT (.str2 [DSC$W_LENGTH], .str2 [DSC$A_POINTER]);
+    WRITE_ENVELOPE (.QCTX, NEWENT, ascid_src_info, envl);
+
+    FLQ_MAKE_FSPEC (.NEWENT [QENT_L_ENTNUM], %ASCID'MSG_TEXT', STR);
+    MX_FILE_OPEN (MX__FILE_WRITE, STR, UNIT);
+
+    IF NOT .brief THEN
+    BEGIN
+        LIB$SYS_FAO (%ASCID'List Name: !AD', 0, STR,
+	    .MLST [MLST_W_NAME], MLST [MLST_T_NAME]);
+        IF .MLST [MLST_W_DESC] NEQ 0 THEN
+        BEGIN
+	    LIB$SYS_FAO (%ASCID' (!AD)', 0, STR2,
+	        .MLST [MLST_W_DESC], MLST [MLST_T_DESC]);
+	    STR$APPEND (STR, STR2);
+        END;
+        WRT (STR);
+        STR$COPY_DX (STR, %ASCID'  Owner: ');
+
+        TXT = .OWNQ [QUE_L_HEAD];
+        WHILE .TXT NEQA OWNQ [QUE_L_HEAD] DO
+        BEGIN
+	    QUOTE_STRING (STR2, .TXT [TXT_W_LEN], TXT [TXT_T_TEXT]);
+	    STR$APPEND (STR, STR2);
+	    WRT (STR);
+	    STR$COPY_DX (STR, ascid_nine_spaces);
+	    TXT = .TXT [TXT_L_FLINK];
+        END;
+
+        IF .MODQ [QUE_L_HEAD] NEQA MODQ [QUE_L_HEAD] THEN
+        BEGIN
+	    WRT (%ASCID'  Moderator(s):');
+	    STR$COPY_DX (STR, %ASCID'          ');
+	    TXT = .MODQ [QUE_L_HEAD];
+	    WHILE .TXT NEQA MODQ [QUE_L_HEAD] DO
+	    BEGIN
+	        QUOTE_STRING (STR2, .TXT [TXT_W_LEN], TXT [TXT_T_TEXT]);
+	        STR$APPEND (STR, STR2);
+	        WRT (STR);
+	        STR$COPY_DX (STR, %ASCID'          ');
+	        TXT = .TXT [TXT_L_FLINK];
+	    END;
+        END;
+
+        IF .MLST [MLST_W_ARCHIVE] GTR 0 THEN
+        BEGIN
+	    LIB$SYS_FAO (%ASCID'  Archive: !AD', 0, STR,
+	        .MLST [MLST_W_ARCHIVE], MLST [MLST_T_ARCHIVE]);
+	    WRT (STR);
+        END;
+
+        LIB$SYS_FAO (%ASCID'  Errors-to: !AD', 0, STR,
+		    .MLST [MLST_W_ERRSTO], MLST [MLST_T_ERRSTO]);
+        WRT (STR);
+
+        STR$COPY_DX (STR2, ascid_lparen);
+        BEGIN
+	    BIND P = MLST [MLST_L_PROT] : BLOCKVECTOR [4,1,BYTE];
+	    LOCAL DID_ONE;
+	    DECR I FROM 3 TO 0 DO
+	    BEGIN
+	        STR$APPEND (STR2, .CLNAME [.I]);
+	        DID_ONE = 0;
+	        IF .P [.I,PROT_V_READ] THEN
+	        BEGIN
+		    STR$APPEND (STR2, ascid_r);
+		    DID_ONE = 1;
+	        END;
+	        IF .P [.I,PROT_V_WRITE] THEN
+	        BEGIN
+		    IF NOT .DID_ONE THEN STR$APPEND (STR2, ascid_colon);
+		    DID_ONE = 1;
+		    STR$APPEND (STR2, ascid_w);
+	        END;
+	        IF .P [.I,PROT_V_EXECUTE] THEN
+	        BEGIN
+		    IF NOT .DID_ONE THEN STR$APPEND (STR2, ascid_colon);
+		    DID_ONE = 1;
+		    STR$APPEND (STR2, ascid_e);
+	        END;
+	        IF .P [.I,PROT_V_DELETE] THEN
+	        BEGIN
+		    IF NOT .DID_ONE THEN STR$APPEND (STR2, ascid_colon);
+		    DID_ONE = 1;
+		    STR$APPEND (STR2, ascid_d);
+	        END;
+	        IF .I NEQ 0 THEN STR$APPEND (STR2, ascid_comma);
+	    END;
+        END;
+        STR$APPEND (STR2, ascid_rparen);
+        STR$CONCAT (STR, %ASCID'  Protection: ', STR2);
+        WRT (STR);
+        WRT (ascid_null_line);
+        WRT (%ASCID'Subscribers:');
+        WRT (ascid_null_line);
+    END; ! not brief
+
+    MLE = .MLSTQ [QUE_L_HEAD];
+    WHILE .MLE NEQA MLSTQ [QUE_L_HEAD] DO
+    IF (NOT .CTRL AND (.MLE [MLE_V_CONCEAL] OR .mle [MLE_V_DENY]))
+    THEN
+	MLE = .MLE [MLE_L_FLINK]
+    ELSE
+    BEGIN
+    	BIND
+    	    addr    = MLE [MLE_A_ADDR]	: REF TXTDEF,
+    	    name    = MLE [MLE_A_NAME]	: REF TXTDEF;
+	IF .name NEQA 0 THEN
+	    IF CH$RCHAR (addr [TXT_T_TEXT]) EQL %C'<' THEN
+		LIB$SYS_FAO (%ASCID'  !AD !AD', 0, STR,
+		    .name [TXT_W_LEN], name [TXT_T_TEXT],
+		    .addr [TXT_W_LEN], addr [TXT_T_TEXT])
+	    ELSE
+		 LIB$SYS_FAO (%ASCID'  !AD <!AD>', 0, STR,
+		    .name [TXT_W_LEN], name [TXT_T_TEXT],
+		    .addr [TXT_W_LEN], addr [TXT_T_TEXT])
+	ELSE
+	    LIB$SYS_FAO (%ASCID'  !AD', 0, STR,
+		    .addr [TXT_W_LEN], addr [TXT_T_TEXT]);
+	FREE_STRINGS (STR2);
+	IF .MLE [MLE_V_NOMAIL] THEN STR$COPY_DX (STR2, ascid_nomail);
+	IF .MLE [MLE_V_NOCASE] THEN
+	BEGIN
+	    IF .STR2 [DSC$W_LENGTH] GTR 0 THEN STR$APPEND (STR2, ascid_comma);
+	    STR$APPEND (STR2, ascid_nocase);
+	END;
+	IF .MLE [MLE_V_CONCEAL] THEN
+	BEGIN
+	    IF .STR2 [DSC$W_LENGTH] GTR 0 THEN STR$APPEND (STR2, ascid_comma);
+	    STR$APPEND (STR2, ascid_conceal);
+	END;
+	IF .MLE [MLE_V_NOREPRO] THEN
+	BEGIN
+	    IF .STR2 [DSC$W_LENGTH] GTR 0 THEN STR$APPEND (STR2, ascid_comma);
+	    STR$APPEND (STR2, ascid_norepro);
+	END;
+	IF .MLE [MLE_V_ACCESS] THEN
+	BEGIN
+	    IF .STR2 [DSC$W_LENGTH] GTR 0 THEN STR$APPEND (STR2, ascid_comma);
+	    STR$APPEND (STR2, ascid_access);
+	END;
+	IF .MLE [MLE_V_DIGEST] THEN
+	BEGIN
+	    IF .STR2 [DSC$W_LENGTH] GTR 0 THEN STR$APPEND (STR2, ascid_comma);
+	    STR$APPEND (STR2, ascid_digest);
+	END;
+	IF .MLE [MLE_V_DENY] THEN
+	BEGIN
+	    IF .STR2 [DSC$W_LENGTH] GTR 0 THEN STR$APPEND (STR2, ascid_comma);
+	    STR$APPEND (STR2, ascid_deny);
+	END;
+	IF (.MLE [MLE_V_NOPOST] AND .ctrl) THEN		!Only show owner NOPOST
+	BEGIN
+	    IF .STR2 [DSC$W_LENGTH] GTR 0 THEN STR$APPEND (STR2, ascid_comma);
+	    STR$APPEND (STR2, ascid_nopost);
+	END;
+	IF .STR2 [DSC$W_LENGTH] GTR 0 THEN
+	BEGIN
+	    STR$APPEND (STR, %ASCID' (');
+	    STR$APPEND (STR, STR2);
+	    STR$APPEND (STR, ascid_rparen);
+	END;
+	WRT (STR);
+	MLE = .MLE [MLE_L_FLINK];
+    END;
+
+    MX_FILE_CLOSE (.UNIT);
+
+    NEWENT [QENT_L_SIZE] = .NEWENT [QENT_L_SIZE] * .envl [ENVL_L_RCPTCOUNT];
+    NEWENT [QENT_L_STATUS] = FLQ_K_STRDY;
+    FLQ_UPDATE (QCTX, NEWENT);
+
+    DISPOSE_ENVELOPE (envl);
+
+    TRACE ('  MLIST_REVIEW:  Sent.');
+
+    FREE_STRINGS (STR, STR2, REPLYTO, SNDR822);
+
+    SS$_NORMAL
+
+END; ! MLIST_REVIEW
+
+%SBTTL 'MLIST_LIST'
+ROUTINE MLIST_LIST (QCTX, ORGHDRQ_A, FROMSTR_A, SENDER_A) =
+BEGIN
+!++
+! FUNCTIONAL DESCRIPTION:
+!
+!   Sends information about the mailing list to the proper reply
+!   address in ORGHDRQ.
+!
+! RETURNS:	cond_value, longword (unsigned), write only, by value
+!
+! PROTOTYPE:
+!
+!   MLIST_LIST	mlst
+!
+! IMPLICIT INPUTS:  None.
+!
+! IMPLICIT OUTPUTS: None.
+!
+! COMPLETION CODES:
+!
+!   SS$_NORMAL:		normal successful completion.
+!
+! SIDE EFFECTS:
+!
+!   None.
+!--
+    BIND
+	ORGHDRQ	= .ORGHDRQ_A		: QUEDEF,
+	FROMSTR	= .FROMSTR_A		: BLOCK [,BYTE],
+	SENDER	= .SENDER_A 	: BLOCK [,BYTE];
+
+    TABLE (CLNAME, 'WORLD', 'GROUP', 'OWNER', 'SYSTEM');
+
+    MACRO
+	WRT (STR) =
+	BEGIN
+	    BIND _S = STR : $BBLOCK [DSC$K_S_BLN];
+	    MX_FILE_WRITE (.UNIT, _S);
+	    NEWENT [QENT_L_SIZE] = .NEWENT [QENT_L_SIZE] + ._S [DSC$W_LENGTH];
+	END%;
+    LOCAL
+	MLST	: VOLATILE REF MLSTDEF,
+	HDR 	: REF TXTDEF,
+	TXT 	: REF TXTDEF,
+	RCPT	: REF RCPTDEF,
+	HDRQ	: QUEDEF,
+	TMPQ	: QUEDEF,
+    	envl	: ENVLDEF,
+	NEWENT	: QENTDEF,
+	STR2	: $BBLOCK [DSC$K_S_BLN],
+	REPLYTO	: $BBLOCK [DSC$K_S_BLN],
+	SNDR822	: $BBLOCK [DSC$K_S_BLN],
+	STR 	: $BBLOCK [DSC$K_S_BLN],
+    	host	: $BBLOCK [DSC$K_S_BLN],
+	SDSC	: $BBLOCK [DSC$K_S_BLN],
+	STATUS,
+	UNIT,
+	public_list_count;
+
+    INIT_DYNDESC (STR2, REPLYTO, SNDR822, STR);
+    SDSC [DSC$B_DTYPE] = DSC$K_DTYPE_T;
+    SDSC [DSC$B_CLASS] = DSC$K_CLASS_S;
+    CH$FILL (%CHAR (0), ENVL_S_ENVLDEF, envl);
+    INIT_QUEUE (HDRQ, TMPQ, envl [ENVL_Q_RCPTQUE]);
+
+    FLQ_INIT_QENT (NEWENT);
+    NEWENT [QENT_L_STATUS] = FLQ_K_STINP;
+    NEWENT [QENT_V_LOCK] = 1;
+    newent [QENT_L_DSTPRC] = FLQ_K_MX_ROUTER;
+    newent [QENT_L_ORIGIN] = MX_K_ORG_LOCAL;
+    newent [QENT_W_ORGADR] = 2;
+    CH$MOVE(2, UPLIT(%ASCII'<>'), newent [QENT_T_ORGADR]);
+    STATUS = FLQ_ADD (QCTX, NEWENT);
+    IF NOT .STATUS THEN
+    BEGIN
+	TRACE ('  MLIST_LIST:  Status=!XL adding review msg queue entry.',
+	    .STATUS);
+	RETURN .STATUS;
+    END;
+
+    HDR = .ORGHDRQ [QUE_L_HEAD];
+    WHILE .HDR NEQ ORGHDRQ [QUE_L_HEAD] DO
+    BEGIN
+	CASE .HDR [TXT_W_CODE] FROM MX_K_HDR_FIRSTCODE TO MX_K_HDR_LASTCODE OF
+	SET
+	    [MX_K_HDR_FROM] :
+		STR$COPY_R (STR2, HDR [TXT_W_LEN], HDR [TXT_T_TEXT]);
+	    [MX_K_HDR_REPLY_TO] :
+		STR$COPY_R (REPLYTO, HDR [TXT_W_LEN], HDR [TXT_T_TEXT]);
+	    [MX_K_HDR_SENDER] :
+		STR$COPY_R (SNDR822, HDR [TXT_W_LEN], HDR [TXT_T_TEXT]);
+	    [INRANGE,OUTRANGE] :;
+	TES;
+	HDR = .HDR [TXT_L_FLINK];
+    END;
+
+    STR$COPY_DX (STR,
+	(IF .REPLYTO [DSC$W_LENGTH] NEQ 0 THEN REPLYTO
+	    ELSE IF .STR2 [DSC$W_LENGTH] NEQ 0 THEN STR2
+	    ELSE IF .SNDR822 [DSC$W_LENGTH] NEQ 0 THEN SNDR822
+	    ELSE .SENDER_A));
+
+    TRACE ('  MLIST_LIST:  Sending listing to: !AS', STR);
+
+    MX_MKDATE (0, STR2, 0);
+    LIB$SYS_FAO (%ASCID'by !AS (!AS) id !UL; !AS', 0, SNDR822,
+	CONFIG [CFG_Q_MXNODE], MX_VERSION (), .NEWENT [QENT_L_ENTNUM], STR2);
+    INSTXT (SNDR822, .HDRQ [QUE_L_TAIL], MX_K_HDR_RECEIVED);
+    INSTXT (STR2, .HDRQ [QUE_L_TAIL], MX_K_HDR_DATE);
+    MAKE_MESSAGE_ID (NEWENT [QENT_L_ENTNUM], str2);
+    INSTXT (STR2, .HDRQ [QUE_L_TAIL], MX_K_HDR_MESSAGE_ID);
+
+    MX_FMT_LCL_ADDR (MX__FMT_ENVFROM, ascid_postmaster, STR2);
+    INSTXT (STR2, .HDRQ [QUE_L_TAIL], MX_K_HDR_SENDER);
+
+    MX_FMT_LCL_ADDR (MX__FMT_FROM, ascid_mxserver, str2);
+    STORE_ORGADR (newent, str2);
+
+    MX_FMT_LCL_ADDR (MX__FMT_FROM, ascid_mxserver, str2, ascid_pname);
+    INSTXT (STR2, .HDRQ [QUE_L_TAIL], MX_K_HDR_FROM);
+
+    INSTXT (STR, .HDRQ [QUE_L_TAIL], MX_K_HDR_TO);
+    INSTXT (%ASCID'List of mailing lists', .HDRQ [QUE_L_TAIL], MX_K_HDR_SUBJECT);
+
+    STATUS = PARSE_ADDRLIST (STR, TMPQ, 0);
+    IF NOT .STATUS THEN
+    BEGIN
+	LOCAL I;
+	IF (I = STR$POSITION (STR, ascid_langle)) NEQ 0 THEN
+	BEGIN
+	    STR$RIGHT (SNDR822, STR, I);
+	    STATUS = PARSE_ADDRLIST (SNDR822, TMPQ, 0);
+	END;
+    END;
+
+    WHILE NOT REMQUE (.TMPQ [QUE_L_HEAD], TXT) DO
+    BEGIN
+	MEM_GETRCPT (RCPT);
+	IF CH$RCHAR (TXT [TXT_T_TEXT]) EQL %C'<' THEN
+	BEGIN
+	    RCPT [RCPT_A_ADDR] = .txt;
+    	    TXT = 0;
+	END
+	ELSE
+	BEGIN
+	    SDSC [DSC$A_POINTER] = TXT [TXT_T_TEXT];
+	    SDSC [DSC$W_LENGTH] = .TXT [TXT_W_LEN];
+	    STR$CONCAT (STR, ascid_langle, SDSC, ascid_rangle);
+	    RCPT [RCPT_A_ADDR] = MEM_GETTXT (.str [DSC$W_LENGTH], .str [DSC$A_POINTER]);
+	END;
+    	rcpt [RCPT_V_DSN_NEVER] = 1;
+	INSQUE_TAIL (.RCPT, envl [ENVL_Q_RCPTQUE]);
+	IF .TXT NEQA 0 THEN FREETXT (TXT);
+    	envl [ENVL_L_RCPTCOUNT] = .envl [ENVL_L_RCPTCOUNT] + 1;
+    END;
+
+    WRITE_HDRS (.QCTX, NEWENT, ascid_hdr_info, HDRQ);
+    WHILE NOT REMQUE (.HDRQ [QUE_L_HEAD], TXT) DO FREETXT (TXT);
+
+    IF .SYSUSERS [QUE_L_HEAD] EQLA SYSUSERS
+    THEN
+	MX_FMT_LCL_ADDR (MX__FMT_ENVFROM, ascid_postmaster, STR2)
+    ELSE
+    BEGIN
+	LOCAL SU : REF TXTDEF;
+	SU = .SYSUSERS [QUE_L_HEAD];
+	IF CH$RCHAR (SU [TXT_T_TEXT]) EQL %C'<' THEN
+	    STR$COPY_R (STR2, SU [TXT_W_LEN], SU [TXT_T_TEXT])
+	ELSE LIB$SYS_FAO (%ASCID'<!AD>', 0, STR2, .SU [TXT_W_LEN],
+		SU [TXT_T_TEXT]);
+    END;
+
+    envl [ENVL_V_ORIGIN] = 1;
+    envl [ENVL_L_ORIGIN] = MX_K_ORG_LOCAL;
+    envl [ENVL_V_ORGSENDER] = 1;
+    envl [ENVL_A_ORGSENDER] = MEM_GETTXT (.str2 [DSC$W_LENGTH], .str2 [DSC$A_POINTER]);
+    envl [ENVL_V_FROMADR] = 1;
+    envl [ENVL_A_FROMADR] = MEM_GETTXT (.str2 [DSC$W_LENGTH], .str2 [DSC$A_POINTER]);
+    WRITE_ENVELOPE (.QCTX, NEWENT, ascid_src_info, envl);
+
+    FLQ_MAKE_FSPEC (.NEWENT [QENT_L_ENTNUM], %ASCID'MSG_TEXT', STR);
+    MX_FILE_OPEN (MX__FILE_WRITE, STR, UNIT);
+
+    public_list_count = 0;
+    MLST = .MLISTS [QUE_L_HEAD];
+    WHILE .MLST NEQA MLISTS DO
+    BEGIN
+	BIND
+	    WPROT	= MLST [MLST_B_WPROT]	: BLOCK [1,BYTE],
+	    GPROT	= MLST [MLST_B_GPROT]	: BLOCK [1,BYTE],
+	    OPROT	= MLST [MLST_B_OPROT]	: BLOCK [1,BYTE],
+	    SPROT	= MLST [MLST_B_SPROT]	: BLOCK [1,BYTE],
+	    OWNQ	= MLST [MLST_Q_OWNQ]	: QUEDEF,
+	    MODQ	= MLST [MLST_Q_MODQ]	: QUEDEF;
+
+	IF NOT (.mlst [MLST_V_PRIVATE])		!Skip if list is private
+	THEN BEGIN
+	public_list_count = .public_list_count + 1;	!Bump counter
+	LIB$SYS_FAO (%ASCID'List Name: !AD', 0, STR,
+		.MLST [MLST_W_NAME], MLST [MLST_T_NAME]);
+	IF .MLST [MLST_W_HOSTNAME] NEQ 0 THEN
+	BEGIN
+	    INIT_SDESC (sdsc, .mlst [MLST_W_HOSTNAME], mlst [MLST_T_HOSTNAME]);
+	    STR$CONCAT (str, str, ascid_atsign, sdsc);
+	END;
+	IF .MLST [MLST_W_DESC] NEQ 0 THEN
+	BEGIN
+	    LIB$SYS_FAO (%ASCID' (!AD)', 0, STR2,
+		    .MLST [MLST_W_DESC], MLST [MLST_T_DESC]);
+	    STR$APPEND (STR, STR2);
+	END;
+	WRT (STR);
+	STR$COPY_DX (STR, %ASCID'  Owner: ');
+
+	TXT = .OWNQ [QUE_L_HEAD];
+	WHILE .TXT NEQA OWNQ [QUE_L_HEAD] DO
+	BEGIN
+	    QUOTE_STRING (STR2, .TXT [TXT_W_LEN], TXT [TXT_T_TEXT]);
+	    STR$APPEND (STR, STR2);
+	    WRT (STR);
+	    STR$COPY_DX (STR, ascid_nine_spaces);
+	    TXT = .TXT [TXT_L_FLINK];
+	END;
+
+	IF .MODQ [QUE_L_HEAD] NEQA MODQ [QUE_L_HEAD] THEN
+	BEGIN
+	    WRT (%ASCID'  Moderator(s):');
+	    STR$COPY_DX (STR, %ASCID'          ');
+	    TXT = .MODQ [QUE_L_HEAD];
+	    WHILE .TXT NEQA MODQ [QUE_L_HEAD] DO
+	    BEGIN
+		QUOTE_STRING (STR2, .TXT [TXT_W_LEN], TXT [TXT_T_TEXT]);
+		STR$APPEND (STR, STR2);
+		WRT (STR);
+		STR$COPY_DX (STR, %ASCID'          ');
+		TXT = .TXT [TXT_L_FLINK];
+	    END;
+	END;
+
+	IF .MLST [MLST_W_ARCHIVE] GTR 0 THEN
+	BEGIN
+	    LIB$SYS_FAO (%ASCID'  Archive: !AD', 0, STR,
+		.MLST [MLST_W_ARCHIVE], MLST [MLST_T_ARCHIVE]);
+	    WRT (STR);
+	END;
+
+	LIB$SYS_FAO (%ASCID'  Errors-to: !AD', 0, STR,
+		.MLST [MLST_W_ERRSTO], MLST [MLST_T_ERRSTO]);
+	WRT (STR);
+
+	STR$COPY_DX (STR2, ascid_lparen);
+	BEGIN
+	    BIND P = MLST [MLST_L_PROT] : BLOCKVECTOR [4,1,BYTE];
+	    LOCAL DID_ONE;
+	    DECR I FROM 3 TO 0 DO
+	    BEGIN
+		STR$APPEND (STR2, .CLNAME [.I]);
+		DID_ONE = 0;
+		IF .P [.I,PROT_V_READ] THEN
+		BEGIN
+		    STR$APPEND (STR2, ascid_r);
+		    DID_ONE = 1;
+		END;
+		IF .P [.I,PROT_V_WRITE] THEN
+		BEGIN
+		    IF NOT .DID_ONE THEN STR$APPEND (STR2, ascid_colon);
+		    DID_ONE = 1;
+		    STR$APPEND (STR2, ascid_w);
+		END;
+		IF .P [.I,PROT_V_EXECUTE] THEN
+		BEGIN
+		    IF NOT .DID_ONE THEN STR$APPEND (STR2, ascid_colon);
+		    DID_ONE = 1;
+		    STR$APPEND (STR2, ascid_e);
+		END;
+		IF .P [.I,PROT_V_DELETE] THEN
+		BEGIN
+		    IF NOT .DID_ONE THEN STR$APPEND (STR2, ascid_colon);
+		    DID_ONE = 1;
+		    STR$APPEND (STR2, ascid_d);
+		END;
+		IF .I NEQ 0 THEN STR$APPEND (STR2, ascid_comma);
+	    END;
+	END;
+	STR$APPEND (STR2, ascid_rparen);
+	STR$CONCAT (STR, %ASCID'  Protection: ', STR2);
+	WRT (STR);
+	WRT (ascid_null_line);
+	WRT (%ASCID'--------');
+	WRT (ascid_null_line);
+
+	END;	!IF NOT (.mlst [MLST_V_PRIVATE])....
+
+	MLST = .MLST [MLST_L_FLINK];
+
+    END;
+
+    IF (.public_list_count EQLU 0)
+    THEN
+	WRT (%ASCID'There are no public lists defined.');
+
+    MX_FILE_CLOSE (.UNIT);
+
+    NEWENT [QENT_L_SIZE] = .NEWENT [QENT_L_SIZE] * .envl [ENVL_L_RCPTCOUNT];
+    NEWENT [QENT_L_STATUS] = FLQ_K_STRDY;
+    FLQ_UPDATE (QCTX, NEWENT);
+
+    DISPOSE_ENVELOPE (envl);
+
+    TRACE ('  MLIST_LIST:  Sent.');
+
+    FREE_STRINGS (STR, STR2, REPLYTO, SNDR822);
+
+    SS$_NORMAL
+
+END; ! MLIST_LIST
+
+%SBTTL 'MLIST_ARCHIVE'
+ROUTINE MLIST_ARCHIVE (MLST_A, QENT_A, HDRQ_A) =
+BEGIN
+!++
+! FUNCTIONAL DESCRIPTION:
+!
+!   Archives a mailing list message.
+!
+! RETURNS:	cond_value, longword (unsigned), write only, by value
+!
+! PROTOTYPE:
+!
+!   MLIST_ARCHIVE  mlst, entnum, hdrq
+!
+! IMPLICIT INPUTS:  None.
+!
+! IMPLICIT OUTPUTS: None.
+!
+! COMPLETION CODES:
+!
+!   SS$_NORMAL:		normal successful completion.
+!
+! SIDE EFFECTS:
+!
+!   None.
+!--
+    BIND
+	MLST	= .MLST_A   : MLSTDEF,
+	QENT	= .QENT_A   : QENTDEF,
+	HDRQ	= .HDRQ_A   : QUEDEF;
+
+    LOCAL
+	STR : $BBLOCK [DSC$K_S_BLN],
+	DSPEC	: $BBLOCK [DSC$K_S_BLN],
+	RSPEC	: $BBLOCK [DSC$K_S_BLN],
+	SDSC	: $BBLOCK [DSC$K_S_BLN],
+	HDR : REF TXTDEF,
+	TXT : REF TXTDEF,
+	TXTQ	: QUEDEF,
+	NUMTIM	: VECTOR [7,WORD],
+	UNIT,
+	INUNIT,
+	STATUS;
+
+    INIT_DYNDESC (STR, DSPEC, RSPEC);
+    SDSC [DSC$B_DTYPE] = DSC$K_DTYPE_T;
+    SDSC [DSC$B_CLASS] = DSC$K_CLASS_S;
+    TXTQ [QUE_L_TAIL] = TXTQ [QUE_L_HEAD] = TXTQ [QUE_L_HEAD];
+
+    $NUMTIM (TIMBUF=NUMTIM);
+    LIB$SYS_FAO (%ASCID'MX_MLIST_DIR:!AD.!4ZW-!2ZW', 0, DSPEC,
+	.MLST [MLST_W_NAME], MLST [MLST_T_NAME], .NUMTIM [0], .NUMTIM [1]);
+
+    SDSC [DSC$W_LENGTH] = .MLST [MLST_W_ARCHIVE];
+    SDSC [DSC$A_POINTER] = MLST [MLST_T_ARCHIVE];
+    STATUS = MX_FILE_OPEN (MX__FILE_APPEND, SDSC, UNIT, DSPEC, RSPEC);
+    IF .STATUS THEN
+    BEGIN
+	STR$DUPL_CHAR (STR, %REF (80), %REF (%C'='));
+	MX_FILE_WRITE (.UNIT, STR);
+    END
+    ELSE
+    BEGIN
+	STATUS = MX_FILE_OPEN (MX__FILE_WRITE, SDSC, UNIT, DSPEC, RSPEC);
+	IF NOT .STATUS THEN
+	BEGIN
+	    TRACE ('  MLIST_ARCHIVE:  Status=!XL trying to open archive.',
+		.STATUS);
+	    FREE_STRINGS (DSPEC, RSPEC);
+	    RETURN SS$_NORMAL;
+	END;
+    END;
+
+    MX_MKDATE (0, STR, 0);
+    STR$PREFIX (STR, %ASCID'Archive-Date: ');
+    MX_FILE_WRITE (.UNIT, STR);
+
+    HDR = .HDRQ [QUE_L_HEAD];
+    WHILE .HDR NEQA HDRQ [QUE_L_HEAD] DO
+    BEGIN
+	!
+	!  Don't write Received:, other, or LIS
+	!
+	IF .HDR [TXT_W_CODE] NEQ MX_K_HDR_RECEIVED AND
+	    .HDR [TXT_W_CODE] NEQ MX_K_HDR_OTHER AND
+	   (.hdr [TXT_W_CODE] NEQ MX_K_HDR_LIST_SUB) AND
+	   (.hdr [TXT_W_CODE] NEQ MX_K_HDR_LIST_UNSUB) AND
+	   (.hdr [TXT_W_CODE] NEQ MX_K_HDR_LIST_HELP) AND
+	   (.hdr [TXT_W_CODE] NEQ MX_K_HDR_LIST_OTHER) THEN
+	BEGIN
+	    FORMAT_HDR (.HDR, TXTQ);
+	    WHILE NOT REMQUE (.TXTQ [QUE_L_HEAD], TXT) DO
+	    BEGIN
+		SDSC [DSC$W_LENGTH] = .TXT [TXT_W_LEN];
+		SDSC [DSC$A_POINTER] = TXT [TXT_T_TEXT];
+		MX_FILE_WRITE (.UNIT, SDSC);
+		FREETXT (TXT);
+	    END;
+	END;
+	HDR = .HDR [TXT_L_FLINK];
+    END;
+
+    MX_FILE_WRITE (.UNIT, ascid_null_line);
+    MX_FILE_CLOSE (.UNIT);
+
+    IF CH$EQL (MXQ_S_FILEID, QENT [MXQ_X_FILEID], 4, UPLIT (0), %CHAR (0)) THEN
+    BEGIN
+	FLQ_MAKE_FSPEC (.QENT [MXQ_L_BACKREF], %ASCID'MSG_TEXT', STR);
+	COPY_FILE (STR, RSPEC, 0, 1);
+    END
+    ELSE
+	COPY_FILE (0, RSPEC, 0, 1, 0, QENT [MXQ_X_FILEID]);
+
+    FREE_STRINGS (STR, DSPEC, RSPEC);
+
+    SS$_NORMAL
+
+END; ! MLIST_ARCHIVE
+
+%SBTTL 'MLIST_SET'
+ROUTINE MLIST_SET (QCTX, MLST_A, MLSTQ_A, ADRLST_A, CMDPARS_A,
+			CHANGED_A, NOTIFY) =
+BEGIN
+!++
+! FUNCTIONAL DESCRIPTION:
+!
+!  Changes a setting for a user on a list.
+!
+! RETURNS:	cond_value, longword (unsigned), write only, by value
+!
+! PROTOTYPE:
+!
+!   MLIST_SET  mlst, adrlst
+!
+! IMPLICIT INPUTS:  None.
+!
+! IMPLICIT OUTPUTS: None.
+!
+! COMPLETION CODES:
+!
+!   SS$_NORMAL:		normal successful completion.
+!
+! SIDE EFFECTS:
+!
+!   None.
+!--
+    BIND
+	MLST	= .MLST_A	: MLSTDEF,
+	MLSTQ	= .MLSTQ_A	: QUEDEF,
+	ADRLST	= .ADRLST_A	: $BBLOCK [DSC$K_S_BLN],
+	CMDPARS	= .CMDPARS_A	: $BBLOCK [DSC$K_S_BLN];
+
+    LABEL
+	BAIL ;
+
+    LOCAL
+	TMPQ	: QUEDEF,
+	SUCQ	: QUEDEF,
+	ERRQ	: QUEDEF,
+	RTEQ	: QUEDEF,
+	TXT : REF TXTDEF,
+	ADR : REF TXTDEF,
+	SUB : REF MLEDEF,
+	SDSC	: $BBLOCK [DSC$K_S_BLN],
+	STR : $BBLOCK [DSC$K_S_BLN],
+	DOMP	: $BBLOCK [DSC$K_S_BLN],
+	LCLP	: $BBLOCK [DSC$K_S_BLN],
+	YES_MAIL, YES_CONCEAL, YES_REPRO, yes_digest,
+	CHANGE_MAIL, CHANGE_CONCEAL, CHANGE_REPRO, change_digest, change_deny,
+	STATUS;
+
+    INIT_DYNDESC (STR, DOMP, LCLP);
+    SDSC [DSC$B_DTYPE] = DSC$K_DTYPE_T;
+    SDSC [DSC$B_CLASS] = DSC$K_CLASS_S;
+    INIT_QUEUE (TMPQ, SUCQ, ERRQ, RTEQ);
+
+    STR$UPCASE (STR, CMDPARS);
+    STR$TRIM (STR, STR);
+    CHANGE_MAIL = ((YES_MAIL = STR$POSITION (ascid_mail, STR) EQL 1) OR
+		    STR$POSITION (ascid_nomail, STR) EQL 1);
+    CHANGE_CONCEAL = ((YES_CONCEAL = STR$POSITION (ascid_conceal, STR) EQL 1) OR
+		    STR$POSITION (ascid_noconceal, STR) EQL 1);
+    CHANGE_REPRO = ((YES_REPRO = STR$POSITION (ascid_repro, STR) EQL 1) OR
+		    STR$POSITION (ascid_norepro, STR) EQL 1);
+    change_digest = ((yes_digest = STR$POSITION (ascid_digest, STR) EQL 1) OR
+		    STR$POSITION (ascid_nodigest, STR) EQL 1);
+    !
+    !  DENY, ACCESS, and NOPOST are not valid for SET command!
+    !
+
+    PARSE_ADDRLIST (ADRLST, TMPQ);
+    WHILE NOT REMQUE (.TMPQ [QUE_L_HEAD], ADR) DO
+    BEGIN
+	INIT_SDESC (SDSC, .ADR [TXT_W_LEN], ADR [TXT_T_TEXT]);
+	STATUS = PARSE821 (SDSC, RTEQ, LCLP, DOMP);
+	IF NOT .STATUS THEN STATUS = PARSE_MBOX (SDSC, LCLP, DOMP);
+	IF .STATUS THEN
+	BEGIN
+	    STR$UPCASE (DOMP, DOMP);
+	    IF .RTEQ [QUE_L_HEAD] NEQA RTEQ THEN
+	    BEGIN
+		TXT = .RTEQ [QUE_L_HEAD];
+		WHILE .TXT NEQA RTEQ DO
+		BEGIN
+		    INIT_SDESC (SDSC, .TXT [TXT_W_LEN], TXT [TXT_T_TEXT]);
+		    STR$UPCASE (SDSC, SDSC);
+		    TXT = .TXT [TXT_L_FLINK];
+		END;
+		FORMAT821 (RTEQ, LCLP, DOMP, STR);
+		WHILE NOT REMQUE (.RTEQ [QUE_L_HEAD], TXT) DO FREETXT (TXT);
+	    END
+	    ELSE STR$CONCAT (STR, LCLP, ascid_atsign, DOMP);
+
+	    TRACE ('  MLIST_SET:  Locating !AS on list.', STR);
+	    SUB = .MLSTQ [QUE_L_HEAD];
+	    WHILE .SUB NEQA MLSTQ [QUE_L_HEAD] DO
+	    BEGIN
+    	    	BIND addr = .SUB [MLE_A_ADDR] : TXTDEF;
+		SDSC [DSC$W_LENGTH] = .addr [TXT_W_LEN];
+		SDSC [DSC$A_POINTER] = addr [TXT_T_TEXT];
+		IF .SUB [MLE_V_NOCASE]
+		   OR (.mlst [MLST_V_NOCASE]) THEN
+		BEGIN
+		    IF STR$CASE_BLIND_COMPARE (STR, SDSC) EQL 0 THEN EXITLOOP;
+		END
+		ELSE
+		    IF STR$COMPARE_EQL (STR, SDSC) EQL 0 THEN EXITLOOP;
+		SUB = .SUB [MLE_L_FLINK];
+	    END;
+	    IF .SUB EQLA MLSTQ [QUE_L_HEAD] THEN
+	    BEGIN
+		TRACE ('  MLIST_SET:    oops -- was not on list.');
+		INSTXT (STR, .ERRQ [QUE_L_TAIL], MLERR__NOTSUB)
+	    END
+	    ELSE
+BAIL :     BEGIN
+		IF (.sub [MLE_V_DENY])
+		THEN
+		    BEGIN
+		    TRACE ('  MLIST_SET:   entry marked DENY, SET command ignored');
+		    LEAVE BAIL;
+		    END;
+
+		IF .SUB [MLE_V_ACCESS]
+		THEN
+		BEGIN
+		    INSTXT (STR, .ERRQ [QUE_L_TAIL], MLERR__SETACCESS) ;
+		    LEAVE BAIL ;
+		END ;
+
+		IF (.change_digest) AND NOT(.mlst [MLST_V_DIGEST])
+		THEN
+		    BEGIN
+		    INSTXT (str, .errq [QUE_L_TAIL], MLERR__NODIGEST);
+		    LEAVE BAIL;
+		    END;
+
+		IF NOT (.CHANGE_MAIL OR .CHANGE_CONCEAL OR .CHANGE_REPRO OR
+			.change_digest) THEN
+		    INSTXT (STR, .ERRQ [QUE_L_TAIL], MLERR__UNKSET)
+		ELSE
+		BEGIN
+		    LOCAL FLAGS : WORD;
+		    !
+		    !  Note: the FLAGS offsets must match in
+		    !  MLIST_NOTIFY_COMPLETE.
+		    !
+		    FLAGS = 0;
+		    IF .CHANGE_MAIL THEN
+		    BEGIN
+			SUB [MLE_V_NOMAIL] = NOT .YES_MAIL;
+			FLAGS<0,1,0> = 1;
+			FLAGS<8,1,0> = .SUB [MLE_V_NOMAIL];
+			TRACE ('  MLIST_SET:  !AS set to !AS.', STR,
+			    (IF .YES_MAIL THEN ascid_mail
+				ELSE ascid_nomail));
+		    END;
+		    IF .CHANGE_CONCEAL THEN
+		    BEGIN
+			SUB [MLE_V_CONCEAL] = .YES_CONCEAL;
+			FLAGS<1,1,0> = 1;
+			FLAGS<9,1,0> = .SUB [MLE_V_CONCEAL];
+			TRACE ('  MLIST_SET:  !AS set to !AS.', STR,
+			    (IF .YES_CONCEAL THEN ascid_conceal
+				ELSE ascid_noconceal));
+		    END;
+		    IF .CHANGE_REPRO THEN
+		    BEGIN
+			SUB [MLE_V_NOREPRO] = NOT .YES_REPRO;
+			FLAGS<2,1,0> = 1;
+			FLAGS<10,1,0> = .SUB [MLE_V_NOREPRO];
+			TRACE ('  MLIST_SET:  !AS set to !AS.', STR,
+			    (IF .YES_REPRO THEN ascid_repro
+				ELSE ascid_norepro));
+		    END;
+		    IF .change_digest
+		    THEN
+			BEGIN
+			SUB [MLE_V_DIGEST] = .yes_digest;
+			FLAGS<3,1,0> = 1;
+			FLAGS<11,1,0> = .SUB [MLE_V_DIGEST];
+			TRACE ('  MLIST_SET:  !AS set to !AS.', STR,
+			    (IF .yes_digest THEN ascid_digest
+				ELSE ascid_nodigest));
+			END;
+		    INSTXT (STR, .SUCQ [QUE_L_TAIL], .FLAGS);
+                    IF .mlst [MLST_V_NTFYCHG] THEN
+                        MLIST_NOTIFY_OWNER (.QCTX, MLST, 0, str, %ASCID'Settings modified for');
+		END;
+	    END;					! End BAIL
+	    FREETXT (ADR);
+	END
+	ELSE
+	BEGIN
+	    ADR [TXT_W_CODE] = MLERR__INVADDR;
+	    INSQUE (.ADR, .ERRQ [QUE_L_TAIL]);
+	END;
+    END;
+
+    IF .SUCQ [QUE_L_HEAD] NEQA SUCQ [QUE_L_HEAD] THEN
+    BEGIN
+	.CHANGED_A = 1;
+	IF .NOTIFY THEN MLIST_NOTIFY_COMPLETE (.QCTX, MLST, SUCQ, MLCMD__SET);
+	WHILE NOT REMQUE (.SUCQ [QUE_L_HEAD], ADR) DO FREETXT (ADR);
+    END;
+
+    IF .ERRQ [QUE_L_HEAD] NEQA ERRQ [QUE_L_HEAD] THEN
+    BEGIN
+	MLIST_CTRL_ERROR (MLST, ERRQ, MLCMD__SET);
+	WHILE NOT REMQUE (.ERRQ [QUE_L_HEAD], ADR) DO FREETXT (ADR);
+    END;
+
+    FREE_STRINGS (STR, DOMP, LCLP);
+
+    SS$_NORMAL
+
+END; ! MLIST_SET
+
+%SBTTL 'MLIST_QUERY'
+ROUTINE MLIST_QUERY (QCTX, MLST_A, MLSTQ_A, FROMSTR_A, SENDER_A, HDRQ_A) =
+BEGIN
+!++
+! FUNCTIONAL DESCRIPTION:
+!
+!  Queries a setting for a user on a list.
+!
+! RETURNS:	cond_value, longword (unsigned), write only, by value
+!
+! PROTOTYPE:
+!
+!   MLIST_QUERY  mlst, adrlst
+!
+! IMPLICIT INPUTS:  None.
+!
+! IMPLICIT OUTPUTS: None.
+!
+! COMPLETION CODES:
+!
+!   SS$_NORMAL:		normal successful completion.
+!
+! SIDE EFFECTS:
+!
+!   None.
+!--
+    BIND
+	MLST	= .MLST_A	: MLSTDEF,
+	MLSTQ	= .MLSTQ_A	: QUEDEF,
+	FROMSTR	= .FROMSTR_A	: $BBLOCK [DSC$K_S_BLN],
+	SENDER	= .SENDER_A : $BBLOCK [DSC$K_S_BLN];
+
+    LOCAL
+	TMPQ	: QUEDEF,
+	SUCQ	: QUEDEF,
+	ERRQ	: QUEDEF,
+	RTEQ	: QUEDEF,
+	ADR : VOLATILE REF TXTDEF,
+	TXT : REF TXTDEF,
+	SUB : REF MLEDEF,
+	SDSC	: $BBLOCK [DSC$K_S_BLN],
+	STR : $BBLOCK [DSC$K_S_BLN],
+	DOMP	: $BBLOCK [DSC$K_S_BLN],
+	LCLP	: $BBLOCK [DSC$K_S_BLN],
+	YES_MAIL,
+	CHANGE_MAIL,
+	STATUS;
+
+    INIT_DYNDESC (STR, DOMP, LCLP);
+    SDSC [DSC$B_DTYPE] = DSC$K_DTYPE_T;
+    SDSC [DSC$B_CLASS] = DSC$K_CLASS_S;
+    INIT_QUEUE (TMPQ, SUCQ, ERRQ, RTEQ);
+
+    STATUS = PARSE821 (FROMSTR, RTEQ, LCLP, DOMP);
+    IF NOT .STATUS THEN STATUS = PARSE_MBOX (FROMSTR, LCLP, DOMP);
+    IF .STATUS THEN
+    BEGIN
+	STR$UPCASE (DOMP, DOMP);
+	IF .RTEQ [QUE_L_HEAD] NEQA RTEQ THEN
+	BEGIN
+	    TXT = .RTEQ [QUE_L_HEAD];
+	    WHILE .TXT NEQA RTEQ DO
+	    BEGIN
+		INIT_SDESC (SDSC, .TXT [TXT_W_LEN], TXT [TXT_T_TEXT]);
+		STR$UPCASE (SDSC, SDSC);
+		TXT = .TXT [TXT_L_FLINK];
+	    END;
+	    FORMAT821 (RTEQ, LCLP, DOMP, STR);
+	    WHILE NOT REMQUE (.RTEQ [QUE_L_HEAD], TXT) DO FREETXT (TXT);
+	END
+	ELSE STR$CONCAT (STR, LCLP, ascid_atsign, DOMP);
+	TRACE ('  MLIST_QUERY:  Locating !AS on list.', STR);
+	SUB = .MLSTQ [QUE_L_HEAD];
+	WHILE .SUB NEQA MLSTQ [QUE_L_HEAD] DO
+	BEGIN
+    	    BIND addr = .SUB [MLE_A_ADDR] : TXTDEF;
+	    SDSC [DSC$W_LENGTH] = .addr [TXT_W_LEN];
+	    SDSC [DSC$A_POINTER] = addr [TXT_T_TEXT];
+	    IF .SUB [MLE_V_NOCASE]
+		   OR (.mlst [MLST_V_NOCASE]) THEN
+	    BEGIN
+		IF STR$CASE_BLIND_COMPARE (STR, SDSC) EQL 0 THEN EXITLOOP;
+	    END
+	    ELSE
+		IF STR$COMPARE_EQL (STR, SDSC) EQL 0 THEN EXITLOOP;
+	    SUB = .SUB [MLE_L_FLINK];
+	END;
+	IF .SUB EQLA MLSTQ [QUE_L_HEAD] THEN
+	BEGIN
+	    TRACE ('  MLIST_QUERY:    oops -- was not on list.');
+	    INSTXT (STR, .ERRQ [QUE_L_TAIL], MLERR__NOTSUB)
+	END
+	ELSE
+	    IF NOT(.sub [MLE_V_DENY])	!If not DENY, then send query reply
+	    THEN
+		MLIST_QUERY_REPLY (.QCTX, MLST, .SUB, .HDRQ_A, SENDER)
+	    ELSE
+		TRACE ('  MLIST_QUERY:    oops -- entry set to DENY. Ignored.');
+    END
+    ELSE
+    BEGIN
+	ADR [TXT_W_CODE] = MLERR__INVADDR;
+	INSQUE (.ADR, .ERRQ [QUE_L_TAIL]);
+    END;
+
+    IF .ERRQ [QUE_L_HEAD] NEQA ERRQ [QUE_L_HEAD] THEN
+    BEGIN
+	MLIST_CTRL_ERROR (MLST, ERRQ, MLCMD__QUERY);
+	WHILE NOT REMQUE (.ERRQ [QUE_L_HEAD], ADR) DO FREETXT (ADR);
+    END;
+
+    FREE_STRINGS (STR, DOMP, LCLP);
+
+    SS$_NORMAL
+
+END; ! MLIST_QUERY
+
+
+%SBTTL 'MLIST_CREATE_TRANSACTION'
+ROUTINE MLIST_CREATE_TRANSACTION (qctx, mlst_a, orgadr_a, adr_a, notify, flags, sflags) = 
+BEGIN
+!++
+! FUNCTIONAL DESCRIPTION:
+!
+!   description
+!
+! RETURNS:  	cond_value, longword (unsigned), write only, by value
+!
+! PROTOTYPE:
+!
+!   x
+!
+! IMPLICIT INPUTS:  None.
+!
+! IMPLICIT OUTPUTS: None.
+!
+! COMPLETION CODES:
+!
+!   SS$_NORMAL:	    	normal successful completion.
+!
+! SIDE EFFECTS:	    None.
+!--
+    BIND
+        mlst    = .mlst_a   : MLSTDEF,
+        orgadr  = .orgadr_a : BLOCK [,BYTE],
+        adr     = .adr_a    : BLOCK [,BYTE];
+
+    LOCAL
+        tid     : BLOCK [DSC$K_S_BLN,BYTE],
+        fspec   : BLOCK [DSC$K_S_BLN,BYTE],
+        str     : BLOCK [DSC$K_S_BLN,BYTE],
+        sdsc    : BLOCK [DSC$K_S_BLN,BYTE],
+        now     : VECTOR [2,LONG],
+        delta   : VECTOR [2,LONG],
+        junk    : VECTOR [2,LONG],
+        limit   : VECTOR [2,LONG],
+        trans   : REF TRANSDEF,
+        unit,
+        status;
+
+    IF NOT .transq_loaded THEN
+        load_transactions ();
+
+    INIT_DYNDESC (tid, fspec, str);
+
+    IF CH$EQL (8, mlst [MLST_Q_CONFTIME], 8, UPLIT (0,0)) THEN
+        CH$MOVE (8, trans_deflimit, limit)
+    ELSE
+        CH$MOVE (8, mlst [MLST_Q_CONFTIME], limit);
+
+    $GETTIM (TIMADR=now);
+
+    trans = .transq [QUE_L_HEAD];
+    WHILE .trans NEQA transq DO
+    BEGIN
+        BIND
+            taddr = trans [TRANS_A_ADDR]    : REF TXTDEF,
+            ttid  = trans [TRANS_A_TID]     : REF TXTDEF;
+        LOCAL
+            skipit;
+
+        skipit = 0;
+        IF LIB$SUB_TIMES (now, trans [TRANS_Q_CREDT], delta) EQL LIB$_NORMAL THEN
+            IF LIB$SUB_TIMES (delta, limit, junk) EQL LIB$_NORMAL THEN
+            BEGIN
+                LOCAL tmp : REF TRANSDEF;
+                BIND  tfs = trans [TRANS_A_FSPEC] : REF TXTDEF;
+                INIT_SDESC (sdsc, .tfs [TXT_W_LEN], tfs [TXT_T_TEXT]);
+                LIB$DELETE_FILE (sdsc);
+                FREETXT (trans [TRANS_A_TID], trans [TRANS_A_ADDR], trans [TRANS_A_FSPEC]);
+                tmp = .trans [TRANS_L_FLINK];
+                REMQUE (.trans, trans);
+                LIB$FREE_VM (%REF (TRANS_S_TRANSDEF), trans);
+                trans = .tmp;
+                skipit = 1;
+            END;
+        IF NOT .skipit THEN
+        BEGIN
+            INIT_SDESC (sdsc, .taddr [TXT_W_LEN], taddr [TXT_T_TEXT]);
+            IF STR$CASE_BLIND_COMPARE (sdsc, adr) EQL 0 AND
+                CH$EQL (.trans [TRANS_W_MLIST], trans [TRANS_T_MLIST],
+                        .mlst [MLST_W_NAME], mlst [MLST_T_NAME]) THEN
+            BEGIN
+                IF LIB$SUB_TIMES (now, trans [TRANS_Q_LASTDT], delta) EQL LIB$_NORMAL THEN
+                    IF LIB$SUB_TIMES (trans_intvl, delta, junk) EQL LIB$_NORMAL THEN
+                    BEGIN
+                        LIB$SYS_FAO (%ASCID'Subscription request already pending for !AD',
+                                     0, str,
+                                    .mlst [MLST_W_NAME], mlst [MLST_T_NAME]);
+                        MLIST_ERROR (0, str);
+                        FREE_STRINGS (str);
+                        RETURN SS$_NORMAL;
+                    END;
+                INIT_SDESC (tid, .ttid [TXT_W_LEN], ttid [TXT_T_TEXT]);
+                CH$MOVE (%ALLOCATION (now), now, trans [TRANS_Q_LASTDT]);
+                MLIST_NOTIFY_TRANSACTION (.qctx, mlst, tid, sdsc);
+                RETURN SS$_NORMAL;
+            END;
+            trans = .trans [TRANS_L_FLINK];
+        END;
+    END;
+
+    status = LIB$GET_VM (%REF (TRANS_S_TRANSDEF), trans);
+    IF NOT .status THEN
+    BEGIN
+        MLIST_ERROR (0, %ASCID'Temporary processing error');
+        RETURN SS$_NORMAL;
+    END;
+
+    CH$FILL (%CHAR (0), TRANS_S_TRANSDEF, .trans);
+
+    DO
+    BEGIN
+        $GETTIM (TIMADR=now);
+        last_tid = .last_tid + 1;
+        LIB$SYS_FAO (%ASCID'!XL-!XL-!UL', 0, tid, .now [1], .now [0], .last_tid);
+        STR$CONCAT (fspec, %ASCID'MX_MLIST_DIR:TRANS_', tid, %ASCID'.DAT');
+        status = MX_FILE_OPEN (MX__FILE_EXISTS, fspec);
+    END
+    UNTIL NOT .status;
+
+    status = MX_FILE_OPEN (MX__FILE_WRITE, fspec, unit, 0, str);
+    IF .status THEN
+    BEGIN
+        CH$MOVE (%ALLOCATION (now), now, trans [TRANS_Q_CREDT]);
+        CH$MOVE (%ALLOCATION (now), now, trans [TRANS_Q_LASTDT]);
+        trans [TRANS_A_TID] = MEM_GETTXT (.tid [DSC$W_LENGTH], .tid [DSC$A_POINTER]);
+        trans [TRANS_A_ADDR] = MEM_GETTXT (.adr [DSC$W_LENGTH], .adr [DSC$A_POINTER]);
+        trans [TRANS_A_FSPEC] = MEM_GETTXT (.str [DSC$W_LENGTH], .str [DSC$A_POINTER]);
+        trans [TRANS_W_MLIST] = .mlst [MLST_W_NAME];
+        CH$MOVE (.mlst [MLST_W_NAME], mlst [MLST_T_NAME], trans [TRANS_T_MLIST]);
+        status = MX_FILE_WRITE (.unit, tid);
+        INIT_SDESC (sdsc, .mlst [MLST_W_NAME], mlst [MLST_T_NAME]);
+        IF .status THEN
+            status = MX_FILE_WRITE (.unit, sdsc);
+        IF .status THEN
+            status = MX_FILE_WRITE (.unit, orgadr);
+        IF .status THEN
+            status = MX_FILE_WRITE (.unit, adr);
+        LIB$SYS_FAO (%ASCID'!XL', 0, str, .notify);
+        IF .status THEN
+            status = MX_FILE_WRITE (.unit, str);
+        LIB$SYS_FAO (%ASCID'!XL', 0, str, .flags);
+        IF .status THEN
+            status = MX_FILE_WRITE (.unit, str);
+        LIB$SYS_FAO (%ASCID'!XL', 0, str, .sflags);
+        IF .status THEN
+            status = MX_FILE_WRITE (.unit, str);
+        MX_FILE_CLOSE (.unit, NOT .status);
+    END;
+
+    IF .status THEN
+        status = MLIST_NOTIFY_TRANSACTION (.qctx, mlst, tid, adr);
+
+    IF .status THEN
+    BEGIN
+        INSQUE_TAIL (.trans, transq);
+        IF .mlst [MLST_V_NTFYREQ] THEN
+            MLIST_NOTIFY_OWNER (.QCTX, MLST, 0, adr, %ASCID'Confirmation request sent to');
+    END
+    ELSE
+    BEGIN
+        FREETXT (trans [TRANS_A_ADDR], trans [TRANS_A_TID]);
+        LIB$FREE_VM (%REF (TRANS_S_TRANSDEF), trans);
+        MLIST_ERROR (0, %ASCID'Error in processing transaction request');
+    END;
+
+    FREE_STRINGS (tid, fspec, str);
+
+    SS$_NORMAL
+
+END; ! MLIST_CREATE_TRANSACTION
+
+%SBTTL 'MLIST_CONFIRM_TRANSACTION'
+GLOBAL ROUTINE MLIST_CONFIRM_TRANSACTION (qctx, qent_a, sender_a, hdrq_a, dst_a) = 
+BEGIN
+!++
+! FUNCTIONAL DESCRIPTION:
+!
+!   description
+!
+! RETURNS:  	cond_value, longword (unsigned), write only, by value
+!
+! PROTOTYPE:
+!
+!   x
+!
+! IMPLICIT INPUTS:  None.
+!
+! IMPLICIT OUTPUTS: None.
+!
+! COMPLETION CODES:
+!
+!   SS$_NORMAL:	    	normal successful completion.
+!
+! SIDE EFFECTS:	    None.
+!--
+    BIND
+        qent    = .qent_a   : QENTDEF,
+        sender  = .sender_a : BLOCK [,BYTE],
+        hdrq    = .hdrq_a   : QUEDEF,
+        dst     = .dst_a    : BLOCK [,BYTE];
+
+    LOCAL
+        tid     : BLOCK [DSC$K_S_BLN,BYTE],
+        rspec   : BLOCK [DSC$K_S_BLN,BYTE],
+        str     : BLOCK [DSC$K_S_BLN,BYTE],
+        sdsc    : BLOCK [DSC$K_S_BLN,BYTE],
+        orgadr  : BLOCK [DSC$K_S_BLN,BYTE],
+        mlst    : REF MLSTDEF,
+        mlstq   : QUEDEF,
+        mle     : REF MLEDEF,
+        fromhdr : REF TXTDEF,
+        ch      : BYTE,
+        trans   : REF TRANSDEF,
+        notify,
+        flags,
+        sflags,
+        unit,
+        is_error,
+        changed,
+        status;
+
+    IF .dst [DSC$W_LENGTH] LSS 3 THEN
+        RETURN SS$_BADPARAM;
+
+    IF NOT .transq_loaded THEN
+        load_transactions ();
+
+    is_error = 0;
+    ch = CH$RCHAR (.dst [DSC$A_POINTER]);
+    IF .ch EQL %C'E' OR .ch EQL %C'e' THEN
+        is_error = 1
+    ELSE IF .ch NEQ %C'T' AND .ch NEQ %C'T' THEN
+    BEGIN
+        MLIST_ERROR (0, %ASCID'Invalid confirmation address.');
+        RETURN SS$_NORMAL;
+    END;
+
+    IF CH$RCHAR (CH$PLUS (.dst [DSC$A_POINTER], 1)) NEQ %C'-' THEN
+    BEGIN
+        MLIST_ERROR (0, %ASCID'Invalid confirmation address.');
+        RETURN SS$_NORMAL;
+    END;
+
+    INIT_SDESC (tid, .dst [DSC$W_LENGTH] - 2, CH$PLUS (.dst [DSC$A_POINTER], 2));
+
+    trans = .transq [QUE_L_HEAD];
+    WHILE .trans NEQA transq DO
+    BEGIN
+        BIND ttid = trans [TRANS_A_TID] : REF TXTDEF;
+        INIT_SDESC (sdsc, .ttid [TXT_W_LEN], ttid [TXT_T_TEXT]);
+        IF STR$CASE_BLIND_COMPARE (tid, sdsc) EQL 0 THEN EXITLOOP;
+        trans = .trans [TRANS_L_FLINK];
+    END;
+
+    IF .trans NEQA transq THEN
+    BEGIN
+        REMQUE (.trans, trans);
+        FREETXT (trans [TRANS_A_TID], trans [TRANS_A_ADDR], trans [TRANS_A_FSPEC]);
+        LIB$FREE_VM (%REF (TRANS_S_TRANSDEF), trans);
+    END;
+
+    INIT_DYNDESC (rspec, str);
+    STR$CONCAT (str, %ASCID'MX_MLIST_DIR:TRANS_', tid, %ASCID'.DAT');
+    status = MX_FILE_OPEN (MX__FILE_READ, str, unit, 0, rspec);
+    IF NOT .status THEN
+    BEGIN
+        MLIST_ERROR (0, %ASCID'Could not locate original request for confirmation.');
+        FREE_STRINGS (rspec, str);
+        RETURN SS$_NORMAL;
+    END;
+
+    IF .is_error THEN
+    BEGIN
+        TRACE (%STRING ('MLIST_CONFIRM_TRANSACTION: cancelling transaction !AS ',
+                        'due to error return of confirmation message.'), tid);
+        status = MX_FILE_READ (.unit, str);
+        IF .status THEN
+            status = MX_FILE_READ (.unit, str);
+        IF .status THEN
+        BEGIN
+            mlst = .mlists [QUE_L_HEAD];
+            WHILE .mlst NEQA mlists [QUE_L_HEAD] DO
+            BEGIN
+                INIT_SDESC (sdsc, .mlst [MLST_W_NAME], mlst [MLST_T_NAME]);
+                IF STR$CASE_BLIND_COMPARE (sdsc, str) EQL 0 THEN
+                    EXITLOOP;
+                mlst = .mlst [MLST_L_FLINK];
+            END;
+        END;
+        IF .status AND .mlst NEQA mlists THEN
+            status = MX_FILE_READ (.unit, str);
+        IF .status AND .mlst NEQA mlists AND .mlst [MLST_V_NTFYREQ] THEN
+            MLIST_NOTIFY_OWNER (.qctx, .mlst, 0, str, %ASCID'Confirmation request bounced for');
+        MX_FILE_CLOSE (.unit);
+        LIB$DELETE_FILE (rspec);
+        FREE_STRINGS (rspec, str);
+        RETURN SS$_NORMAL;
+    END;
+
+    TRACE ('MLIST_CONFIRM_TRANSACTION: processing transaction !AS', tid);
+
+    fromhdr = .hdrq [QUE_L_HEAD];
+    WHILE .fromhdr NEQA hdrq AND .fromhdr [TXT_W_CODE] NEQ MX_K_HDR_FROM DO
+        fromhdr = .fromhdr [TXT_L_FLINK];
+
+    IF .fromhdr EQLA hdrq THEN
+    BEGIN
+        TRACE ('  MLIST_CONFIRM_TRANSACTION: no From header in message.');
+        MLIST_ERROR (0, %ASCID'no From: header in message');
+        MX_FILE_CLOSE (.unit);
+        LIB$DELETE_FILE (rspec);
+        FREE_STRINGS (rspec, str);
+        RETURN SS$_NORMAL;
+    END;
+
+    status = MX_FILE_READ (.unit, str);  ! transaction ID
+    IF .status THEN
+        status = MX_FILE_READ (.unit, str);
+    IF .status THEN
+    BEGIN
+        mlst = .mlists [QUE_L_HEAD];
+        WHILE .mlst NEQA mlists [QUE_L_HEAD] DO
+        BEGIN
+            INIT_SDESC (sdsc, .mlst [MLST_W_NAME], mlst [MLST_T_NAME]);
+            IF STR$CASE_BLIND_COMPARE (sdsc, str) EQL 0 THEN
+                EXITLOOP;
+            mlst = .mlst [MLST_L_FLINK];
+        END;
+    END
+    ELSE
+        mlst = mlists [QUE_L_HEAD];
+
+    IF .mlst EQLA mlists [QUE_L_HEAD] THEN
+    BEGIN
+        MX_FILE_CLOSE (.unit);
+        LIB$DELETE_FILE (rspec);
+        LIB$SYS_FAO (%ASCID'Confirmation error: mailing list "!AS" not found.', 0, str, str);
+        MLIST_ERROR (0, str);
+        FREE_STRINGS (rspec, str);
+        RETURN SS$_NORMAL;
+    END;
+
+    INIT_DYNDESC (orgadr);
+    status = MX_FILE_READ (.unit, orgadr);
+    IF .status THEN
+        status = MX_FILE_READ (.unit, str);
+    IF .status THEN
+    BEGIN
+        LOCAL
+            tmpq    : QUEDEF,
+            tmpq2   : QUEDEF,
+            rteq    : QUEDEF,
+            txt     : REF TXTDEF,
+            fromadr : REF TXTDEF,
+            froma2  : REF TXTDEF,
+            str2    : BLOCK [DSC$K_S_BLN,BYTE],
+            lclp    : BLOCK [DSC$K_S_BLN,BYTE],
+            domp    : BLOCK [DSC$K_S_BLN,BYTE];
+
+        INIT_QUEUE (tmpq, tmpq2);
+        INIT_SDESC (sdsc, .fromhdr [TXT_W_LEN], fromhdr [TXT_T_TEXT]);
+        status = PARSE_ADDRLIST (sdsc, tmpq, 1);
+        IF .status THEN 
+            status = PARSE_ADDRLIST (sdsc, tmpq2, 0)
+        ELSE
+        BEGIN
+            LOCAL cp, diff;
+            cp = CH$FIND_CH (.fromadr [TXT_W_LEN], fromadr [TXT_T_TEXT], %C'<');
+            IF NOT CH$FAIL(.cp) THEN
+            BEGIN
+                diff = CH$DIFF (.cp, fromadr [TXT_T_TEXT]);
+                INIT_SDESC (sdsc, .fromadr [TXT_W_LEN]-.diff, .cp);
+                status = PARSE_ADDRLIST (sdsc, tmpq, 1);
+                IF .status THEN
+                    status = PARSE_ADDRLIST (sdsc, tmpq2, 0);
+            END;
+        END;
+        IF NOT .status OR QUEUE_EMPTY (tmpq) THEN
+        BEGIN
+            TRACE ('  MLIST_CONFIRM_TRANSACTION: -- invalid From: address');
+            MLIST_ERROR (0, %ASCID'invalid From: header in message');
+            MX_FILE_CLOSE (.unit);
+            LIB$DELETE_FILE (rspec);
+            FREE_STRINGS (str, orgadr, rspec);
+            RETURN SS$_NORMAL;
+        END;
+        REMQUE (.tmpq [QUE_L_HEAD], fromadr);
+        REMQUE (.tmpq2 [QUE_L_HEAD], froma2);
+        WHILE NOT REMQUE (.tmpq [QUE_L_HEAD], txt) DO FREETXT (txt);
+        WHILE NOT REMQUE (.tmpq2 [QUE_L_HEAD], txt) DO FREETXT (txt);
+        INIT_DYNDESC (lclp, domp, str2);
+        INIT_SDESC (sdsc, .froma2 [TXT_W_LEN], froma2 [TXT_T_TEXT]);
+        INIT_QUEUE (rteq);
+        status = PARSE821 (sdsc, rteq, lclp, domp);
+        IF NOT .status THEN
+        BEGIN
+            INIT_SDESC (sdsc, .fromadr [TXT_W_LEN], fromadr [TXT_T_TEXT]);
+            PARSE_MBOX (sdsc, lclp, domp, str2);
+        END;
+        IF NOT QUEUE_EMPTY (rteq) THEN
+        BEGIN
+            FORMAT821 (rteq, lclp, domp, str2);
+            WHILE NOT REMQUE (.rteq [QUE_L_HEAD], txt) DO FREETXT (txt);
+        END
+        ELSE
+            STR$CONCAT (str2, lclp, %ASCID'@', domp);
+        FREETXT (fromadr);
+        FREETXT (froma2);
+        FREE_STRINGS (lclp, domp);
+        IF STR$CASE_BLIND_COMPARE (str, str2) NEQ 0 THEN
+            TRACE ('  MLIST_CONFIRM_TRANSACTION: note - From address (!AS) does not match original (!AS)',
+                    str2, str);
+%( ---- too strict?
+            MLIST_ERROR (0, %ASCID'Confirming From: address does not match original request');
+            MX_FILE_CLOSE (.unit);
+            LIB$DELETE_FILE (rspec);
+            FREE_STRINGS (str, str2, orgadr, rspec);
+            RETURN SS$_NORMAL;
+        END;
+---- omitted ----  )%
+        status = SS$_NORMAL;
+    END;
+
+    IF .status THEN
+    BEGIN
+        status = MX_FILE_READ (.unit, str);
+        IF .status THEN
+            status = LIB$CVT_HTB (.str [DSC$W_LENGTH], .str [DSC$A_POINTER], notify);
+        IF .status THEN
+            status = MX_FILE_READ (.unit, str);
+        IF .status THEN
+            status = LIB$CVT_HTB (.str [DSC$W_LENGTH], .str [DSC$A_POINTER], flags);
+        IF .status THEN
+            status = MX_FILE_READ (.unit, str);
+        IF .status THEN
+            status = LIB$CVT_HTB (.str [DSC$W_LENGTH], .str [DSC$A_POINTER], sflags);
+    END;
+
+    IF NOT .status THEN
+    BEGIN
+        MX_FILE_CLOSE (.unit);
+        LIB$DELETE_FILE (rspec);
+        LIB$SYS_FAO (%ASCID'Processing error in confirmation for mailing list "!AS"', 0, str, str);
+        MLIST_ERROR (0, str);
+        FREE_STRINGS (rspec, str, orgadr);
+        RETURN SS$_NORMAL;
+    END;
+
+    changed = 0;
+    INIT_QUEUE (mlstq);
+    READ_MAILING_LIST (.mlst, mlstq);
+    notify<1,2,0> = 2;  ! we're confirming here, so set NOCONFIRM on add
+    MLIST_ADD (.qctx, .mlst, mlstq, orgadr, changed, .notify, .flags, .sflags);
+    IF .changed THEN
+        WRITE_MAILING_LIST (.mlst, mlstq);
+    WHILE NOT REMQUE (.mlstq [QUE_L_HEAD], mle) DO
+        MEM_FREEMLE (mle);
+
+    MX_FILE_CLOSE (.unit);
+    LIB$DELETE_FILE (rspec);
+    FREE_STRINGS (str, orgadr, rspec);
+
+    SS$_NORMAL
+
+END; ! MLIST_CONFIRM_TRANSACTION
+
+ROUTINE GET_FROM_ADDR (hdrq_a, lclp_a, domp_a, fromstr_a, realfrom_a) =
+BEGIN
+!+
+!
+!-
+    BUILTIN
+    	ACTUALCOUNT;
+
+    BIND
+	hdrq		= .hdrq_a	: QUEDEF,
+	lclp		= .lclp_a	: $BBLOCK,
+	domp		= .domp_a	: $BBLOCK,
+	fromstr		= .fromstr_a	: $BBLOCK;
+
+    LOCAL
+	fromhdr		: REF TXTDEF,
+	hdr		: REF TXTDEF,
+	tmpq		: QUEDEF,
+	sdsc		: $BBLOCK [DSC$K_S_BLN],
+    	tmpdom	    	: $BBLOCK [DSC$K_S_BLN],
+	status,
+	ret_status;
+
+    INIT_DYNDESC (tmpdom);
+    INIT_QUEUE (tmpq);
+
+    ret_status = SS$_NORMAL;			!Assume success
+
+    !
+    !  Find a Resent-From: header in the header queue.
+    !
+    fromhdr = (	hdr = .hdrq [QUE_L_HEAD];
+		WHILE (.hdr NEQA hdrq [QUE_L_HEAD]) DO
+		    BEGIN
+		    IF (.hdr [TXT_W_CODE] EQL MX_K_HDR_R_FROM)
+		    THEN
+			EXITLOOP .hdr;
+		    hdr = .hdr [TXT_L_FLINK];
+		    END
+	      );
+
+    IF (.fromhdr EQL -1)
+    THEN
+	BEGIN
+    !
+    !  Find the From: header in the header queue.
+    !
+    fromhdr = (	hdr = .hdrq [QUE_L_HEAD];
+		WHILE (.hdr NEQA hdrq [QUE_L_HEAD]) DO
+		    BEGIN
+		    IF (.hdr [TXT_W_CODE] EQL MX_K_HDR_FROM)
+		    THEN
+			EXITLOOP .hdr;
+		    hdr = .hdr [TXT_L_FLINK];
+		    END
+	      );
+	END;
+
+    IF (.fromhdr EQL -1)
+    THEN
+	ret_status = SS$_NOSUCHOBJECT;		!Return no From: header
+
+    IF (.ret_status)
+    THEN
+	BEGIN
+	INIT_SDESC (sdsc, .fromhdr [TXT_W_LEN], fromhdr [TXT_T_TEXT]);
+	TRACE ('  GET_FROM_ADDR:  Message is from: !AS', sdsc);
+	status = PARSE_ADDRLIST (sdsc, tmpq);
+	IF NOT(.status)
+	THEN
+	    BEGIN
+	    LOCAL cp;
+    	    cp = CH$FIND_CH (.fromhdr [TXT_W_LEN], fromhdr [TXT_T_TEXT], %C'<');
+    	    IF NOT CH$FAIL (.cp)
+    	    THEN
+		BEGIN
+    	    	INIT_SDESC (sdsc, .fromhdr [TXT_W_LEN]-CH$DIFF (.cp, fromhdr [TXT_T_TEXT]), .cp);
+		status = PARSE_ADDRLIST (sdsc, tmpq, 0);
+		END;
+	    END;
+
+	IF NOT(.status) OR (.tmpq [QUE_L_HEAD] EQLA tmpq [QUE_L_HEAD])
+	THEN
+	    ret_status = SS$_INVARG;		!Return invalid From: header
+	END;
+
+    IF (.ret_status)
+    THEN
+	BEGIN
+	REMQUE (.tmpq [QUE_L_HEAD], fromhdr);
+	WHILE NOT REMQUE (.tmpq [QUE_L_HEAD], hdr) DO FREETXT (hdr);
+	INIT_SDESC (sdsc, .fromhdr [TXT_W_LEN], fromhdr [TXT_T_TEXT]);
+	ret_status = PARSE821 (sdsc, tmpq, lclp, tmpdom);
+    	IF NOT .ret_status
+	THEN
+	    ret_status = PARSE_MBOX (sdsc, lclp, tmpdom);
+
+    	IF .ret_status
+    	THEN
+    	    BEGIN
+	    STR$UPCASE (domp, tmpdom);
+	    IF (.tmpq [QUE_L_HEAD] NEQA tmpq)
+	    THEN
+	    	BEGIN
+	    	FORMAT821 (tmpq, lclp, domp, fromstr);
+    	    	IF ACTUALCOUNT () GTR 4 AND .realfrom_a NEQA 0
+    	    	THEN
+    	    	    FORMAT821 (tmpq, lclp, tmpdom, .realfrom_a);
+	    	WHILE NOT REMQUE (.tmpq [QUE_L_HEAD], HDR) DO FREETXT (hdr);
+	    	END
+	    ELSE
+    	    	BEGIN
+	    	STR$CONCAT (fromstr, lclp, ascid_atsign, domp);
+    	    	IF ACTUALCOUNT () GTR 4 AND .realfrom_a NEQA 0
+    	    	THEN
+    	    	    STR$CONCAT (.realfrom_a, lclp, ascid_atsign, tmpdom);
+    	    	END;
+    	    END;
+
+	FREETXT (fromhdr);
+	FREE_STRINGS (tmpdom);
+
+	END;
+
+    RETURN (.ret_status);
+
+END;
+
+%SBTTL 'add_recipient_sorted'
+ROUTINE add_recipient_sorted (rcpt_a, rcptq_a) : NOVALUE = 
+BEGIN
+!++
+! FUNCTIONAL DESCRIPTION:
+!
+!   Adds a recipient to the recipient queue, trying
+!   to collect recipients to the same destination host
+!   together.
+!
+!   This is done on a best-effort basis, with only
+!   character string searching done, rather than a
+!   full address parse (to keep overhead down).
+!   Even so, this is still pretty inefficient.
+!   A future version of MLF should track the
+!   destination host so we don't have to do
+!   so much work here.
+!
+!
+! RETURNS:  	no value
+!
+! PROTOTYPE:
+!
+!   add_recipient_sorted (rcpt_a, rcptq_a)
+!
+! rcpt_a:   address of RCPT structure
+! rcptq_a:  address of recipient queue.
+!
+! IMPLICIT INPUTS:  None.
+!
+! IMPLICIT OUTPUTS: None.
+!
+! COMPLETION CODES: None.
+!
+! SIDE EFFECTS:
+!
+!   None.
+!--
+    BIND
+    	rcpt	= rcpt_a    	    	: REF RCPTDEF,
+    	Xaddr	= .rcpt [RCPT_A_ADDR]	: TXTDEF,
+    	rcptq	= .rcptq_a  	    	: QUEDEF;
+
+    LOCAL
+    	r   : REF RCPTDEF,
+    	cp, len, cp1,
+    	h1  : BLOCK [DSC$K_S_BLN,BYTE],
+    	h2  : BLOCK [DSC$K_S_BLN,BYTE];
+
+    len = .Xaddr [TXT_W_LEN];
+    cp  = Xaddr [TXT_T_TEXT];
+
+    h1 [DSC$W_LENGTH] = 0;
+    IF .len GTR 2 AND CH$RCHAR (.cp) EQL %C'<' AND
+    	    	      CH$RCHAR (CH$PLUS (.cp, 1)) EQL %C'@' THEN
+    BEGIN
+    	cp = CH$PLUS (.cp, 2);
+    	len = .len - 2;
+    	len = (INCR i FROM 0 TO .len-1 DO
+    	    	    IF CH$RCHAR (CH$PLUS (.cp, .i)) EQL %C',' OR
+    	       	       CH$RCHAR (CH$PLUS (.cp, .i)) EQL %C':' THEN EXITLOOP .i);
+    	IF .len GEQ 1 THEN INIT_SDESC (h1, .len, .cp);
+    END
+    ELSE
+    BEGIN
+    	cp1 = (DECR cp2 FROM CH$PLUS (.cp, .len) TO CH$PLUS (.cp, 1) DO
+    	    	IF CH$RCHAR (.cp2-1) EQL %C'@' THEN EXITLOOP .cp2);
+    	IF .cp1 NEQ -1 THEN
+    	    INIT_SDESC (h1, .len - CH$DIFF (.cp1, .cp), .cp1);
+    END;
+
+    IF .h1 [DSC$W_LENGTH] EQL 0 THEN
+    BEGIN
+    	INSQUE (.rcpt, .rcptq [QUE_L_TAIL]);
+    	RETURN;
+    END;
+
+    r = .rcptq [QUE_L_HEAD];
+    WHILE .r NEQA rcptq [QUE_L_HEAD] DO
+    BEGIN
+    	BIND Qaddr = .r [RCPT_A_ADDR] : TXTDEF;
+    	len = .Qaddr [TXT_W_LEN];
+    	cp  = Qaddr [TXT_T_TEXT];
+
+    	h2 [DSC$W_LENGTH] = 0;
+    	IF .len GTR 2 AND CH$RCHAR (.cp) EQL %C'<' AND
+    	    	      CH$RCHAR (CH$PLUS (.cp, 1)) EQL %C'@' THEN
+    	BEGIN
+    	    cp = CH$PLUS (.cp, 2);
+    	    len = .len - 2;
+    	    len = (INCR i FROM 0 TO .len-1 DO
+    	    	    IF CH$RCHAR (CH$PLUS (.cp, .i)) EQL %C',' OR
+    	       	       CH$RCHAR (CH$PLUS (.cp, .i)) EQL %C':' THEN EXITLOOP .i);
+    	    IF .len GEQ 1 THEN INIT_SDESC (.h2, .len, .cp);
+    	END
+    	ELSE
+    	BEGIN
+    	    cp1 = (DECR cp2 FROM CH$PLUS (.cp, .len) TO CH$PLUS (.cp, 1) DO
+    	    	    IF CH$RCHAR (.cp2-1) EQL %C'@' THEN EXITLOOP .cp2);
+    	    IF .cp1 NEQ -1 THEN
+    	    	INIT_SDESC (h2, .len - CH$DIFF (.cp1, .cp), .cp1);
+    	END;
+    	IF .h2 [DSC$W_LENGTH] EQL .h1 [DSC$W_LENGTH] THEN  ! small efficiency here
+    	BEGIN
+    	    IF STR$CASE_BLIND_COMPARE (h1, h2) EQL 0 THEN
+    	    BEGIN
+    	    	INSQUE (.rcpt, .r);
+    	    	RETURN;
+    	    END;
+    	END;
+    	r = .r [RCPT_L_FLINK];
+    END;
+
+    INSQUE (.rcpt, .rcptq [QUE_L_TAIL]);
+
+END; ! add_recipient_sorted
+    	
+
+%SBTTL 'header_contains_address'
+ROUTINE header_contains_address (hdr_a, adr_a) = 
+BEGIN
+!++
+! FUNCTIONAL DESCRIPTION:
+!
+!   	Parses a header and compares the specified address
+!   with each address in the header for a match.  Match is case-blind.
+!
+! RETURNS:  	1=yes, 0=no
+!
+! PROTOTYPE:
+!
+!   header_contains_address (hdr, adr)
+!
+!   	hdr:	    pointer to TXT structure containing header.
+!   	adr:	    pointer to string containing address to be found.
+!
+! IMPLICIT INPUTS:  None.
+!
+! IMPLICIT OUTPUTS: None.
+!
+! COMPLETION CODES: None.
+!
+! SIDE EFFECTS:
+!
+!   None.
+!--
+    BIND
+    	hdr 	= .hdr_a    	    	: TXTDEF,
+    	adr 	= .adr_a    	    	: BLOCK [,BYTE];
+
+    LOCAL
+    	adrq	: QUEDEF,
+        rteq    : QUEDEF,
+    	txt 	: REF TXTDEF,
+    	hdrdsc	: BLOCK [DSC$K_S_BLN,BYTE],
+    	sdsc	: BLOCK [DSC$K_S_BLN,BYTE],
+    	lclp	: BLOCK [DSC$K_S_BLN,BYTE],
+    	domp	: BLOCK [DSC$K_S_BLN,BYTE],
+        a821    : BLOCK [DSC$K_S_BLN,BYTE],
+        rewr    : BLOCK [DSC$K_S_BLN,BYTE],
+    	found,
+    	status;
+
+    INIT_QUEUE (adrq, rteq);
+    INIT_SDESC (hdrdsc, .hdr [TXT_W_LEN], hdr [TXT_T_TEXT]);
+    status = PARSE_ADDRLIST (hdrdsc, adrq, 0);
+    IF NOT .status THEN
+    	RETURN 0;
+    INIT_DYNDESC (lclp, domp, a821, rewr);
+
+    found = 0;
+    WHILE NOT REMQUE (.adrq [QUE_L_HEAD], txt) DO
+    BEGIN
+        LOCAL
+            pathid;
+
+    	INIT_SDESC (sdsc, .txt [TXT_W_LEN], txt [TXT_T_TEXT]);
+    	status = PARSE_MBOX (sdsc, lclp, domp);
+        FREETXT (txt);
+        IF .status THEN
+        BEGIN
+            FORMAT821 (rteq, lclp, domp, a821);
+            REWRITE (a821, rewr);
+            status = PARSE821 (rewr, rteq, lclp, domp);
+            WHILE NOT REMQUE (.rteq [QUE_L_HEAD], txt) DO
+                FREETXT (txt);
+            IF .status THEN
+                status = FINDPATH (domp, pathid);
+            IF .status AND .pathid EQLU MX_K_PATH_LOCAL THEN
+            BEGIN
+                LOCAL
+                    newq : QUEDEF,
+                    rcp  : REF RCPDEF;
+                INIT_QUEUE (newq);
+                IF FINDALIAS (lclp, newq) THEN
+                BEGIN
+                    WHILE NOT REMQUE (.newq [QUE_L_HEAD], rcp) DO
+                    BEGIN
+                        BIND orga = rcp [RCP_Q_ORGADR] : BLOCK [,BYTE];
+                        txt = MEM_GETTXT (.orga [DSC$W_LENGTH], .orga [DSC$A_POINTER]);
+                        INSQUE_TAIL (.txt, adrq);
+                        FREE_STRINGS (orga);
+                        LIB$FREE_VM (%REF (RCP_S_RCPDEF), rcp);
+                    END;
+                END
+                ELSE IF STR$CASE_BLIND_COMPARE (adr, lclp) EQL 0 THEN
+    	        BEGIN
+    	    	    found = 1;
+    	    	    EXITLOOP;
+    	        END;
+            END;
+        END;
+    END;
+
+    WHILE NOT REMQUE (.adrq [QUE_L_HEAD], txt) DO FREETXT (txt);
+    FREE_STRINGS (lclp, domp, a821, rewr);
+
+    .found
+
+END; ! header_contains_address
+
+
+%SBTTL 'is_text_plain'
+ROUTINE is_text_plain (len, ptr) = 
+BEGIN
+!++
+! FUNCTIONAL DESCRIPTION:
+!
+!   Checks for 'text/plain' as MIME content type.
+!
+! RETURNS:  	cond_value, longword (unsigned), write only, by value
+!
+! PROTOTYPE:
+!
+!   is_text_plain   len, ptr
+!
+! IMPLICIT INPUTS:  None.
+!
+! IMPLICIT OUTPUTS: None.
+!
+! COMPLETION CODES: 1 = yes, 0 = no
+!
+! SIDE EFFECTS:	    None.
+!--
+    BIND
+        text_d = %ASCID'text'   : BLOCK [,BYTE],
+        plain_d = %ASCID'plain' : BLOCK [,BYTE];
+    LOCAL
+        dsc     : BLOCK [DSC$K_S_BLN,BYTE];
+
+    WHILE .len GTR 0 AND (CH$RCHAR (.ptr) EQL %C' ' OR CH$RCHAR (.ptr) EQL %CHAR (9)) DO
+    BEGIN
+        ptr = CH$PLUS (.ptr, 1);
+        len = .len - 1;
+    END;
+    IF .len LSS .text_d [DSC$W_LENGTH]+1 THEN
+        RETURN 0;
+    INIT_SDESC (dsc, .text_d [DSC$W_LENGTH], .ptr);
+    IF STR$CASE_BLIND_COMPARE (dsc, text_d) NEQ 0 THEN
+        RETURN 0;
+    ptr = CH$PLUS (.ptr, .text_d [DSC$W_LENGTH]);
+    len = .len - .text_d [DSC$W_LENGTH];
+    WHILE .len GTR 0 AND (CH$RCHAR (.ptr) EQL %C' ' OR CH$RCHAR (.ptr) EQL %CHAR (9)) DO
+    BEGIN
+        ptr = CH$PLUS (.ptr, 1);
+        len = .len - 1;
+    END;
+    IF .len EQL 0 OR CH$RCHAR (.ptr) NEQ %C'/' THEN
+        RETURN 0;
+    ptr = CH$PLUS (.ptr, 1);
+    len = .len - 1;
+    WHILE .len GTR 0 AND (CH$RCHAR (.ptr) EQL %C' ' OR CH$RCHAR (.ptr) EQL %CHAR (9)) DO
+    BEGIN
+        ptr = CH$PLUS (.ptr, 1);
+        len = .len - 1;
+    END;
+    IF .len LSS .plain_d [DSC$W_LENGTH] THEN
+        RETURN 0;
+    INIT_SDESC (dsc, .plain_d [DSC$W_LENGTH], .ptr);
+    IF STR$CASE_BLIND_COMPARE (dsc, plain_d) NEQ 0 THEN
+        RETURN 0;
+    ptr = CH$PLUS (.ptr, .plain_d [DSC$W_LENGTH]);
+    len = .len - .plain_d [DSC$W_LENGTH];
+    WHILE .len GTR 0 AND (CH$RCHAR (.ptr) EQL %C' ' OR CH$RCHAR (.ptr) EQL %CHAR (9)) DO
+    BEGIN
+        ptr = CH$PLUS (.ptr, 1);
+        len = .len - 1;
+    END;
+
+    .len EQL 0 OR CH$RCHAR (.ptr) EQL %C';'
+
+END; ! is_text_plain
+
+
+%SBTTL 'load_transactions'
+ROUTINE load_transactions : NOVALUE = 
+BEGIN
+!++
+! FUNCTIONAL DESCRIPTION:
+!
+!   description
+!
+! RETURNS:  	cond_value, longword (unsigned), write only, by value
+!
+! PROTOTYPE:
+!
+!   x
+!
+! IMPLICIT INPUTS:  None.
+!
+! IMPLICIT OUTPUTS: None.
+!
+! COMPLETION CODES:
+!
+!   SS$_NORMAL:	    	normal successful completion.
+!
+! SIDE EFFECTS:	    None.
+!--
+    LOCAL
+        fab     : $FAB_DECL,
+        nam     : $NAM_DECL,
+        espec   : VECTOR [255,BYTE],
+        rspec   : VECTOR [255,BYTE],
+        trans   : REF TRANSDEF,
+        sdsc    : BLOCK [DSC$K_S_BLN,BYTE],
+        str     : BLOCK [DSC$K_S_BLN,BYTE],
+        credt   : VECTOR [2,LONG],
+        unit,
+        status;
+
+    $BINTIM (TIMBUF=%ASCID'0 00:15:00.00', TIMADR=trans_intvl);
+    $BINTIM (TIMBUF=%ASCID'3 00:00:00.00', TIMADR=trans_deflimit);
+    INIT_QUEUE (transq);
+    transq_loaded = 1;
+
+    $FAB_INIT (FAB=fab, NAM=nam, FNM='MX_MLIST_DIR:TRANS_*.DAT;', FAC=GET);
+    $NAM_INIT (NAM=nam, ESA=espec, ESS=%ALLOCATION (espec), RSA=rspec, RSS=%ALLOCATION (rspec));
+
+    INIT_DYNDESC (str);
+    unit = 0;
+    trans = 0;
+
+    status = $PARSE (FAB=fab);
+    IF .status THEN WHILE $SEARCH (FAB=fab) DO
+    BEGIN
+        trans = 0;
+        INIT_SDESC (sdsc, .nam [NAM$B_RSL], rspec);
+        status = MX_FILE_OPEN (MX__FILE_READ, sdsc, unit, 0, 0, 0, credt);
+        IF NOT .status THEN
+        BEGIN
+            unit = 0;
+            EXITLOOP;
+        END;
+        IF NOT LIB$GET_VM (%REF (TRANS_S_TRANSDEF), trans) THEN
+            EXITLOOP;
+        CH$FILL (%CHAR (0), TRANS_S_TRANSDEF, .trans);
+        trans [TRANS_A_FSPEC] = MEM_GETTXT (.nam [NAM$B_RSL], rspec);
+        CH$MOVE (8, credt, trans [TRANS_Q_CREDT]);
+        CH$MOVE (8, credt, trans [TRANS_Q_LASTDT]);
+        status = MX_FILE_READ (.unit, str);
+        IF NOT .status THEN
+            EXITLOOP;
+        trans [TRANS_A_TID] = MEM_GETTXT (.str [DSC$W_LENGTH], .str [DSC$A_POINTER]);
+        status = MX_FILE_READ (.unit, str);
+        IF NOT .status THEN
+            EXITLOOP;
+        trans [TRANS_W_MLIST] = MINU (.str [DSC$W_LENGTH], MLST_S_NAME);
+        CH$MOVE (.trans [TRANS_W_MLIST], .str [DSC$A_POINTER], trans [TRANS_T_MLIST]);
+        status = MX_FILE_READ (.unit, str);
+        IF NOT .status THEN
+            EXITLOOP;
+        status = MX_FILE_READ (.unit, str);
+        IF NOT .status THEN
+            EXITLOOP;
+        trans [TRANS_A_ADDR] = MEM_GETTXT (.str [DSC$W_LENGTH], .str [DSC$A_POINTER]);
+        INSQUE_TAIL (.trans, transq);
+        trans = 0;
+        MX_FILE_CLOSE (.unit);
+        unit = 0;
+    END;
+
+    nam [NAM$V_SYNCHK] = 1;
+    $PARSE (FAB=fab);
+
+    FREE_STRINGS (str);
+    IF .unit NEQU 0 THEN
+        MX_FILE_CLOSE (.unit);
+    IF .trans NEQA 0 THEN
+    BEGIN
+        FREETXT (trans [TRANS_A_FSPEC], trans [TRANS_A_TID], trans [TRANS_A_ADDR]);
+        LIB$FREE_VM (%REF (TRANS_S_TRANSDEF), trans);
+    END;
+
+END; ! load_transactions
+
+%SBTTL 'MLIST_PURGE_TRANSACTIONS'
+GLOBAL ROUTINE MLIST_PURGE_TRANSACTIONS : NOVALUE = 
+BEGIN
+!++
+! FUNCTIONAL DESCRIPTION:
+!
+!   description
+!
+! RETURNS:  	cond_value, longword (unsigned), write only, by value
+!
+! PROTOTYPE:
+!
+!   x
+!
+! IMPLICIT INPUTS:  None.
+!
+! IMPLICIT OUTPUTS: None.
+!
+! COMPLETION CODES:
+!
+!   SS$_NORMAL:	    	normal successful completion.
+!
+! SIDE EFFECTS:	    None.
+!--
+    LOCAL
+        mlst    : REF MLSTDEF,
+        trans   : REF TRANSDEF,
+        delta   : VECTOR [2,LONG],
+        junk    : VECTOR [2,LONG],
+        now     : VECTOR [2,LONG],
+        limit   : VECTOR [2,LONG],
+        dsc1    : BLOCK [DSC$K_S_BLN,BYTE],
+        dsc2    : BLOCK [DSC$K_S_BLN,BYTE],
+        qctx;
+
+    $GETTIM (TIMADR=now);
+
+    IF NOT .transq_loaded THEN
+        load_transactions ()
+    ELSE
+    BEGIN
+        IF LIB$SUB_TIMES (now, last_purge, delta) EQL LIB$_NORMAL THEN
+            IF LIB$SUB_TIMES (last_purge, trans_intvl, junk) NEQ LIB$_NORMAL THEN
+                RETURN;
+    END;
+
+    CH$MOVE (8, now, last_purge);
+
+    IF NOT FLQ_OPEN (FLQ__FULL, qctx) THEN
+        RETURN;
+
+    trans = .transq [QUE_L_HEAD];
+    WHILE .trans NEQA transq DO
+    BEGIN
+        LOCAL
+            tmp : REF TRANSDEF,
+            do_delete;
+
+        tmp = .trans [TRANS_L_FLINK];
+        IF LIB$SUB_TIMES (now, trans [TRANS_Q_CREDT], delta) EQL LIB$_NORMAL THEN
+        BEGIN
+            mlst = .mlists [QUE_L_HEAD];
+            WHILE mlst NEQA mlists DO
+            BEGIN
+                INIT_SDESC (dsc1, .trans [TRANS_W_MLIST], trans [TRANS_T_MLIST]);
+                INIT_SDESC (dsc2, .mlst [MLST_W_NAME], mlst [MLST_T_NAME]);
+                IF STR$CASE_BLIND_COMPARE (dsc1, dsc2) EQL 0 THEN
+                    EXITLOOP;
+                mlst = .mlst [MLST_L_FLINK];
+            END;
+            do_delete = .mlst EQLA mlists;
+            IF NOT .do_delete THEN
+            BEGIN
+                IF CH$EQL (8, mlst [MLST_Q_CONFTIME], 8, UPLIT (0,0)) THEN
+                    CH$MOVE (8, trans_deflimit, limit)
+                ELSE
+                    CH$MOVE (8, mlst [MLST_Q_CONFTIME], limit);
+                do_delete = LIB$SUB_TIMES (delta, limit, junk) EQL LIB$_NORMAL;
+            END;
+            IF .do_delete THEN
+            BEGIN
+                BIND 
+                    tfs = trans [TRANS_A_FSPEC] : REF TXTDEF,
+                    tad = trans [TRANS_A_ADDR]  : REF TXTDEF;
+
+                INIT_SDESC (dsc1, .tfs [TXT_W_LEN], tfs [TXT_T_TEXT]);
+                INIT_SDESC (dsc2, .tad [TXT_W_LEN], tad [TXT_T_TEXT]);
+                LIB$DELETE_FILE (dsc1);
+                IF .mlst NEQA mlists AND .mlst [MLST_V_NTFYREQ] THEN
+                    MLIST_NOTIFY_OWNER (.qctx, .mlst, 0, dsc2, %ASCID'Confirmation request expired for');
+                FREETXT (trans [TRANS_A_TID], trans [TRANS_A_ADDR], trans [TRANS_A_FSPEC]);
+                REMQUE (.trans, trans);
+                LIB$FREE_VM (%REF (TRANS_S_TRANSDEF), trans);
+            END;
+        END;
+        trans = .tmp;
+    END;
+
+    FLQ_CLOSE (qctx);
+    IF NOT .shutdown_flag THEN
+        $SCHDWK (DAYTIM=trans_intvl);
+
+END; ! mlist_purge_transactions
+
+END
+ELUDOM

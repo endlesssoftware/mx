@@ -1,0 +1,524 @@
+%TITLE 'PARSE_REQ_CMD'
+MODULE PARSE_REQ_CMD (IDENT='V1.6',
+    	ADDRESSING_MODE (EXTERNAL=LONG_RELATIVE, NONEXTERNAL=LONG_RELATIVE)) =
+BEGIN
+!++
+! FACILITY: 	    MX MLF
+!
+! ABSTRACT: 	    Parses -request commands.
+!
+! MODULE DESCRIPTION:
+!
+!
+! AUTHOR:   	    M. Madison
+!
+! Copyright (c) 2008, Matthew Madison.
+! 
+! All rights reserved.
+! 
+! Redistribution and use in source and binary forms, with or without
+! modification, are permitted provided that the following conditions
+! are met:
+! 
+!     * Redistributions of source code must retain the above
+!       copyright notice, this list of conditions and the following
+!       disclaimer.
+!     * Redistributions in binary form must reproduce the above
+!       copyright notice, this list of conditions and the following
+!       disclaimer in the documentation and/or other materials provided
+!       with the distribution.
+!     * Neither the name of the copyright owner nor the names of any
+!       other contributors may be used to endorse or promote products
+!       derived from this software without specific prior written
+!       permission.
+! 
+! THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
+! "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
+! LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
+! A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
+! OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
+! SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
+! LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
+! DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
+! THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
+! (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
+! OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+!
+! CREATION DATE:    25-OCT-1991
+!
+! MODIFICATION HISTORY:
+!
+!   25-OCT-1991	V1.0	Madison	    Initial coding.
+!   04-NOV-1991	V1.0-1	Madison	    Add the /[NO]MAIL qualifier to ADD.
+!   11-NOV-1991	V1.0-2	Madison	    Add LIST, HELP commands.
+!   05-MAR-1992	V1.1	Madison	    New qualifiers for ADD.
+!   22-Aug-1992 V1.2	Munroe	    Don't parse garbage characters.
+!    8-JAN-1993 V1.2-1	Goatley     Added Dick Munroe's code for QUIT command.
+!    9-JAN-1993 V1.2-2  Goatley     Add Munroe's ACCESS/NOACCESS qualifier.
+!   10-MAR-1993 V1.3	Goatley     Modified for AXP.
+!   11-SEP-1995 V1.4	Goatley	    Added DIGEST and NODIGEST to SET command.
+!   10-DEC-1995 V1.4-1	Goatley     Added DENY and NODENY to SET command.
+!    5-MAY-1997 V1.5	Goatley     Added POST and NOPOST to SET command.
+!   30-OCT-1997 V1.5-1	Goatley     Add SFLAGS (specified flags) parameter.
+!   13-NOV-1999	V1.5-2	Madison	    Allow REMOVE to take only /[NO]NOTIFY.
+!   27-NOV-2000	V1.6	Madison	    Add MODIFY command.
+!--
+
+    LIBRARY 'SYS$LIBRARY:STARLET';
+    LIBRARY 'SYS$LIBRARY:TPAMAC';
+    LIBRARY 'MX_SRC_COMMON:MX';
+    LIBRARY 'MLF';
+
+    FORWARD ROUTINE
+    	PARSE_REQ_CMD,
+    	PRC_STORE,
+    	PRC_STORE_CODE,
+	TEST_CHARACTER;
+
+    EXTERNAL ROUTINE
+    	G_HAT (LIB$TPARSE, STR$UPCASE, STR$COPY_R, STR$COPY_DX, STR$APPEND);
+
+    MACRO
+	TPA_A_P1	=   TPA$C_LENGTH0+00,0,32,0%,
+	TPA_A_P2	=   TPA$C_LENGTH0+04,0,32,0%,
+	TPA_A_P3	=   TPA$C_LENGTH0+08,0,32,0%,
+	TPA_A_P4	=   TPA$C_LENGTH0+12,0,32,0%,
+	TPA_A_P5	=   TPA$C_LENGTH0+16,0,32,0%,
+	TPA_A_P6	=   TPA$C_LENGTH0+20,0,32,0%,
+	TPA_A_P7	=   TPA$C_LENGTH0+24,0,32,0%,
+    	TPA_A_P8	=   TPA$C_LENGTH0+28,0,32,0%;
+
+%SBTTL 'State table for PARSE_REQ_CMD'
+
+    $INIT_STATE (PRC_STATE, PRC_KEY);
+
+    $STATE (START,
+    	('SUBSCRIBE', TPA$_EXIT, PRC_STORE,,, MLCMD__SUBSCRIBE),
+    	('ADD', CHKADDSW, PRC_STORE,,, MLCMD__ADD),
+    	('MODIFY', CHKMODSW, PRC_STORE,,, MLCMD__MODIFY),
+    	('SET', GETARG, PRC_STORE,,, MLCMD__SET),
+    	('QUERY', TPA$_EXIT, PRC_STORE,,, MLCMD__QUERY),
+    	('DIRECTORY', TPA$_EXIT, PRC_STORE,,, MLCMD__LIST),
+    	('LIST', TPA$_EXIT, PRC_STORE,,, MLCMD__LIST),
+    	('HELP', TPA$_EXIT, PRC_STORE,,, MLCMD__HELP),
+    	('SIGNOFF', TPA$_EXIT, PRC_STORE,,, MLCMD__SIGNOFF),
+    	('UNSUBSCRIBE', TPA$_EXIT, PRC_STORE,,, MLCMD__SIGNOFF),
+    	('REMOVE', CHKREMSW, PRC_STORE,,, MLCMD__REMOVE),
+    	('REVIEW', CHKREVSW, PRC_STORE_CODE,,, MLCMD__REVIEW),
+	('QUIT', TPA$_EXIT, PRC_STORE_CODE,,, MLCMD__QUIT)) ;
+
+    $STATE (CHKADDSW,
+    	('/', GETADDSW),
+    	(TPA$_LAMBDA, GETARG, PRC_STORE,,, -100));
+
+    $STATE (GETADDSW,
+    	('NOTIFY', CHKADDSW, PRC_STORE,,, -101),
+    	('NONOTIFY', CHKADDSW, PRC_STORE,,, -102),
+    	('MAIL', CHKADDSW, PRC_STORE,,, -103),
+    	('NOMAIL', CHKADDSW, PRC_STORE,,, -104),
+    	('REPRO', CHKADDSW, PRC_STORE,,, -105),
+    	('NOREPRO', CHKADDSW, PRC_STORE,,, -106),
+    	('CONCEAL', CHKADDSW, PRC_STORE,,, -107),
+    	('NOCONCEAL', CHKADDSW, PRC_STORE,,, -108),
+    	('CASE', CHKADDSW, PRC_STORE,,, -109),
+    	('NOCASE', CHKADDSW, PRC_STORE,,, -110),
+	('ACCESS', CHKADDSW, PRC_STORE,,, -111),
+	('NOACCESS', CHKADDSW, PRC_STORE,,, -112),
+	('DIGEST', CHKADDSW, PRC_STORE,,, -113),
+	('NODIGEST', CHKADDSW, PRC_STORE,,, -114),
+	('DENY', CHKADDSW, PRC_STORE,,, -115),
+	('NODENY', CHKADDSW, PRC_STORE,,, -116),
+	('POST', CHKADDSW, PRC_STORE,,, -117),
+	('NOPOST', CHKADDSW, PRC_STORE,,, -118),
+        ('CONFIRM', CHKADDSW, PRC_STORE,,, -119),
+        ('NOCONFIRM', CHKADDSW, PRC_STORE,,, -120));
+
+    $STATE (CHKMODSW,
+    	('/', GETMODSW),
+    	(TPA$_LAMBDA, GETARG, PRC_STORE,,, -100));
+
+    $STATE (GETMODSW,
+    	('MAIL', CHKMODSW, PRC_STORE,,, -103),
+    	('NOMAIL', CHKMODSW, PRC_STORE,,, -104),
+    	('REPRO', CHKMODSW, PRC_STORE,,, -105),
+    	('NOREPRO', CHKMODSW, PRC_STORE,,, -106),
+    	('CONCEAL', CHKMODSW, PRC_STORE,,, -107),
+    	('NOCONCEAL', CHKMODSW, PRC_STORE,,, -108),
+    	('CASE', CHKMODSW, PRC_STORE,,, -109),
+    	('NOCASE', CHKMODSW, PRC_STORE,,, -110),
+	('ACCESS', CHKMODSW, PRC_STORE,,, -111),
+	('NOACCESS', CHKMODSW, PRC_STORE,,, -112),
+	('DIGEST', CHKMODSW, PRC_STORE,,, -113),
+	('NODIGEST', CHKMODSW, PRC_STORE,,, -114),
+	('DENY', CHKMODSW, PRC_STORE,,, -115),
+	('NODENY', CHKMODSW, PRC_STORE,,, -116),
+	('POST', CHKMODSW, PRC_STORE,,, -117),
+	('NOPOST', CHKMODSW, PRC_STORE,,, -118));
+
+    $STATE (CHKREMSW,
+    	('/', GETREMSW),
+    	(TPA$_LAMBDA, GETARG, PRC_STORE,,, -100));
+
+    $STATE (GETREMSW,
+    	('NOTIFY', CHKREMSW, PRC_STORE,,, -101),
+    	('NONOTIFY', CHKREMSW, PRC_STORE,,, -102),
+    	('CASE', CHKREMSW, PRC_STORE,,, -109),
+    	('NOCASE', CHKREMSW, PRC_STORE,,, -110));
+
+    $STATE (CHKREVSW,
+        ('/', GETREVSW),
+        (TPA$_LAMBDA, TPA$_EXIT));
+
+    $STATE (GETREVSW,
+        ('BRIEF', CHKREVSW, PRC_STORE,,, -121));
+
+    $STATE (GETARG,
+    	(TPA$_EOS, TPA$_EXIT),
+    	(TPA$_BLANK, GETARG),
+     	((GETARG1), TPA$_EXIT, PRC_STORE,,, -2));
+
+     $STATE (GETARG1,					! The relevant characters are only those which are alphabetic (printable).
+ 	(TPA$_EOS, TPA$_EXIT),				! Stop if the parse gets to the end of string.
+ 	(TPA$_ANY, GETARG1, TEST_CHARACTER),		! Test the character for < ' '
+ 	(TPA$_LAMBDA, TPA$_EXIT)) ;			! This stops the parse when the previous transition fails.
+
+%SBTTL 'PARSE_REQ_CMD'
+GLOBAL ROUTINE PARSE_REQ_CMD (STR_A, CODE_A, CMDSTR_A, PARS_A,
+    	    	    	    	    NOTIFY_A, FLAGS_A, SFLAGS_A) =
+BEGIN
+!++
+! FUNCTIONAL DESCRIPTION:
+!
+!   Parses a mailing-list processor command.
+!
+! RETURNS:  	cond_value, longword (unsigned), write only, by value
+!
+! PROTOTYPE:
+!
+!   PARSE_REQ_CMD  str, rtq, lcl, dom
+!
+! IMPLICIT INPUTS:  None.
+!
+! IMPLICIT OUTPUTS: None.
+!
+! COMPLETION CODES:
+!
+!   SS$_NORMAL:	    	normal successful completion.
+!
+! SIDE EFFECTS:
+!
+!   None.
+!--
+    BIND
+	FLAGS	= .FLAGS_A,
+	SFLAGS	= .SFLAGS_A,
+	NOTIFY	= .NOTIFY_A,
+    	STR 	= .STR_A    : BLOCK [DSC$K_S_BLN,BYTE];
+
+    LITERAL
+    	TPA_C_LENGTH	=   TPA$C_LENGTH0 + 32,
+    	TPA_K_COUNT 	=   TPA$K_COUNT0 + 8;
+
+    LOCAL
+    	TPABLK	: BLOCK [TPA_C_LENGTH,BYTE],
+    	TMP 	: BLOCK [DSC$K_S_BLN,BYTE],
+    	STATUS;
+
+    NOTIFY = 1;						! By default, all entries receive notifications.
+    FLAGS = 0;						! The default flags setting for each entry is:
+    SFLAGS = 0;						!   MAIL
+							!   CASE
+							!   NOCONCEAL
+							!   REPRO
+							!   NOACCESS
+    INIT_DYNDESC (TMP);
+    STR$UPCASE (TMP, STR);
+    TPABLK [TPA$L_COUNT] = TPA_K_COUNT;
+    TPABLK [TPA$L_OPTIONS] = TPA$M_ABBREV;
+    TPABLK [TPA$L_STRINGCNT] = .TMP [DSC$W_LENGTH];
+    TPABLK [TPA$L_STRINGPTR] = .TMP [DSC$A_POINTER];
+    TPABLK [TPA_A_P1] = .STR [DSC$A_POINTER];
+    TPABLK [TPA_A_P2] = .TMP [DSC$A_POINTER];
+    TPABLK [TPA_A_P3] = .CODE_A;
+    TPABLK [TPA_A_P4] = .NOTIFY_A;
+    TPABLK [TPA_A_P5] = .CMDSTR_A;
+    TPABLK [TPA_A_P6] = .PARS_A;
+    TPABLK [TPA_A_P7] = .FLAGS_A;
+    TPABLK [TPA_A_P8] = .SFLAGS_A;
+
+    STATUS = LIB$TPARSE (TPABLK, PRC_STATE, PRC_KEY);
+
+    IF NOT .STATUS THEN
+    	.CODE_A = MLCMD__UNKNOWN;
+
+    FREE_STRINGS (TMP);
+
+    !++
+    ! Patch up the various flag settings if /ACCESS was used on this entry.
+    !--
+
+    IF .FLAGS<4,1,0>
+    THEN
+	BEGIN
+	NOTIFY = 0 ;				    ! Do not notify ACCESS control entries.
+	FLAGS<0,1,0> = 1 ;			    ! Do not send mail to ACCESS control entries.
+	FLAGS<2,1,0> = 1 ;			    ! Do not copy mail from ACCESS control entries.
+	END ;
+
+    SS$_NORMAL
+
+END; ! PARSE_REQ_CMD
+
+%SBTTL 'PRC_STORE'
+TPA_ROUTINE (PRC_STORE, (OPTIONS, STRINGCNT, STRINGPTR, TOKENCNT,
+    	    TOKENPTR, CHAR, NUMBER, PARAM, REALBASE, STRINGBASE, CODE_A,
+    	    NOTIFY_A, CMDSTR_A, PARS_A, FLAGS_A, SFLAGS_A))
+!++
+! FUNCTIONAL DESCRIPTION:
+!
+!   Invoked by TPARSE to store any arguments on the mailing list command.
+!
+! RETURNS:  	cond_value, longword (unsigned), write only, by value
+!
+! PROTOTYPE:
+!
+!   PRC_STORE opt, scnt, sptr, tcnt, tptr, chr, num, par, p1, p2, p3
+!
+! IMPLICIT INPUTS:  None.
+!
+! IMPLICIT OUTPUTS: None.
+!
+! COMPLETION CODES:
+!
+!   SS$_NORMAL:	    	normal successful completion.
+!
+! SIDE EFFECTS:
+!
+!   None.
+!--
+    BIND
+    	CODE	= .CODE_A,
+    	NOTIFY	= .NOTIFY_A,
+    	CMDSTR	= .CMDSTR_A 	: BLOCK [DSC$K_S_BLN,BYTE],
+    	PARS	= .PARS_A   	: BLOCK [DSC$K_S_BLN,BYTE],
+    	FLAGS	= .FLAGS_A,
+	SFLAGS	= .SFLAGS_A;
+
+    SELECTONE .PARAM OF
+    SET
+
+    	[-100] :
+    	    OPTIONS = .OPTIONS OR TPA$M_BLANKS;
+
+    	[-101] :
+    	    NOTIFY<0,1,0> = 1;			        ! This entry is to receive notifications.
+
+    	[-102] :
+    	    NOTIFY<0,1,0> = 0;				! This entry is NOT to receive notifications.
+
+        [-119] :
+            NOTIFY<1,2,0> = 1;                          ! CONFIRM override
+
+        [-120] :
+            NOTIFY<1,2,0> = 2;                          ! NOCONFIRM override
+
+    	[-103] :
+	    BEGIN
+	    SFLAGS<0,1,0> = 1;				! User specified this...
+    	    FLAGS<0,1,0> = 0;				! This entry is to receive mail.
+	    END;
+
+    	[-104] :
+	    BEGIN
+	    SFLAGS<0,1,0> = 1;				! User specified this...
+    	    FLAGS<0,1,0> = 1;				! This entry is NOT to receive mail.
+	    END;
+
+    	[-105] :
+	    BEGIN
+	    SFLAGS<2,1,0> = 1;				! User specified this...
+    	    FLAGS<2,1,0> = 0;				! This entry is REPRO.
+	    END;
+
+    	[-106] :
+	    BEGIN
+	    SFLAGS<2,1,0> = 1;				! User specified this...
+    	    FLAGS<2,1,0> = 1;				! This entry is NOT REPRO.
+	    END;
+
+    	[-107] :
+	    BEGIN
+	    SFLAGS<1,1,0> = 1;				! User specified this...
+    	    FLAGS<1,1,0> = 1;				! This entry is CONCEALed.
+	    END;
+
+    	[-108] :
+	    BEGIN
+	    SFLAGS<1,1,0> = 1;				! User specified this...
+    	    FLAGS<1,1,0> = 0;				! This entry is NOT CONCEALED.
+	    END;
+
+    	[-109] :
+	    BEGIN
+	    SFLAGS<3,1,0> = 1;				! User specified this...
+    	    FLAGS<3,1,0> = 0;				! This entry is CASE sensitive.
+	    END;
+
+    	[-110] :
+	    BEGIN
+	    SFLAGS<3,1,0> = 1;				! User specified this...
+    	    FLAGS<3,1,0> = 1;				! This entry is NOT case sensitive.
+	    END;
+
+    	[-111] :
+	    BEGIN
+	    SFLAGS<4,1,0> = 1;				! User specified this...
+    	    FLAGS<4,1,0> = 1;				! This entry is an access control entry.
+	    END;
+
+    	[-112] :
+	    BEGIN
+	    SFLAGS<4,1,0> = 1;				! User specified this...
+    	    FLAGS<4,1,0> = 0;				! This entry is NOT an access control entry (default).
+	    END;
+
+    	[-113] :
+	    BEGIN
+	    SFLAGS<5,1,0> = 1;				! User specified this...
+    	    FLAGS<5,1,0> = 1;				! This entry is a digest entry.
+	    END;
+
+    	[-114] :
+	    BEGIN
+	    SFLAGS<5,1,0> = 1;				! User specified this...
+    	    FLAGS<5,1,0> = 0;				! This entry is NOT a digest entry (default).
+	    END;
+
+    	[-115] :
+	    BEGIN
+	    SFLAGS<6,1,0> = 1;				! User specified this...
+    	    FLAGS<6,1,0> = 1;			! This entry is a DENY entry.
+	    END;
+
+    	[-116] :
+	    BEGIN
+	    SFLAGS<6,1,0> = 1;				! User specified this...
+    	    FLAGS<6,1,0> = 0;			! This entry is NOT a DENY entry (default).
+	    END;
+
+    	[-117] :
+	    BEGIN
+	    SFLAGS<7,1,0> = 1;				! User specified this...
+    	    FLAGS<7,1,0> = 0;			! This entry is a POST entry.
+	    END;
+
+    	[-118] :
+	    BEGIN
+	    SFLAGS<7,1,0> = 1;				! User specified this...
+    	    FLAGS<7,1,0> = 1;			! This entry is a NOPOST entry
+	    END;
+
+        [-121] :
+            SFLAGS<16,1,0> = 1;                 ! Review: /BRIEF
+
+    	[-2] :
+    	    IF .TOKENCNT GTR 0 THEN
+    	    	STR$COPY_R (PARS, %REF (.TOKENCNT), CH$PLUS (.REALBASE, CH$DIFF (.TOKENPTR, .STRINGBASE))) ;
+							! Copy the argument in such a way so that the original case is preserved.
+    	[OTHERWISE] :
+    	    BEGIN
+    	    	CODE = .PARAM;
+    	    	IF .CODE NEQ MLCMD__ADD AND .CODE NEQ MLCMD__REMOVE AND .CODE NEQ MLCMD__MODIFY THEN
+    	    	    OPTIONS = .OPTIONS OR TPA$M_BLANKS;
+    	    	STR$COPY_R (CMDSTR, %REF (.TOKENCNT), .TOKENPTR);
+    	    END;
+    TES;
+
+    SS$_NORMAL
+
+END; ! PRC_STORE
+
+
+%SBTTL 'PRC_STORE_CODE'
+TPA_ROUTINE (PRC_STORE_CODE, (OPTIONS, STRINGCNT, STRINGPTR, TOKENCNT,
+	    TOKENPTR, CHAR, NUMBER, PARAM, REALBASE, STRINGBASE, CODE_A,
+	    NOTIFY_A, CMDSTR_A, PARS_A, FLAGS_A, SFLAGS_A))
+!++
+! FUNCTIONAL DESCRIPTION:
+!
+!   Invoked by TPARSE to handle CODE only commands.
+!
+! RETURNS:  	cond_value, longword (unsigned), write only, by value
+!
+! PROTOTYPE:
+!
+!   PRC_STORE_CODE opt, scnt, sptr, tcnt, tptr, chr, num, par, p1, p2, p3
+!
+! IMPLICIT INPUTS:  None.
+!
+! IMPLICIT OUTPUTS: None.
+!
+! COMPLETION CODES:
+!
+!   SS$_NORMAL:	    	normal successful completion.
+!
+! SIDE EFFECTS:
+!
+!   None.
+!--
+BIND
+	CODE	= .CODE_A,
+	NOTIFY	= .NOTIFY_A,
+	CMDSTR	= .CMDSTR_A 	: BLOCK [DSC$K_S_BLN,BYTE],
+	PARS	= .PARS_A   	: BLOCK [DSC$K_S_BLN,BYTE],
+	FLAGS	= .FLAGS_A;
+
+     CODE = .PARAM;
+
+     SS$_NORMAL
+
+END; ! PRC_STORE_CODE
+
+
+%SBTTL 'TEST_CHARACTER'
+TPA_ROUTINE (TEST_CHARACTER, (OPTIONS, STRINGCNT, STRINGPTR, TOKENCNT,
+    	    TOKENPTR, CHAR, NUMBER, PARAM, REALBASE, STRINGBASE, CODE_A,
+    	    MLNAM_A, CMDSTR_A, PARS_A))
+!++
+! FUNCTIONAL DESCRIPTION:
+!
+!   Invoked by TPARSE to see if this is a printable character (blank or
+!   greater).
+!
+! RETURNS:  	cond_value, longword (unsigned), write only, by value
+!
+! PROTOTYPE:
+!
+!   PLC_STORE opt, scnt, sptr, tcnt, tptr, chr, num, par, p1, p2, p3
+!
+! IMPLICIT INPUTS:  None.
+!
+! IMPLICIT OUTPUTS: None.
+!
+! COMPLETION CODES:
+!
+!   SS$_NORMAL:	    	normal successful completion.
+!
+! SIDE EFFECTS:
+!
+!   None.
+!--
+    BIND
+    	CODE	= .CODE_A,
+    	MLNAM	= .MLNAM_A  	: BLOCK [DSC$K_S_BLN,BYTE],
+    	CMDSTR	= .CMDSTR_A 	: BLOCK [DSC$K_S_BLN,BYTE],
+    	PARS	= .PARS_A   	: BLOCK [DSC$K_S_BLN,BYTE];
+    IF (.CHAR LSSU ' ') AND (.CHAR NEQU %CHAR(9))
+    THEN
+	RETURN 2
+    ELSE
+	RETURN SS$_NORMAL ;
+END; ! TEST_CHARACTER
+
+END
+ELUDOM

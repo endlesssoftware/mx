@@ -1,0 +1,1750 @@
+%TITLE 'FILESERV'
+MODULE FILESERV (IDENT='V1.18',
+	ADDRESSING_MODE (EXTERNAL=LONG_RELATIVE, NONEXTERNAL=LONG_RELATIVE)) =
+BEGIN
+!++
+! FACILITY:	    MX mailing list/file server
+!
+! ABSTRACT:	    Routines for handling FILESERV service.
+!
+! MODULE DESCRIPTION:
+!
+!   This module contains routines for the MX file server.
+!
+! AUTHOR:	    M. Madison
+!
+! Copyright (c) 2008, Matthew Madison.
+! 
+! All rights reserved.
+! 
+! Redistribution and use in source and binary forms, with or without
+! modification, are permitted provided that the following conditions
+! are met:
+! 
+!     * Redistributions of source code must retain the above
+!       copyright notice, this list of conditions and the following
+!       disclaimer.
+!     * Redistributions in binary form must reproduce the above
+!       copyright notice, this list of conditions and the following
+!       disclaimer in the documentation and/or other materials provided
+!       with the distribution.
+!     * Neither the name of the copyright owner nor the names of any
+!       other contributors may be used to endorse or promote products
+!       derived from this software without specific prior written
+!       permission.
+! 
+! THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
+! "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
+! LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
+! A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
+! OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
+! SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
+! LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
+! DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
+! THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
+! (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
+! OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+!
+! CREATION DATE:    17-SEP-1990
+!
+! MODIFICATION HISTORY:
+!
+!   17-SEP-1990	V1.0	Madison	    Initial coding (moved from MX_LOCAL).
+!				    Added support for multiple file servers.
+!   01-OCT-1990	V1.0-1	Madison	    Fix bugs in LIST, SEND_FILE.
+!   03-OCT-1990	V1.1	Madison	    New log file for file server transactions.
+!   04-OCT-1990	V1.2	Madison	    Add mailing list linkage, bytecount limits.
+!   02-NOV-1990	V1.2-1	Madison	    Fix bugs, and %-dehacking support.
+!   05-NOV-1990	V1.2-2	Madison	    Fix stupid bug in user limit check.
+!   12-NOV-1990	V1.3	Madison	    Fix send delay code.
+!   14-NOV-1990	V1.3-1	Madison	    More fixing of delay code.
+!   17-DEC-1990	V1.4	Madison	    Allow mgr to set dow's when delay active.
+!   18-DEC-1990	V1.5	Madison	    After 20 invalid commands, stop processing.
+!   19-DEC-1990	V1.5-1	Madison	    Make from-finder a little more lenient.
+!   05-FEB-1991	V1.6	Madison	    Eliminate some READF/WRITEF loops.
+!   07-FEB-1991	V1.7	Madison	    Use COPY_FILE.
+!   18-FEB-1991	V1.7-1	Madison	    Don't use <>'s in To: header.
+!   20-FEB-1991	V1.7-2	Madison	    Add Received line.
+!   13-JUN-1991	V1.7-3	Madison	    Do syntax-only checks on directory name.
+!   24-OCT-1991	V1.8	Madison	    Use MXQ_X_FILEID, RCPTDEF.
+!   15-NOV-1991	V1.8-1	Madison	    MEM RCPT rtns.
+!   13-MAR-1992	V1.8-2	Madison	    Use MAKE_ADDRESS.
+!   14-AUG-1992 V1.9	Goatley     Added inclusion of transaction header.
+!   26-OCT-1992 V1.9-1	Goatley     Added "Errors-To:" to bounce to owner.
+!   18-DEC-1992 V1.9-2	Goatley     Added /NOCASE support to FS_CHECK_ACCESS.
+!    8-JAN-1993 V1.9-3	Goatley     Added Dick Munroe's code for QUIT command.
+!    8-JAN-1993 V1.9-4	Goatley     Added Dick Munroe's code for ACCESS stuff.
+!   13-JAN-1993 V1.9-5	Goatley     Add support for file server description.
+!   25-JAN-1993 V1.9-6	Goatley     Added "Sender:" and "Warnings-To:".
+!				    Added ADDRESS command.
+!    5-FEB-1993 V1.9-7	Goatley     Added search for [*]*.DESCRIPTION too.
+!   10-JAN-1994 V1.10	Goatley     Check for SYSTEM_USER access to file server.
+!   10-FEB-1994 V1.11	Goatley     Modify to work with FLQ V2.
+!   29-MAR-1994 V1.11-1	Goatley     Add <> to ORGADR.
+!   14-JAN-1997	V1.12	Madison	    Eliminate MDMLIB.
+!   02-MAY-1997	V1.13	Madison	    New local address formatter.
+!   29-AUG-1997	V1.14	Madison	    MLE, RCPT structure changes.
+!   01-SEP-1997	V1.14-1	Madison	    Missed a FREEMLE change.
+!    1-OCT-1997 V1.14-2	Goatley     Removed non-standard Errors-To/Warnings-To.
+!   21-NOV-1997 V1.14-3	Goatley     Set RCPT TXT length in FS_SEND_FILE().
+!   10-JUN-1998	V1.14-4	Madison	    Fix formation of fileserv return addresses.
+!   15-JUN-1998	V1.14-5	Madison	    Fix ORGADR store for return address.
+!   28-JUN-1998	V1.15	Madison	    Add ORCPT information.
+!   14-JUL-1998	V1.16	Madison	    Use WRITE_ENVELOPE.
+!   13-NOV-1999	V1.17	Madison	    Handle quoted-printable files.
+!    9-FEB-2012 V1.18	Goatley     Add Message-ID:.
+!--
+    LIBRARY 'SYS$LIBRARY:STARLET';
+    LIBRARY 'MX_SRC_COMMON:FLQ';
+    LIBRARY 'MX_SRC_COMMON:MX';
+    LIBRARY 'MX_SRC_COMMON:MX_LCLDEFS';
+    LIBRARY 'MX_SRC_COMMON:AGENT';
+    LIBRARY 'MX_SRC_COMMON:FIELDS';
+    LIBRARY 'MLF';
+
+    FORWARD ROUTINE
+	FILESERV_CHECK,
+	FILESERV_PROCESS,
+	FILESERV_SEND_FILE,
+	FILESERV_SEND,
+	FILESERV_LIST,
+	FILESERV_CHECK_ACCESS,
+	FILESERV_CHECK_LIMIT,
+	FILESERV_ADDRESS;
+
+    EXTERNAL ROUTINE
+	PARSE_FILESERV_CMD,
+	FSRV_ERROR,
+	READ_MAILING_LIST,
+    	MLF_OPEN_MSG_TEXT,
+    	G_HAT (MX_FILE_OPEN, MX_FILE_WRITE, MX_FILE_READ, MX_FILE_CLOSE, MX_MKDATE),
+	G_HAT (PARSE_MBOX, WRITE_ENVELOPE, WRITE_HDRS, PARSE_ADDRLIST, COPY_FILE,
+		MX_VERSION, OPEN_MSG_TEXT, MEM_GETRCPT, MEM_FREERCPT, DISPOSE_ENVELOPE,
+		MX_FMT_LCL_ADDR, VERIFY_PHRASE, MEM_GETTXT, MEM_FREEMLE,
+		MAKE_MESSAGE_ID),
+	G_HAT (STR$COPY_R, STR$CASE_BLIND_COMPARE, STR$APPEND,
+	    STR$CONCAT, STR$PREFIX, STR$APPEND, STR$UPCASE, STR$TRIM,
+	    STR$COPY_DX, STR$RIGHT, STR$POSITION, STR$MATCH_WILD, LIB$SYS_FAO, LIB$GETJPI,
+	    LIB$GET_VM, LIB$ADD_TIMES, LIB$SUB_TIMES, LIB$FREE_VM,
+	    LIB$FIND_FILE, LIB$FIND_FILE_END, LIB$DELETE_FILE,
+	    LIB$DAY_OF_WEEK);
+
+    EXTERNAL
+    	MLF_INFO    	: MLFDEF,
+	FSRVQUE		: QUEDEF,
+	CONFIG		: CFGDEF,
+    	SYSUSERS    	: QUEDEF,
+	LOG_OPENED,
+	LOG_RAB		: $RAB_DECL;
+
+    TRACE_DECLARATIONS (EXTERNAL);
+
+    EXTERNAL LITERAL
+	MX__FILEREQ, MX__FWDUSER, LIB$_NORMAL;
+
+    _DEF (ITM2)
+    	ITM2_W_BUFSIZ	= _WORD,
+    	ITM2_W_ITMCOD	= _WORD,
+    	ITM2_L_BUFADR	= _LONG
+    _ENDDEF (ITM2);
+
+    OWN
+	ONEDAY	    : BLOCK [8,BYTE],
+	DLYINTRVL   : BLOCK [8,BYTE],
+	DIDBINTIM   : INITIAL (0);
+
+    MACRO
+	TLOG (CTRSTR) [] =
+	    BEGIN
+	    IF .TUNIT NEQ 0 THEN
+		%IF %NULL (%REMAINING) %THEN
+		    MX_FILE_WRITE (.TUNIT, %ASCID CTRSTR);
+		%ELSE
+		BEGIN
+		    LOCAL _T : BLOCK [DSC$K_S_BLN,BYTE];
+		    INIT_DYNDESC (_T);
+		    LIB$SYS_FAO (%ASCID CTRSTR, 0, _T, %REMAINING);
+		    MX_FILE_WRITE (.TUNIT, _T);
+		    FREE_STRINGS (_T);
+		END; %FI
+	    END%,
+	FLOG (CTRSTR) [] =
+	    BEGIN
+	    IF .LOG_OPENED NEQ 0 THEN
+	    BEGIN
+	    %IF %NULL (%REMAINING) %THEN
+		BIND
+		    _T = %ASCID CTRSTR : BLOCK [,BYTE];
+	    %ELSE
+		LOCAL _T : BLOCK [DSC$K_S_BLN,BYTE];
+		INIT_DYNDESC (_T);
+		LIB$SYS_FAO (%ASCID CTRSTR, 0, _T, %REMAINING);
+	    %FI
+		LOG_RAB [RAB$L_RBF] = ._T [DSC$A_POINTER];
+		LOG_RAB [RAB$W_RSZ] = ._T [DSC$W_LENGTH];
+		$PUT (RAB=LOG_RAB);
+	    %IF NOT %NULL (%REMAINING) %THEN FREE_STRINGS (_T); %FI
+	    END;
+	    END%;
+
+%SBTTL 'FILESERV_CHECK'
+GLOBAL ROUTINE FILESERV_CHECK (RCP_A, FSRV_A_A) =
+BEGIN
+!++
+! FUNCTIONAL DESCRIPTION:
+!
+!   Returns MX__FILEREQ if the specified recipient matches the
+!   FILESERV username.	 Otherwise returns 0.
+!
+! RETURNS:	cond_value, longword (unsigned), write only, by value
+!
+! PROTOTYPE:
+!
+!   FILESERV_CHECK  rcp
+!
+! IMPLICIT INPUTS:  None.
+!
+! IMPLICIT OUTPUTS: None.
+!
+! COMPLETION CODES:
+!
+!   SS$_NORMAL:		normal successful completion.
+!
+! SIDE EFFECTS:
+!
+!   None.
+!--
+    BIND
+	RCP	= .RCP_A    	    	: RCPTDEF,
+    	Xaddr	= .rcp [RCPT_A_ADDR]	: TXTDEF,
+	FSRV	= .FSRV_A_A 	    	: REF FSRVDEF;
+
+    LOCAL
+	R	: BLOCK [DSC$K_S_BLN,BYTE],
+	F	: BLOCK [DSC$K_S_BLN,BYTE],
+	STR	: BLOCK [DSC$K_S_BLN,BYTE],
+	STATUS;
+
+    INIT_SDESC (R, .Xaddr [TXT_W_LEN], Xaddr [TXT_T_TEXT]);
+    INIT_SDESC (F, 0, 0);
+
+    FSRV = .FSRVQUE [QUE_L_HEAD];
+    WHILE .FSRV NEQA FSRVQUE [QUE_L_HEAD] DO
+    BEGIN
+	F [DSC$A_POINTER] = FSRV [FSRV_T_NAME];
+	F [DSC$W_LENGTH] = .FSRV [FSRV_W_NAME];
+
+	IF STR$CASE_BLIND_COMPARE (R, F) EQL 0 THEN RETURN MX__FILEREQ;
+	FSRV = .FSRV [FSRV_L_FLINK];
+    END;
+
+    FSRV = 0
+
+END; ! FILESERV_CHECK
+
+%SBTTL 'FILESERV_PROCESS'
+GLOBAL ROUTINE FILESERV_PROCESS (QCTX, QENT_A, SENDER_A, USR_A, FSRV_A, HDRQ_A) =
+BEGIN
+!++
+! FUNCTIONAL DESCRIPTION:
+!
+!   Processes FILESERV requests:
+!
+!	SENDME	package[.part]
+!	HELP			(sends an informational file)
+!	LIST	[pattern]
+!
+!   If the control message is not one of the recognized types, an
+!   error message is returned to the user.
+!
+! RETURNS:	cond_value, longword (unsigned), write only, by value
+!
+! PROTOTYPE:
+!
+!   FILESERV_PROCESS
+!
+! IMPLICIT INPUTS:  None.
+!
+! IMPLICIT OUTPUTS: None.
+!
+! COMPLETION CODES:
+!
+!   SS$_NORMAL:		normal successful completion.
+!
+! SIDE EFFECTS:
+!
+!   None.
+!--
+    BIND
+	QENT	= .QENT_A	: QENTDEF,
+	SENDER	= .SENDER_A	: BLOCK [,BYTE],
+	FSRV	= .FSRV_A	: FSRVDEF,
+	HDRQ	= .HDRQ_A	: QUEDEF;
+
+    LOCAL
+	DESTQ	: QUEDEF,
+	FROMHDR	: REF TXTDEF,
+	FROMADR	: REF TXTDEF,
+	TXT	: REF TXTDEF,
+	HDR	: REF TXTDEF,
+	STR	: BLOCK [DSC$K_S_BLN,BYTE],
+	FROMSTR : BLOCK [DSC$K_S_BLN,BYTE],
+	REPLYTO : BLOCK [DSC$K_S_BLN,BYTE],
+	SNDR822	: BLOCK [DSC$K_S_BLN,BYTE],
+	TSCRIPT	: BLOCK [DSC$K_S_BLN,BYTE],
+	qpfile	: BLOCK [DSC$K_S_BLN,BYTE],
+	TIME	: VECTOR [2,LONG],
+	DID_A_COMMAND, BAD_CMDCT,
+	PID,
+	CMDCODE,
+	UNIT,
+	TUNIT,
+	STATUS;
+
+    INIT_DYNDESC (STR, FROMSTR, REPLYTO, SNDR822, TSCRIPT, qpfile);
+
+    HDR = .HDRQ [QUE_L_HEAD];
+    WHILE .HDR NEQ HDRQ [QUE_L_HEAD] DO
+    BEGIN
+	CASE .HDR [TXT_W_CODE] FROM MX_K_HDR_FIRSTCODE TO MX_K_HDR_LASTCODE OF
+	SET
+	    [MX_K_HDR_FROM] :
+		STR$COPY_R (FROMSTR, HDR [TXT_W_LEN], HDR [TXT_T_TEXT]);
+	    [MX_K_HDR_REPLY_TO] :
+		STR$COPY_R (REPLYTO, HDR [TXT_W_LEN], HDR [TXT_T_TEXT]);
+	    [MX_K_HDR_SENDER] :
+		STR$COPY_R (SNDR822, HDR [TXT_W_LEN], HDR [TXT_T_TEXT]);
+	    [INRANGE,OUTRANGE] :;
+	TES;
+	HDR = .HDR [TXT_L_FLINK];
+    END;
+
+    IF .FSRV [FSRV_L_MLSTPTR] NEQA 0 THEN
+	IF NOT FILESERV_CHECK_ACCESS (FROMSTR, .FSRV [FSRV_L_MLSTPTR]) THEN
+	BEGIN
+	    FREE_STRINGS (FROMSTR, REPLYTO, SNDR822);
+	    FSRV_ERROR (FSRV,
+		%ASCID'You are not authorized to use this file server.');
+	    RETURN SS$_NORMAL;
+	END;
+
+    STR$COPY_DX (STR,
+	(IF .REPLYTO [DSC$W_LENGTH] NEQ 0 THEN REPLYTO
+	    ELSE IF .FROMSTR [DSC$W_LENGTH] NEQ 0 THEN FROMSTR
+	    ELSE IF .SNDR822 [DSC$W_LENGTH] NEQ 0 THEN SNDR822
+	    ELSE .SENDER_A));
+
+    TRACE ('  FILESERV: Using return address: !AS', STR);
+
+    INIT_QUEUE (DESTQ);
+
+    STATUS = PARSE_ADDRLIST (STR, DESTQ);
+    IF NOT .STATUS THEN
+    BEGIN
+	LOCAL I;
+	IF (I = STR$POSITION (STR, %ASCID'<')) NEQ 0 THEN
+	BEGIN
+	    STR$RIGHT (TSCRIPT, STR, I);
+	    STATUS = PARSE_ADDRLIST (TSCRIPT, DESTQ, 0);
+	END;
+    END;
+
+    IF NOT .STATUS THEN
+    BEGIN
+	STR$PREFIX (STR, %ASCID'Invalid return address: ');
+	FSRV_ERROR (FSRV, STR);
+	FREE_STRINGS (STR, FROMSTR, REPLYTO, SNDR822);
+	RETURN SS$_NORMAL;
+    END;
+
+    $GETTIM (TIMADR=TIME);
+    LIB$GETJPI (%REF (JPI$_PID), 0, 0, PID);
+    LIB$SYS_FAO (%ASCID'MX_MLF_DIR:FSV_!XL_!XL_!XL.TMP', 0, STR,
+	.TIME [0], .TIME [1], .PID);
+    MX_FILE_OPEN (MX__FILE_WRITE, STR, TUNIT, 0, TSCRIPT);
+
+    !
+    !  Look for a file containing any introductory material that is
+    !  to be included at the beginning of the transaction log for this
+    !  file server.  The file to include should be named
+    !  FILESERV_TRANSACTION.TXT is the [000000] directory for the file
+    !  server.
+    !
+    BEGIN
+	LOCAL
+		_tmpstr	: $BBLOCK[DSC$K_S_BLN],
+		u;
+	init_dyndesc (_tmpstr);
+	!
+	!  Build the file name using the file server name
+	!
+	LIB$SYS_FAO (%ASCID'!AD[000000]FILESERV_TRANSACTION.TXT', 0, _tmpstr,
+		.FSRV [FSRV_W_ROOT], FSRV [FSRV_T_ROOT]);
+	IF MX_FILE_OPEN (MX__FILE_READ, _tmpstr, u, 0, 0)
+	THEN
+	    ! OK, the file was opened.	Read it and write all records
+	    ! out to the transaction log file.
+	    BEGIN
+	    TRACE ('  FILESERV_PROCESS: including FILESERV_TRANSACTION.TXT');
+	    WHILE (MX_FILE_READ (.u, _tmpstr, 0))
+		DO
+		  MX_FILE_WRITE (.TUNIT, _tmpstr);
+	    MX_FILE_CLOSE (.u);
+	    TLOG ('----------');
+	    END;
+    END;
+
+    STATUS = MLF_OPEN_MSG_TEXT (QENT, UNIT, .hdrq_a, qpfile);
+    IF NOT .STATUS THEN UNIT = 0;
+    DID_A_COMMAND = 0;
+    BAD_CMDCT = 0;
+    IF .UNIT NEQ 0 THEN
+    WHILE MX_FILE_READ (.UNIT, STR) DO
+    BEGIN
+	STR$TRIM (STR, STR);
+	IF .STR [DSC$W_LENGTH] GTR 0 THEN
+	BEGIN
+	    DID_A_COMMAND = 1;
+	    TLOG ('Command: !AS', STR);
+	    TRACE ('  FILESERV: command: !AS', STR);
+	    TXT = 0;
+	    STATUS = PARSE_FILESERV_CMD (STR, CMDCODE, TXT);
+	    IF NOT .STATUS OR .CMDCODE EQL FSCMD__UNKNOWN THEN
+	    BEGIN
+		BAD_CMDCT = .BAD_CMDCT + 1;
+		TLOG (%STRING ('Unrecognized command; ',
+		    'try HELP for more information.'));
+		TRACE ('  FILESERV:   ...unknown command.');
+	    END
+	    ELSE CASE .CMDCODE FROM FSCMD__LO TO FSCMD__HI OF
+	    SET
+	    [FSCMD__SEND] :
+		FILESERV_SEND (.CMDCODE, FSRV, .QCTX, .TXT, DESTQ, .TUNIT);
+	    [FSCMD__LIST] :
+		FILESERV_LIST (FSRV, .QCTX, .TXT, DESTQ, .TUNIT);
+	    [FSCMD__HELP] :
+		FILESERV_SEND (.CMDCODE, FSRV, .QCTX, .TXT, DESTQ, .TUNIT);
+	    [FSCMD__QUIT] :
+		EXITLOOP ;			! A quit command was processed, so bail out of the loop.
+	    [FSCMD__ADDRESS] :
+		FILESERV_ADDRESS (FSRV, .QCTX, .TXT, DESTQ, .TUNIT, FROMSTR);
+	    [INRANGE,OUTRANGE] :
+		BEGIN
+		    TLOG (%STRING ('Unrecognized command; ',
+		    	'try HELP for more information.'));
+		    BAD_CMDCT = .BAD_CMDCT + 1;
+		END;
+	    TES;
+	    IF .TXT NEQA 0 THEN FREETXT (TXT);
+	    TLOG ('----------');
+	    IF .BAD_CMDCT GEQ 20 THEN
+	    BEGIN
+		TLOG ('Too many invalid commands; ignoring rest of message.');
+		EXITLOOP;
+	    END;
+	END;
+    END;
+
+    IF .UNIT NEQ 0 THEN MX_FILE_CLOSE (.UNIT);
+
+    IF NOT .DID_A_COMMAND THEN
+    BEGIN
+	TLOG ('Commands must be sent in the body of the message, one command');
+	TLOG ('per line.  Do not put commands in the Subject line.');
+    END;
+
+    MX_FILE_CLOSE (.TUNIT);
+    LIB$SYS_FAO (%ASCID'File server !AD: transaction log', 0, STR,
+	.FSRV [FSRV_W_NAME], FSRV [FSRV_T_NAME]);
+    FILESERV_SEND_FILE (.QCTX, FSRV, TSCRIPT, STR, DESTQ, 0, 1);
+    LIB$DELETE_FILE (TSCRIPT);
+
+    WHILE NOT REMQUE (.DESTQ [QUE_L_HEAD], TXT) DO FREETXT (TXT);
+
+    IF .qpfile [DSC$W_LENGTH] NEQ 0 THEN LIB$DELETE_FILE (qpfile);
+
+    FREE_STRINGS (STR, FROMSTR, REPLYTO, SNDR822, TSCRIPT, qpfile);
+
+    SS$_NORMAL
+
+END; ! FILESERV_PROCESS
+
+%SBTTL 'FILESERV_SEND_FILE'
+ROUTINE FILESERV_SEND_FILE (QCTX, FSRV_A, FSPEC_A, XSPEC_A,
+					    DESTQ_A, TUNIT, IGNSIZ) =
+BEGIN
+!++
+! FUNCTIONAL DESCRIPTION:
+!
+!   Mails a file back to the user(s) in DESTQ.
+!
+!   If the mail message is larger than FSRV [FSRV_L_THRESH], and
+!   this is the prime-time period, the message is delayed until the
+!   non-prime-time (send) period.
+!
+!   The start and end of the send period are kept as delta times representing
+!   offsets from midnight of a given day.  This complicates the determination
+!   of the prime-time/send periods: if start LSS end, there's no problem,
+!   but if start GTR end, then end is inferred to be tomorrow+end.
+!
+! RETURNS:	cond_value, longword (unsigned), write only, by value
+!
+! PROTOTYPE:
+!
+!   FILESERV_SEND_FILE	qctx, fspec, xspec, destq, tunit, ignsiz
+!
+! IMPLICIT INPUTS:  None.
+!
+! IMPLICIT OUTPUTS: None.
+!
+! COMPLETION CODES:
+!
+!   SS$_NORMAL:		normal successful completion.
+!
+! SIDE EFFECTS:
+!
+!   None.
+!--
+    BUILTIN
+	ACTUALCOUNT;
+
+    BIND
+	FSRV	= .FSRV_A	: FSRVDEF,
+	DESTQ	= .DESTQ_A	: QUEDEF,
+	FSPEC	= .FSPEC_A	: BLOCK [,BYTE],
+	XSPEC	= .XSPEC_A	: BLOCK [,BYTE],
+    	DELAYDAY = MLF_INFO [MLF_L_DELAYDAYS] : BITVECTOR [];
+
+    LOCAL
+	HDR	: REF TXTDEF,
+	TXT	: REF TXTDEF,
+	RCPT	: REF RCPTDEF,
+	HDRQ	: QUEDEF,
+    	envl	: ENVLDEF,
+	NEWENT	: QENTDEF,
+	STR2	: BLOCK [DSC$K_S_BLN,BYTE],
+	STR	: BLOCK [DSC$K_S_BLN,BYTE],
+    	str3	: BLOCK [DSC$K_S_BLN,BYTE],
+	SDSC	: BLOCK [DSC$K_S_BLN,BYTE],
+	TOSTR	: BLOCK [DSC$K_S_BLN,BYTE],
+	FAB	: $FAB_DECL,
+	NAM	: $NAM_DECL,
+	ESPEC	: VECTOR [255,BYTE],
+	RSPEC	: VECTOR [255,BYTE],
+	DOW,
+	STATUS,
+	IGNORE_SIZE;
+
+    INIT_DYNDESC (STR2, STR, TOSTR, STR3);
+    SDSC [DSC$B_DTYPE] = DSC$K_DTYPE_T;
+    SDSC [DSC$B_CLASS] = DSC$K_CLASS_S;
+    INIT_QUEUE (hdrq);
+    CH$FILL (%CHAR (0), ENVL_S_ENVLDEF, envl);
+    INIT_QUEUE (envl [ENVL_Q_RCPTQUE]);
+
+    IGNORE_SIZE = (IF ACTUALCOUNT () GTR 6 THEN .IGNSIZ ELSE 0);
+
+    TRACE ('  FILESERV_SEND_FILE: send !AS (!AS), ignore_size=!UL',
+	    FSPEC, XSPEC, .IGNORE_SIZE);
+
+    FLQ_INIT_QENT (NEWENT);
+    NEWENT [QENT_L_STATUS] = FLQ_K_STINP;
+    NEWENT [QENT_V_LOCK] = 1;
+    newent [QENT_L_DSTPRC] = FLQ_K_MX_ROUTER;
+    newent [QENT_L_ORIGIN] = MX_K_ORG_LOCAL;
+    newent [QENT_W_ORGADR] = 2;
+    CH$MOVE(2, UPLIT(%ASCII'<>'), newent [QENT_T_ORGADR]);
+    STATUS = FLQ_ADD (QCTX, NEWENT);
+    IF NOT .STATUS THEN RETURN .STATUS;
+
+    IF .FSRV[FSRV_W_DESC] NEQU 0
+    THEN
+	BEGIN
+	LOCAL	SDSC	: $BBLOCK[DSC$K_S_BLN],
+		SDSC2	: $BBLOCK[DSC$K_S_BLN];
+	INIT_SDESC (SDSC, .FSRV[FSRV_W_DESC], FSRV [FSRV_T_DESC]);
+	INIT_SDESC (SDSC2, .FSRV[FSRV_W_NAME], FSRV [FSRV_T_NAME]);
+	MX_FMT_LCL_ADDR (MX__FMT_FROM, SDSC2, STR2, sdsc);
+    	LIB$SYS_FAO (%ASCID'X-FileServer: !AS', 0, str2, str2);
+	INSTXT (STR2, .HDRQ [QUE_L_TAIL], MX_K_HDR_OTHER);
+	END;
+
+    MX_MKDATE (0, STR2, 0);
+    LIB$SYS_FAO (%ASCID'by !AS (!AS) id !UL; !AS', 0, STR,
+	CONFIG [CFG_Q_MXNODE], MX_VERSION (), .NEWENT [QENT_L_ENTNUM], STR2);
+    INSTXT (STR, .HDRQ [QUE_L_TAIL], MX_K_HDR_RECEIVED);
+    INSTXT (STR2, .HDRQ [QUE_L_TAIL], MX_K_HDR_DATE);
+    MAKE_MESSAGE_ID (NEWENT [QENT_L_ENTNUM], str2);
+    INSTXT (STR2, .HDRQ [QUE_L_TAIL], MX_K_HDR_MESSAGE_ID);
+
+    IF CH$EQL (.FSRV [FSRV_W_MGR], FSRV [FSRV_T_MGR], 2, UPLIT ('<>'), %C' ')
+    THEN
+    BEGIN
+    	MX_FMT_LCL_ADDR (MX__FMT_ENVFROM, %ASCID'Postmaster', str3);
+    	MX_FMT_LCL_ADDR (MX__FMT_FROM, %ASCID'Postmaster', str2);
+    END
+    ELSE
+    BEGIN
+	LIB$SYS_FAO (%ASCID'!AD-Mgr', 0, STR2, .FSRV [FSRV_W_NAME],
+	    FSRV [FSRV_T_NAME]);
+    	MX_FMT_LCL_ADDR (MX__FMT_ENVFROM, str2, str3);
+    	MX_FMT_LCL_ADDR (MX__FMT_FROM, str2, str2);
+    END;
+
+    !
+    !  Use the -Mgr address for the "Sender:" line so that errors
+    !  don't bounce back to the file server.  This shouldn't be
+    !  necessary, according to RFC 822, but some mailers sent the
+    !  errors back to the "Reply-To:" address, which is the server.
+    !
+    INSTXT (STR3, .HDRQ [QUE_L_TAIL], MX_K_HDR_SENDER);	!Insert as sender
+    !
+    !  Now do the "From:" line.
+    !
+    INSTXT (STR2, .HDRQ [QUE_L_TAIL], MX_K_HDR_FROM);
+
+    newent [QENT_W_ORGADR] = MINU (QENT_S_ORGADR, .str3 [DSC$W_LENGTH]);
+    CH$MOVE (.newent [QENT_W_ORGADR], .str3 [DSC$A_POINTER], newent [QENT_T_ORGADR]);
+
+    INIT_SDESC (SDSC, .FSRV [FSRV_W_NAME], FSRV [FSRV_T_NAME]);
+    MX_FMT_LCL_ADDR (MX__FMT_FROM, SDSC, STR2);
+    INSTXT (STR2, .HDRQ [QUE_L_TAIL], MX_K_HDR_REPLY_TO);
+    INSTXT (XSPEC, .HDRQ [QUE_L_TAIL], MX_K_HDR_SUBJECT);
+
+    FREE_STRINGS (TOSTR);
+    TXT = .DESTQ [QUE_L_HEAD];
+    WHILE .TXT NEQA DESTQ [QUE_L_HEAD] DO
+    BEGIN
+	MEM_GETRCPT (RCPT);
+	SDSC [DSC$A_POINTER] = TXT [TXT_T_TEXT];
+	SDSC [DSC$W_LENGTH] = .TXT [TXT_W_LEN];
+	IF .TOSTR [DSC$W_LENGTH] GTR 0 THEN STR$APPEND (TOSTR, %ASCID', ');
+	IF CH$RCHAR (TXT [TXT_T_TEXT]) EQL %C'<' THEN
+	BEGIN
+	    RCPT [RCPT_A_ADDR] = MEM_GETTXT (.TXT [TXT_W_LEN], TXT [TXT_T_TEXT]);
+	    SDSC [DSC$A_POINTER] = TXT [TXT_T_TEXT]+1;
+	    SDSC [DSC$W_LENGTH] = .TXT [TXT_W_LEN]-2;
+	    STR$APPEND (TOSTR, SDSC);
+	END
+	ELSE
+	BEGIN
+    	    RCPT [RCPT_A_ADDR] = MEM_GETTXT (.TXT [TXT_W_LEN]+2);
+    	    BEGIN
+    	    	BIND _a = .rcpt [RCPT_A_ADDR] : TXTDEF;
+	    	CH$MOVE (.TXT [TXT_W_LEN], TXT [TXT_T_TEXT], CH$PLUS (_a [TXT_T_TEXT],1));
+	    	CH$WCHAR (%C'<', _a [TXT_T_TEXT]);
+	    	CH$WCHAR (%C'>', CH$PLUS (_a [TXT_T_TEXT],.txt [TXT_W_LEN]+1));
+		_a [TXT_W_LEN] = .txt [TXT_W_LEN]+2;
+    	    END;
+	    STR$APPEND (TOSTR, SDSC);
+	    STR$CONCAT (STR, %ASCID'<', SDSC, %ASCID'>');
+	END;
+    	rcpt [RCPT_A_ORADDR] = MEM_GETTXT (.txt [TXT_W_LEN], txt [TXT_T_TEXT]);
+    	rcpt [RCPT_A_ORTYPE] = MEM_GETTXT (6, UPLIT ('rfc822'));
+    	RCPT [RCPT_V_DSN_FAILURE] = 1;
+	INSQUE_TAIL (.RCPT, envl [ENVL_Q_RCPTQUE]);
+    	envl [ENVL_L_RCPTCOUNT] = .envl [ENVL_L_RCPTCOUNT] + 1;
+	TXT = .TXT [TXT_L_FLINK];
+    END;
+    INSTXT (TOSTR, .HDRQ [QUE_L_TAIL], MX_K_HDR_TO);
+
+    WRITE_HDRS (.QCTX, NEWENT, %ASCID'HDR_INFO', HDRQ);
+    WHILE NOT REMQUE (.HDRQ [QUE_L_HEAD], TXT) DO FREETXT (TXT);
+
+    !  str3 has the envelope from address already; change it to <>
+    !  if it's currently "Postmaster@..."
+    IF CH$EQL (.FSRV [FSRV_W_MGR], FSRV [FSRV_T_MGR], 2, UPLIT ('<>'), %C' ')
+    THEN
+	STR$COPY_DX (str3, %ASCID'<>');
+
+    envl [ENVL_V_ORIGIN] = 1;
+    envl [ENVL_L_ORIGIN] = MX_K_ORG_LOCAL;
+    envl [ENVL_V_FROMADR] = 1;
+    envl [ENVL_A_FROMADR] = MEM_GETTXT (.str3 [DSC$W_LENGTH], .str3 [DSC$A_POINTER]);
+    envl [ENVL_V_ORGSENDER] = 1;
+    envl [ENVL_A_ORGSENDER] = MEM_GETTXT (.fsrv [FSRV_W_NAME], fsrv [FSRV_T_NAME]);
+    envl [ENVL_V_DSN_HDRSONLY] = 1;
+
+    WRITE_ENVELOPE (.QCTX, NEWENT, %ASCID'SRC_INFO', envl);
+
+    FLQ_MAKE_FSPEC (.NEWENT [QENT_L_ENTNUM], %ASCID'MSG_TEXT', STR);
+    IF NOT .IGNORE_SIZE THEN
+    BEGIN
+	$FAB_INIT (FAB=FAB, FNA=.FSPEC [DSC$A_POINTER], FNS=.FSPEC [DSC$W_LENGTH],
+	    NAM=NAM);
+	$NAM_INIT (NAM=NAM, ESA=ESPEC, ESS=%ALLOCATION (ESPEC),
+	    RSA=RSPEC, RSS=%ALLOCATION (RSPEC));
+	STATUS = $PARSE (FAB=FAB);
+	IF .STATUS THEN
+	    STATUS = $SEARCH (FAB=FAB);
+	IF .STATUS THEN
+	BEGIN
+	    LOCAL
+		XAB : $XABFHC_DECL;
+	    CH$MOVE (MXQ_S_FILEID, NAM [NAM$T_DVI], NEWENT [MXQ_X_FILEID]);
+	    FAB [FAB$V_NAM] = 1;
+	    $XABFHC_INIT (XAB=XAB);
+	    FAB [FAB$L_XAB] = XAB;
+	    STATUS = $OPEN (FAB=FAB);
+	    IF .STATUS THEN
+	    BEGIN
+		$CLOSE (FAB=FAB);
+		NEWENT [QENT_L_SIZE] = (.XAB [XAB$L_EBK]^9)+.XAB [XAB$W_FFB];
+	    END;
+	END
+	ELSE
+	    STATUS = COPY_FILE (FSPEC, STR, 0, 0, NEWENT [QENT_L_SIZE]);
+    END
+    ELSE
+	STATUS = COPY_FILE (FSPEC, STR, 0, 0, NEWENT [QENT_L_SIZE]);
+
+    IF NOT .STATUS THEN
+    BEGIN
+	LOCAL
+	    MSGBUF	: VECTOR [255,BYTE],
+	    MSGDSC	: BLOCK [DSC$K_S_BLN,BYTE],
+	    MSGLEN	: WORD;
+
+	MSGDSC [DSC$B_DTYPE] = DSC$K_DTYPE_T;
+	MSGDSC [DSC$B_CLASS] = DSC$K_CLASS_S;
+	MSGDSC [DSC$A_POINTER] = MSGBUF;
+	MSGDSC [DSC$W_LENGTH] = %ALLOCATION (MSGBUF);
+	$GETMSG (MSGID=.STATUS, MSGLEN=MSGLEN, BUFADR=MSGDSC, FLAGS=1);
+	TLOG ('  Error sending !AS: !AD', XSPEC, .MSGLEN, MSGBUF);
+	TRACE ('  FILESERV_SEND_FILE: Error opening file: !AD',
+	    .MSGLEN, MSGBUF);
+	RETURN SS$_NORMAL;
+    END;
+
+    NEWENT [QENT_L_SIZE] = .NEWENT [QENT_L_SIZE] * .envl [ENVL_L_RCPTCOUNT];
+
+    DISPOSE_ENVELOPE (envl);
+
+    TRACE ('  FILESERV_SEND_FILE:  Entry number=!UL, Size=!UL (bytes)',
+	.NEWENT [QENT_L_ENTNUM], .NEWENT [QENT_L_SIZE]);
+
+    LIB$DAY_OF_WEEK (0, DOW);
+
+    IF NOT .DIDBINTIM THEN
+    BEGIN
+	$BINTIM (TIMBUF=%ASCID'1 00:00:00.00', TIMADR=ONEDAY);
+	$BINTIM (TIMBUF=%ASCID'0 00:15:00.00', TIMADR=DLYINTRVL);
+	DIDBINTIM = 1;
+    END;
+
+    TRACE (%STRING ('  FILESERV_SEND_FILE:  Day of week: !UL (delayday=!UL),',
+	    	' time now is: !%T'), .DOW, .DELAYDAY [.DOW], 0);
+
+    IF NOT .IGNORE_SIZE AND .DELAYDAY [.DOW] AND
+	    .NEWENT [QENT_L_SIZE] GTRU .FSRV [FSRV_L_THRESH] THEN
+    BEGIN
+	LOCAL
+	    NOW		: BLOCK [8,BYTE],
+	    MIDNITE	: BLOCK [8,BYTE],
+	    TOMORROW	: BLOCK [8,BYTE],
+	    TMPDT	: BLOCK [8,BYTE],
+	    TMPDT2	: BLOCK [8,BYTE],
+	    NNOW	: VECTOR [7,WORD],
+	    NLAST	: VECTOR [7,WORD],
+	    OKTIME;
+
+	$GETTIM (TIMADR=NOW);
+	$NUMTIM (TIMADR=NOW, TIMBUF=NNOW);
+	$BINTIM (TIMBUF=%ASCID'-- 00:00:00.00', TIMADR=MIDNITE);
+	LIB$ADD_TIMES (MIDNITE, ONEDAY, TOMORROW);
+
+	IF NOT .FSRV [FSRV_V_DLYINIT] THEN
+	BEGIN
+	    FSRV [FSRV_V_OVERLAP] = LIB$SUB_TIMES (FSRV [FSRV_Q_END],
+		FSRV [FSRV_Q_BEGIN], TMPDT) NEQ LIB$_NORMAL;
+	    FSRV [FSRV_V_DLYINIT] = 1;
+	END;
+
+	$NUMTIM (TIMADR=FSRV [FSRV_Q_LASTSND], TIMBUF=NLAST);
+	IF .NLAST [0] NEQ .NNOW [0] OR .NLAST [1] NEQ .NNOW [1] OR
+	    .NLAST [2] NEQ .NNOW [2] THEN
+	BEGIN
+	    TRACE ('FILESERV_SEND_FILE: New day - begin/end times need setting.');
+	    IF .FSRV [FSRV_V_OVERLAP] THEN
+	    BEGIN
+		LIB$ADD_TIMES (MIDNITE, FSRV [FSRV_Q_END], TMPDT);
+		IF LIB$SUB_TIMES (NOW, TMPDT, TMPDT2) NEQ LIB$_NORMAL THEN
+		BEGIN
+		    CH$MOVE (8, MIDNITE, FSRV [FSRV_Q_SNDBEGIN]);
+		    CH$MOVE (8, MIDNITE, FSRV [FSRV_Q_SNDNEXT]);
+		    LIB$ADD_TIMES (MIDNITE, FSRV [FSRV_Q_END],
+			FSRV [FSRV_Q_SNDEND]);
+		END
+		ELSE
+		BEGIN
+		    LIB$ADD_TIMES (MIDNITE, FSRV [FSRV_Q_BEGIN],
+			FSRV [FSRV_Q_SNDBEGIN]);
+		    LIB$ADD_TIMES (TOMORROW, FSRV [FSRV_Q_END],
+			FSRV [FSRV_Q_SNDEND]);
+		    CH$MOVE (8, FSRV [FSRV_Q_SNDBEGIN], FSRV [FSRV_Q_SNDNEXT]);
+		END;
+	    END
+	    ELSE
+	    BEGIN
+		LIB$ADD_TIMES (MIDNITE, FSRV [FSRV_Q_BEGIN],
+		    FSRV [FSRV_Q_SNDBEGIN]);
+		LIB$ADD_TIMES (MIDNITE, FSRV [FSRV_Q_END],
+		    FSRV [FSRV_Q_SNDEND]);
+		IF LIB$SUB_TIMES (NOW, FSRV [FSRV_Q_SNDEND], TMPDT)
+			NEQ LIB$_NORMAL
+		THEN
+		BEGIN
+		    IF LIB$SUB_TIMES (FSRV [FSRV_Q_SNDNEXT],
+			    FSRV [FSRV_Q_SNDBEGIN], TMPDT) NEQ LIB$_NORMAL
+		    THEN
+			CH$MOVE (8, FSRV [FSRV_Q_SNDBEGIN],
+			    FSRV [FSRV_Q_SNDNEXT]);
+		END
+		ELSE
+		    LIB$ADD_TIMES (TOMORROW, FSRV [FSRV_Q_BEGIN],
+			FSRV [FSRV_Q_SNDNEXT]);
+	    END;
+	END
+	ELSE
+	BEGIN
+	    IF .FSRV [FSRV_V_OVERLAP] THEN
+	    BEGIN
+		IF LIB$SUB_TIMES (NOW, FSRV [FSRV_Q_SNDBEGIN], TMPDT)
+		    EQL LIB$_NORMAL
+		AND LIB$SUB_TIMES (NOW, FSRV [FSRV_Q_SNDEND], TMPDT2)
+		    EQL LIB$_NORMAL
+		THEN
+		BEGIN
+		TRACE ('FILESERV_SEND_FILE: Passed early send period. Reset.');
+		    LIB$ADD_TIMES (MIDNITE, FSRV [FSRV_Q_BEGIN],
+			FSRV [FSRV_Q_SNDBEGIN]);
+		    CH$MOVE (8, FSRV [FSRV_Q_SNDBEGIN], FSRV [FSRV_Q_SNDNEXT]);
+		    LIB$ADD_TIMES (TOMORROW, FSRV [FSRV_Q_END],
+			FSRV [FSRV_Q_SNDEND]);
+		END;
+	    END
+	    ELSE
+	    BEGIN
+		IF LIB$SUB_TIMES (NOW, FSRV [FSRV_Q_SNDEND], TMPDT)
+		    EQL LIB$_NORMAL
+		AND LIB$SUB_TIMES (FSRV [FSRV_Q_SNDNEXT], TOMORROW, TMPDT2)
+		    NEQ LIB$_NORMAL
+		THEN
+		BEGIN
+		    TRACE (%STRING ('FILESERV_SEND_FILE: ',
+		    	'After send period - start sending again tomorrow.'));
+		    LIB$ADD_TIMES (TOMORROW, FSRV [FSRV_Q_BEGIN],
+			FSRV [FSRV_Q_SNDNEXT]);
+		END;
+	    END;
+	END;
+
+	TRACE ('FILESERV_SEND_FILE: Send start=!17%D, end=!17%D, next=!17%D',
+		    FSRV [FSRV_Q_SNDBEGIN], FSRV [FSRV_Q_SNDEND],
+		    FSRV [FSRV_Q_SNDNEXT]);
+
+	OKTIME = LIB$SUB_TIMES (NOW, FSRV [FSRV_Q_SNDBEGIN], TMPDT)
+		    EQL LIB$_NORMAL
+		AND LIB$SUB_TIMES (FSRV [FSRV_Q_SNDEND], NOW, TMPDT2)
+		    EQL LIB$_NORMAL;
+	IF NOT .OKTIME
+	THEN
+	BEGIN
+	    NEWENT [QENT_V_DELAY] = 1;
+	    CH$MOVE (8, FSRV [FSRV_Q_SNDNEXT], NEWENT [QENT_Q_DLYDT]);
+	    LIB$ADD_TIMES (NEWENT [QENT_Q_DLYDT], DLYINTRVL,
+		FSRV [FSRV_Q_SNDNEXT]);
+	    IF .FSRV [FSRV_V_OVERLAP] THEN
+	    BEGIN
+		IF LIB$SUB_TIMES (FSRV [FSRV_Q_SNDNEXT], FSRV [FSRV_Q_SNDEND],
+			TMPDT) EQL LIB$_NORMAL
+		THEN CH$MOVE (8, FSRV [FSRV_Q_SNDBEGIN], FSRV [FSRV_Q_SNDNEXT]);
+	    END
+	    ELSE
+	    BEGIN
+		IF LIB$SUB_TIMES (NOW, FSRV [FSRV_Q_SNDBEGIN], TMPDT)
+		    NEQ LIB$_NORMAL THEN
+		BEGIN
+		    IF LIB$SUB_TIMES (FSRV [FSRV_Q_SNDNEXT],
+			FSRV [FSRV_Q_SNDEND], TMPDT) EQL LIB$_NORMAL
+		    THEN CH$MOVE (8, FSRV [FSRV_Q_SNDBEGIN],
+			    FSRV [FSRV_Q_SNDNEXT]);
+		END
+		ELSE
+		BEGIN
+		    LIB$ADD_TIMES (TOMORROW, FSRV [FSRV_Q_END], TMPDT);
+		    IF LIB$SUB_TIMES (FSRV [FSRV_Q_SNDNEXT], TMPDT, TMPDT2)
+			EQL LIB$_NORMAL
+		    THEN LIB$ADD_TIMES (TOMORROW, FSRV [FSRV_Q_BEGIN],
+			FSRV [FSRV_Q_SNDNEXT]);
+		END;
+	    END;
+	END;
+	CH$MOVE (8, NOW, FSRV [FSRV_Q_LASTSND]);
+    END;
+
+    NEWENT [QENT_L_STATUS] = FLQ_K_STRDY;
+    FLQ_UPDATE (QCTX, NEWENT);
+
+    IF .NEWENT [QENT_V_DELAY] THEN
+    BEGIN
+	MX_MKDATE (NEWENT [QENT_Q_DLYDT], STR2);
+	TLOG ('  File !AS will be sent at !AS.', XSPEC, STR2);
+	TRACE ('  FILESERV_SEND_FILE: Delaying until !%D',
+		NEWENT [QENT_Q_DLYDT]);
+	FLOG ('!17%D SEND: FS="!AD",FILE="!AS",DEST="!AS",DELAY="!17%D"', 0,
+	    .FSRV [FSRV_W_NAME], FSRV [FSRV_T_NAME], XSPEC, TOSTR,
+	    NEWENT [QENT_Q_DLYDT]);
+    END
+    ELSE
+    BEGIN
+	TLOG ('  File !AS has been sent.', XSPEC);
+	TRACE ('  FILESERV:  No delay.');
+	FLOG ('!17%D SEND: FS="!AD",FILE="!AS",DEST="!AS",NODELAY', 0,
+	    .FSRV [FSRV_W_NAME], FSRV [FSRV_T_NAME], XSPEC, TOSTR);
+    END;
+
+    IF .LOG_OPENED THEN
+	$FLUSH (RAB=LOG_RAB);
+
+    FREE_STRINGS (STR, STR2, str3, TOSTR);
+
+    SS$_NORMAL
+
+END; ! FILESERV_SEND_FILE
+
+%SBTTL 'FILESERV_SEND'
+ROUTINE FILESERV_SEND (CMDCODE, FSRV_A, QCTX, TXT_A, DESTQ_A, TUNIT) =
+BEGIN
+!++
+! FUNCTIONAL DESCRIPTION:
+!
+!   Processes a FILESERV SEND (or HELP) command.
+!
+! RETURNS:	cond_value, longword (unsigned), write only, by value
+!
+! PROTOTYPE:
+!
+!   FILESERV_SEND
+!
+! IMPLICIT INPUTS:  None.
+!
+! IMPLICIT OUTPUTS: None.
+!
+! COMPLETION CODES:
+!
+!   SS$_NORMAL:		normal successful completion.
+!
+! SIDE EFFECTS:
+!
+!   None.
+!--
+    BIND
+	FSRV	= .FSRV_A   : FSRVDEF,
+	TXT	= .TXT_A    : TXTDEF,
+	DESTQ	= .DESTQ_A  : QUEDEF;
+
+    LOCAL
+	STR	: BLOCK [DSC$K_S_BLN,BYTE],
+	FSPEC	: BLOCK [DSC$K_S_BLN,BYTE],
+	RSPEC	: BLOCK [DSC$K_S_BLN,BYTE],
+    	SDSC	: BLOCK [DSC$K_S_BLN,BYTE],
+    	VALLST	: BLOCKVECTOR [3,ITM2_S_ITM2DEF,BYTE] FIELD (ITM2_FIELDS),
+	WHICH,
+	CTX,
+	STATUS;
+
+    INIT_DYNDESC (STR, FSPEC, RSPEC);
+
+    CTX = 0;
+
+    IF .CMDCODE EQL FSCMD__HELP THEN
+	LIB$SYS_FAO (%ASCID'!AD[000000]FILESERV_HELP.TXT', 0, FSPEC,
+		.FSRV [FSRV_W_ROOT], FSRV [FSRV_T_ROOT])
+    ELSE
+	IF .TXT_A EQLA 0 THEN
+	BEGIN
+	    TLOG ('  Error: No package name specified.');
+	    TRACE ('  FILESERV_SEND: User did not provide a package name.');
+	    FREE_STRINGS (FSPEC);
+	    RETURN SS$_NORMAL;
+	END
+	ELSE
+	BEGIN
+	    INIT_SDESC (SDSC, .TXT [TXT_W_LEN], TXT [TXT_T_TEXT]);
+    	    CH$FILL (%CHAR (0), %ALLOCATION (VALLST), VALLST);
+    	    VALLST [0,ITM2_W_ITMCOD] = FSCN$_NAME;
+   	    $FILESCAN (SRCSTR=SDSC, VALUELST=VALLST);
+	    LIB$SYS_FAO (%ASCID'!AD[000000]!AD.DIR', 0, FSPEC,
+		.FSRV [FSRV_W_ROOT], FSRV [FSRV_T_ROOT],
+    	    	.VALLST [0,ITM2_W_BUFSIZ], .VALLST [0,ITM2_L_BUFADR]);
+	    STATUS = LIB$FIND_FILE (FSPEC, RSPEC, CTX, 0,0,0, %REF (1));
+	    IF NOT .STATUS THEN
+	    BEGIN
+		LIB$FIND_FILE_END (CTX);
+		TLOG ('  Unknown package name: !AD',
+    	    	    .VALLST [0,ITM2_W_BUFSIZ], .VALLST [0,ITM2_L_BUFADR]);
+		TRACE ('  FILESERV_SEND: Directory not found: !AS', FSPEC);
+		FREE_STRINGS (FSPEC, RSPEC);
+		RETURN SS$_NORMAL;
+	    END;
+	    LIB$SYS_FAO (%ASCID'!AD[!AD]!AD', 0, FSPEC,
+		.FSRV [FSRV_W_ROOT], FSRV [FSRV_T_ROOT],
+    	    	.VALLST [0,ITM2_W_BUFSIZ], .VALLST [0,ITM2_L_BUFADR],
+		.TXT [TXT_W_LEN], TXT [TXT_T_TEXT]);
+	END;
+
+    STATUS = LIB$FIND_FILE (FSPEC, RSPEC, CTX, %ASCID'.*');
+    IF .STATUS THEN
+    BEGIN
+    	CH$FILL (%CHAR (0), %ALLOCATION (VALLST), VALLST);
+    	VALLST [0,ITM2_W_ITMCOD] = FSCN$_NAME;
+    	VALLST [1,ITM2_W_ITMCOD] = FSCN$_TYPE;
+    	$FILESCAN (SRCSTR=RSPEC, VALUELST=VALLST);
+    	INIT_SDESC (SDSC, (.VALLST [0,ITM2_W_BUFSIZ]+.VALLST [1,ITM2_W_BUFSIZ]),
+    	    	    	.VALLST [0,ITM2_L_BUFADR]);
+	IF FILESERV_CHECK_LIMIT (FSRV, DESTQ, RSPEC, WHICH) THEN
+	    FILESERV_SEND_FILE (.QCTX, FSRV, RSPEC, SDSC, DESTQ, .TUNIT)
+	ELSE
+	    TLOG ('  File !AS not sent: size of file exceeds daily !AS request limit.',
+		SDSC,
+		(IF .WHICH EQL 1 THEN %ASCID'per-user'
+		ELSE IF .WHICH EQL 2 THEN %ASCID'per-host' ELSE
+		%ASCID'file server'));
+	WHILE LIB$FIND_FILE (FSPEC, RSPEC, CTX, %ASCID'.*') DO
+	BEGIN
+    	    $FILESCAN (SRCSTR=RSPEC, VALUELST=VALLST);
+    	    INIT_SDESC (SDSC, (.VALLST [0,ITM2_W_BUFSIZ]+.VALLST [1,ITM2_W_BUFSIZ]),
+    	    	    	.VALLST [0,ITM2_L_BUFADR]);
+	    IF FILESERV_CHECK_LIMIT (FSRV, DESTQ, RSPEC, WHICH) THEN
+		FILESERV_SEND_FILE (.QCTX, FSRV, RSPEC, SDSC, DESTQ, .TUNIT)
+	    ELSE
+		TLOG ('  File !AS not sent: size of file exceeds daily !AS request limit.',
+		    SDSC,
+		    (IF .WHICH EQL 1 THEN %ASCID'per-user'
+		    ELSE IF .WHICH EQL 2 THEN %ASCID'per-host' ELSE
+		    %ASCID'file server'));
+	END;
+    END
+    ELSE
+    BEGIN
+	LOCAL
+	    MSGBUF	: VECTOR [255,BYTE],
+	    MSGDSC	: BLOCK [DSC$K_S_BLN,BYTE],
+	    MSGLEN	: WORD;
+
+    	CH$FILL (%CHAR (0), %ALLOCATION (VALLST), VALLST);
+    	VALLST [0,ITM2_W_ITMCOD] = FSCN$_NAME;
+    	VALLST [1,ITM2_W_ITMCOD] = FSCN$_TYPE;
+    	$FILESCAN (SRCSTR=RSPEC, VALUELST=VALLST);
+    	INIT_SDESC (SDSC, (.VALLST [0,ITM2_W_BUFSIZ]+.VALLST [1,ITM2_W_BUFSIZ]),
+    	    	    	.VALLST [0,ITM2_L_BUFADR]);
+	MSGDSC [DSC$B_DTYPE] = DSC$K_DTYPE_T;
+	MSGDSC [DSC$B_CLASS] = DSC$K_CLASS_S;
+	MSGDSC [DSC$A_POINTER] = MSGBUF;
+	MSGDSC [DSC$W_LENGTH] = %ALLOCATION (MSGBUF);
+	$GETMSG (MSGID=.STATUS, MSGLEN=MSGLEN, BUFADR=MSGDSC, FLAGS=1);
+	TLOG ('  Error sending !AS: !AD', SDSC, .MSGLEN, MSGBUF);
+	TRACE ('  FILESERV_SEND: Could not find: !AS, msg=!AD', FSPEC,
+	    .MSGLEN, MSGBUF);
+    END;
+
+    LIB$FIND_FILE_END (CTX);
+    FREE_STRINGS (STR, FSPEC, RSPEC);
+
+    SS$_NORMAL
+
+END; ! FILESERV_SEND
+
+%SBTTL 'FILESERV_LIST'
+ROUTINE FILESERV_LIST (FSRV_A, QCTX, TXT_A, DESTQ_A, TUNIT) =
+BEGIN
+!++
+! FUNCTIONAL DESCRIPTION:
+!
+!   Processes a FILESERV LIST command.
+!
+! RETURNS:	cond_value, longword (unsigned), write only, by value
+!
+! PROTOTYPE:
+!
+!   FILESERV_LIST
+!
+! IMPLICIT INPUTS:  None.
+!
+! IMPLICIT OUTPUTS: None.
+!
+! COMPLETION CODES:
+!
+!   SS$_NORMAL:		normal successful completion.
+!
+! SIDE EFFECTS:
+!
+!   None.
+!--
+    BIND
+	FSRV	= .FSRV_A   : FSRVDEF,
+	TXT	= .TXT_A    : TXTDEF,
+	DESTQ	= .DESTQ_A  : QUEDEF;
+
+    LOCAL
+	STR	: BLOCK [DSC$K_S_BLN,BYTE],
+	STR2	: BLOCK [DSC$K_S_BLN,BYTE],
+	DSPEC	: BLOCK [DSC$K_S_BLN,BYTE],
+	FSPEC	: BLOCK [DSC$K_S_BLN,BYTE],
+	RSPEC	: BLOCK [DSC$K_S_BLN,BYTE],
+	XSPEC	: BLOCK [DSC$K_S_BLN,BYTE],
+    	SDSC	: BLOCK [DSC$K_S_BLN,BYTE],
+    	SDS2	: BLOCK [DSC$K_S_BLN,BYTE],
+    	VALLST	: BLOCKVECTOR [3,ITM2_S_ITM2DEF,BYTE] FIELD (ITM2_FIELDS),
+    	FAB 	: $FAB_DECL,
+    	NAM 	: $NAM_DECL,
+	TIME	: VECTOR [2,LONG],
+    	EBUF	: VECTOR [255,BYTE],
+	PID,
+	CTX,
+	UNIT,
+	INUNIT,
+	DID1,
+	STATUS;
+
+    INIT_DYNDESC (STR, STR2, DSPEC, FSPEC, RSPEC, XSPEC);
+
+    $GETTIM (TIMADR=TIME);
+    LIB$GETJPI (%REF (JPI$_PID), 0, 0, PID);
+    LIB$SYS_FAO (%ASCID'MX_MLF_DIR:FSV_!XL_!XL_!XL.TMP', 0, STR,
+	.TIME [0], .TIME [1], .PID);
+    MX_FILE_OPEN (MX__FILE_WRITE, STR, UNIT, 0, XSPEC);
+
+    IF .TXT_A NEQA 0 THEN
+    	INIT_SDESC (SDSC, .TXT [TXT_W_LEN], TXT [TXT_T_TEXT])
+    ELSE
+    	INIT_SDESC (SDSC, 0, SDSC);
+
+    LIB$SYS_FAO (%ASCID'!AD[000000]*.DESCRIPTION', 0, DSPEC,
+	.FSRV [FSRV_W_ROOT], FSRV [FSRV_T_ROOT]);
+
+    $FAB_INIT (FAB=FAB, NAM=NAM, FNA=.SDSC [DSC$A_POINTER], FNS=.SDSC [DSC$W_LENGTH],
+    	    	DNA=.DSPEC [DSC$A_POINTER], DNS=.DSPEC [DSC$W_LENGTH]);
+    $NAM_INIT (NAM=NAM, ESA=EBUF, ESS=%ALLOCATION (EBUF));
+    NAM [NAM$V_SYNCHK] = 1;
+    $PARSE (FAB=FAB);
+    INIT_SDESC (SDSC, .NAM [NAM$B_NAME], .NAM [NAM$L_NAME]);
+
+    DID1 = 0;
+    CTX = 0;
+    CH$FILL (%CHAR (0), %ALLOCATION (VALLST), VALLST);
+    VALLST [0,ITM2_W_ITMCOD] = FSCN$_NAME;
+
+    WHILE LIB$FIND_FILE (SDSC, RSPEC, CTX, DSPEC) DO
+    BEGIN
+	TRACE ('  FILESERV_LIST: Including description !AS', RSPEC);
+	IF .DID1 THEN
+	BEGIN
+	    MX_FILE_WRITE (.UNIT, %ASCID'');
+	    MX_FILE_WRITE (.UNIT, %ASCID'-----');
+	    MX_FILE_WRITE (.UNIT, %ASCID'');
+	END;
+	DID1 = 1;
+    	$FILESCAN (SRCSTR=RSPEC, VALUELST=VALLST);
+    	INIT_SDESC (SDS2, .VALLST [0,ITM2_W_BUFSIZ], .VALLST [0,ITM2_L_BUFADR]);
+	STR$CONCAT (STR2, %ASCID'Package name: ', SDS2);
+	MX_FILE_WRITE (.UNIT, STR2);
+	MX_FILE_WRITE (.UNIT, %ASCID'');
+	MX_FILE_CLOSE (.UNIT);
+	COPY_FILE (RSPEC, XSPEC, 0, 1);
+	MX_FILE_OPEN (MX__FILE_APPEND, XSPEC, UNIT);
+    END;
+    LIB$FIND_FILE_END (CTX);
+
+    IF NOT .DID1		!No .DESCRIPTION files found in [000000],
+    THEN			!... so look in the directories themselves.
+	BEGIN
+	!
+	!  Look for device:[root.][*]*.DESCRIPTION files.
+	!
+	TRACE ('  FILESERV_LIST: No [000000] descriptions, trying [*]....');
+    	IF .TXT_A NEQA 0 THEN
+    	    INIT_SDESC (SDSC, .TXT [TXT_W_LEN], TXT [TXT_T_TEXT])
+    	ELSE
+    	    INIT_SDESC (SDSC, 0, SDSC);
+	LIB$SYS_FAO (%ASCID'!AD[*]*.DESCRIPTION', 0, DSPEC,
+		.FSRV [FSRV_W_ROOT], FSRV [FSRV_T_ROOT]);
+    	$FAB_INIT (FAB=FAB, NAM=NAM, FNA=.SDSC [DSC$A_POINTER], FNS=.SDSC [DSC$W_LENGTH],
+    	    	DNA=.DSPEC [DSC$A_POINTER], DNS=.DSPEC [DSC$W_LENGTH]);
+    	$NAM_INIT (NAM=NAM, ESA=EBUF, ESS=%ALLOCATION (EBUF));
+    	NAM [NAM$V_SYNCHK] = 1;
+    	$PARSE (FAB=FAB);
+    	INIT_SDESC (SDSC, .NAM [NAM$B_NAME], .NAM [NAM$L_NAME]);
+
+	CTX = 0;
+	WHILE LIB$FIND_FILE (SDSC, RSPEC, CTX, DSPEC) DO
+	    BEGIN
+	    TRACE ('  FILESERV_LIST: Including description !AS', RSPEC);
+	    IF .DID1
+	    THEN
+		BEGIN
+		MX_FILE_WRITE (.UNIT, %ASCID'');
+		MX_FILE_WRITE (.UNIT, %ASCID'-----');
+		MX_FILE_WRITE (.UNIT, %ASCID'');
+		END;
+	    DID1 = 1;
+    	    $FILESCAN (SRCSTR=RSPEC, VALUELST=VALLST);
+    	    INIT_SDESC (SDS2, .VALLST [0,ITM2_W_BUFSIZ], .VALLST [0,ITM2_L_BUFADR]);
+	    STR$CONCAT (STR2, %ASCID'Package name: ', SDS2);
+	    MX_FILE_WRITE (.UNIT, STR2);
+	    MX_FILE_WRITE (.UNIT, %ASCID'');
+	    MX_FILE_CLOSE (.UNIT);
+	    COPY_FILE (RSPEC, XSPEC, 0, 1);
+	    MX_FILE_OPEN (MX__FILE_APPEND, XSPEC, UNIT);
+	    END;
+
+	LIB$FIND_FILE_END (CTX);
+
+	END;
+
+    MX_FILE_CLOSE (.UNIT);
+
+    IF .DID1 THEN
+	FILESERV_SEND_FILE (.QCTX, FSRV, XSPEC, %ASCID'LIST result',
+						    DESTQ, .TUNIT, 1)
+    ELSE
+    BEGIN
+	TRACE ('  FILESERV_LIST: Could not find description matching !AS', SDSC);
+	TLOG ('  Error: no files matched "!AS"', SDSC);
+    END;
+
+    LIB$DELETE_FILE (XSPEC);
+
+    FREE_STRINGS (STR, STR2, DSPEC, FSPEC, RSPEC, XSPEC);
+
+    SS$_NORMAL
+
+END; ! FILESERV_LIST
+
+%SBTTL 'FILESERV_CHECK_ACCESS'
+ROUTINE FILESERV_CHECK_ACCESS (FROMSTR_A, MLST_A) =
+BEGIN
+!++
+! FUNCTIONAL DESCRIPTION:
+!
+!   Ensures that a user has access to a file server, by checking
+!   to see if he/she is a subscriber to the mailing list linked to
+!   the file server.
+!
+! RETURNS:	cond_value, longword (unsigned), write only, by value
+!
+! PROTOTYPE:
+!
+!   FILESERV_CHECK_ACCESS
+!
+! IMPLICIT INPUTS:  None.
+!
+! IMPLICIT OUTPUTS: None.
+!
+! COMPLETION CODES:
+!
+!   SS$_NORMAL:		normal successful completion.
+!
+! SIDE EFFECTS:
+!
+!   None.
+!--
+    BIND
+	FROMSTR	= .FROMSTR_A	: BLOCK [,BYTE],
+	MLST	= .MLST_A	: MLSTDEF;
+
+    LOCAL
+	MLSTQ	: QUEDEF,
+	MLE	: REF MLEDEF,
+	LCLP	: BLOCK [DSC$K_S_BLN,BYTE],
+	DOMP	: BLOCK [DSC$K_S_BLN,BYTE],
+	STR	: BLOCK [DSC$K_S_BLN,BYTE],
+	TXT	: REF TXTDEF,
+	adr	: REF TXTDEF,
+	STATUS,
+	FOUND;
+
+    INIT_DYNDESC (LCLP, DOMP, STR);
+    STATUS = PARSE_MBOX (FROMSTR, LCLP, DOMP);
+    IF NOT .STATUS THEN
+    BEGIN
+	LOCAL I;
+	IF (I = STR$POSITION (FROMSTR, %ASCID'<')) NEQ 0 THEN
+	BEGIN
+	    STR$RIGHT (STR, FROMSTR, I);
+	    STATUS = PARSE_MBOX (STR, LCLP, DOMP);
+	END;
+    END;
+    IF NOT .STATUS THEN
+    BEGIN
+	FREE_STRINGS (STR, LCLP, DOMP);
+	RETURN 0;
+    END;
+
+    INIT_QUEUE (MLSTQ);
+    READ_MAILING_LIST (MLST, MLSTQ);
+
+    STR$UPCASE (DOMP, DOMP);
+    STR$CONCAT (STR, LCLP, %ASCID'@', DOMP);
+    TRACE ('  FILESERV_CHECK_ACCESS: Checking to see if !AS is on mailing list !AD',
+	STR, .MLST [MLST_W_NAME], MLST [MLST_T_NAME]);
+
+    FOUND = 0;
+    MLE = .MLSTQ [QUE_L_HEAD] ;
+    WHILE (.MLE NEQA MLSTQ [QUE_L_HEAD]) AND (NOT .FOUND) DO
+    BEGIN
+    	BIND Xaddr = .mle [MLE_A_ADDR] : TXTDEF;
+	IF .MLE [MLE_V_NOCASE] THEN
+	BEGIN
+	    LOCAL S1 : BLOCK [DSC$K_S_BLN,BYTE];
+	    INIT_SDESC (S1, .Xaddr [TXT_W_LEN], Xaddr [TXT_T_TEXT]);
+	    IF STR$CASE_BLIND_COMPARE (S1, STR) EQL 0 THEN
+		FOUND = 1
+	    ELSE
+		IF .MLE [MLE_V_ACCESS]
+		THEN
+		BEGIN
+		    LOCAL
+			UPS1	    : BLOCK [DSC$K_S_BLN,BYTE],
+			UPSTR	    : BLOCK [DSC$K_S_BLN,BYTE];
+
+		    INIT_DYNDESC (UPS1) ;
+		    INIT_DYNDESC (UPSTR) ;
+		    STR$UPCASE (UPS1, S1);
+		    STR$UPCASE (UPSTR,	STR);	! Put the strings into canonical form (both upper case).
+		    IF STR$MATCH_WILD (UPSTR, UPS1)
+		    THEN
+		    BEGIN
+			FREE_STRINGS(UPS1) ;
+			FREE_STRINGS(UPSTR) ;
+			TRACE ('  FILESERV_CHECK_ACCESS:    Wild Card Match: !AS with !AS', UPSTR, UPS1);
+			FOUND = 1 ;		! If the wild card matched, free the temporary strings and bail out.
+		    END ;			! End IF STR$MATCH_WILD (UPSTR, UPS1)
+
+		    FREE_STRINGS(UPS1) ;
+		    FREE_STRINGS(UPSTR) ;	! Just get rid of the strings.
+		END ;				! End IF .MLE [MLE_V_ACCESS]
+	END
+	ELSE
+	BEGIN
+	    IF CH$EQL (.STR [DSC$W_LENGTH], .STR [DSC$A_POINTER],
+	    .Xaddr [TXT_W_LEN], Xaddr [TXT_T_TEXT], %C' ')
+	    THEN
+		FOUND = 1
+	    ELSE
+		IF .MLE [MLE_V_ACCESS]
+		THEN
+		BEGIN
+		    LOCAL
+			ADDR	: BLOCK[DSC$K_S_BLN,BYTE] ;
+
+		    INIT_SDESC (ADDR, .Xaddr [TXT_W_LEN],  Xaddr [TXT_T_TEXT]);
+		    IF STR$MATCH_WILD (STR, ADDR)
+		    THEN
+		    BEGIN
+			TRACE ('  FILESERV_CHECK_ACCESS:    Wild Card Match: !AS with !AS', STR, ADDR);
+			FOUND = 1 ;			! If the wild card matched, bail out.
+		    END ;				! End IF str$match_wild (STR, ADDR)
+		END ;					! End IF .MLE [MLE_V_ACCESS]
+	END ;
+	MLE = .MLE [MLE_L_FLINK];
+    END;
+
+    !
+    !  If user was not found, check to see if it's a system user and, if
+    !  so, grant the access.
+    !
+    IF NOT(.found)
+    THEN
+	BEGIN
+	adr = .sysusers [QUE_L_HEAD];
+	found = (WHILE .adr NEQA sysusers [QUE_L_HEAD] DO
+    	    BEGIN
+    	    	IF CH$EQL (.str [DSC$W_LENGTH], .str [DSC$A_POINTER],
+    	    	    .adr [TXT_W_LEN], adr [TXT_T_TEXT], %C' ')
+    	    	THEN EXITLOOP .adr;
+    	    	adr = .adr [TXT_L_FLINK];
+    	    END) NEQ -1;
+
+	IF .found
+	THEN
+	    TRACE ('  FILESERV_CHECK_ACCESS:    Found address on system_users list.');
+	END;
+    
+    FREE_STRINGS (STR, DOMP, LCLP);
+    WHILE NOT REMQUE (.MLSTQ [QUE_L_HEAD], MLE) DO MEM_FREEMLE (MLE);
+
+    TRACE ('  FILESERV_CHECK_ACCESS: ... !AS', (IF .FOUND THEN %ASCID'Yes' ELSE %ASCID'No'));
+
+    .FOUND
+
+END; ! FILESERV_CHECK_ACCESS
+
+%SBTTL 'FILESERV_CHECK_LIMIT'
+ROUTINE FILESERV_CHECK_LIMIT (FSRV_A, DESTQ_A, FSPEC_A, WHICH_A) =
+BEGIN
+!++
+! FUNCTIONAL DESCRIPTION:
+!
+!   Checks to see if a file server send request exceeds a per-server,
+!   per-host, or per-user limit.
+!
+! RETURNS:	cond_value, longword (unsigned), write only, by value
+!
+! PROTOTYPE:
+!
+!   FILESERV_CHECK_LIMIT
+!
+! IMPLICIT INPUTS:  None.
+!
+! IMPLICIT OUTPUTS: None.
+!
+! COMPLETION CODES:
+!
+!   SS$_NORMAL:		normal successful completion.
+!
+! SIDE EFFECTS:
+!
+!   None.
+!--
+    BIND
+	FSRV	= .FSRV_A   : FSRVDEF,
+	DESTQ	= .DESTQ_A  : QUEDEF,
+	FSPEC	= .FSPEC_A  : BLOCK [,BYTE],
+	WHICH	= .WHICH_A;
+
+    LOCAL
+	FAB	: $FAB_DECL,
+	XABFHC	: $XABFHC_DECL,
+	NOWTIME	: VECTOR [2,LONG],
+	NOW	: VECTOR [7,WORD],
+	LASTACC	: VECTOR [7,WORD],
+	STR	: BLOCK [DSC$K_S_BLN,BYTE],
+	LCLP	: BLOCK [DSC$K_S_BLN,BYTE],
+	DOMP	: BLOCK [DSC$K_S_BLN,BYTE],
+	SIZE,
+	STATUS,
+	IS_LOCAL,
+	DST	: REF TXTDEF,
+	HST	: REF USEDEF,
+	USR	: REF USEDEF;
+
+    $GETTIM (TIMADR=NOWTIME);
+    $NUMTIM (TIMADR=NOWTIME, TIMBUF=NOW);
+
+    $FAB_INIT (FAB=FAB, XAB=XABFHC, FAC=GET, SHR=SHRPUT);
+    FAB [FAB$B_FNS] = .FSPEC [DSC$W_LENGTH];
+    FAB [FAB$L_FNA] = .FSPEC [DSC$A_POINTER];
+    $XABFHC_INIT (XAB=XABFHC);
+    STATUS = $OPEN (FAB=FAB);
+    IF NOT .STATUS THEN RETURN 1;
+    $CLOSE (FAB=FAB);
+    SIZE = .XABFHC [XAB$L_EBK] * 512 + .XABFHC [XAB$W_FFB];
+    TRACE ('  Limit check: file size is !UL', .SIZE);
+
+    $NUMTIM (TIMADR=FSRV [FSRV_Q_LASTACC], TIMBUF=LASTACC);
+    IF .LASTACC [0] GEQ 1900 AND (.LASTACC [2] NEQ .NOW [2]
+	OR .LASTACC [1] NEQ .NOW [1] OR .LASTACC [0] NEQ .NOW [0]) THEN
+    BEGIN
+	BIND
+	    HOSTQ   = FSRV [FSRV_Q_HOSTQ]   : QUEDEF,
+	    USERQ   = FSRV [FSRV_Q_USERQ]   : QUEDEF;
+	LOCAL
+	    LASTACC : VECTOR [7,WORD];
+
+	HST = .HOSTQ [QUE_L_HEAD];
+	WHILE .HST NEQA HOSTQ [QUE_L_HEAD] DO
+	BEGIN
+	    $NUMTIM (TIMADR=HST [USE_Q_LASTACC], TIMBUF=LASTACC);
+	    IF .LASTACC [2] NEQ .NOW [2] OR .LASTACC [1] NEQ .NOW [1] OR
+		    .LASTACC [0] NEQ .NOW [0]
+	    THEN
+	    BEGIN
+		USR = .HST [USE_L_FLINK];
+		REMQUE (.HST, HST);
+		LIB$FREE_VM (%REF (USE_S_USEDEF), HST);
+		HST = .USR;
+	    END
+	    ELSE HST = .HST [USE_L_FLINK];
+	END;
+
+	USR = .USERQ [QUE_L_HEAD];
+	WHILE .USR NEQA USERQ [QUE_L_HEAD] DO
+	BEGIN
+	    $NUMTIM (TIMADR=USR [USE_Q_LASTACC], TIMBUF=LASTACC);
+	    IF .LASTACC [2] NEQ .NOW [2] OR .LASTACC [1] NEQ .NOW [1] OR
+		    .LASTACC [0] NEQ .NOW [0]
+	    THEN
+	    BEGIN
+		HST = .USR [USE_L_FLINK];
+		REMQUE (.USR, USR);
+		LIB$FREE_VM (%REF (USE_S_USEDEF), USR);
+		USR = .HST;
+	    END
+	    ELSE USR = .USR [USE_L_FLINK];
+	END;
+    END;
+
+    IF .FSRV [FSRV_L_SERVLIM] NEQ 0 THEN
+    BEGIN
+	IF .LASTACC [0] LSS 1900 OR (.LASTACC [2] OR .NOW [2]
+		OR .LASTACC [1] NEQ .NOW [1] OR .LASTACC [0] NEQ .NOW [0]) THEN
+	    FSRV [FSRV_L_SERVCNT] = 0
+	ELSE
+	    IF .FSRV [FSRV_L_SERVCNT] + .SIZE GTR .FSRV [FSRV_L_SERVLIM] THEN
+	    BEGIN
+		TRACE ('  ... exceeds server limit (cur=!UL, lim=!UL).',
+		    .FSRV [FSRV_L_SERVCNT], .FSRV [FSRV_L_SERVLIM]);
+		WHICH = 3;
+		RETURN 0;
+	    END;
+    END;
+
+    INIT_DYNDESC (STR, LCLP, DOMP);
+
+    DST = .DESTQ [QUE_L_HEAD];
+    IF .DST EQLA DESTQ [QUE_L_HEAD] THEN RETURN 1;
+    STR$COPY_R (STR, DST [TXT_W_LEN], DST [TXT_T_TEXT]);
+    PARSE_MBOX (STR, LCLP, DOMP);
+    STR$UPCASE (DOMP, DOMP);
+    STR$CONCAT (STR, LCLP, %ASCID'@', DOMP);
+    IS_LOCAL = STR$CASE_BLIND_COMPARE (DOMP, CONFIG [CFG_Q_MXNODE]) EQL 0;
+
+    IF .IS_LOCAL THEN
+    BEGIN
+	LOCAL
+	    P,
+	    LCLPEND;
+
+	LCLPEND = CH$PLUS (.LCLP [DSC$A_POINTER], .LCLP [DSC$W_LENGTH]);
+	P = (DECR CP FROM .LCLPEND-1 TO .LCLP [DSC$A_POINTER] DO
+		IF CH$RCHAR (.CP) EQL %C'%' THEN EXITLOOP .CP);
+	IF .P NEQ -1 THEN
+	BEGIN
+	    STR$COPY_R (STR, %REF (CH$DIFF (.P, .LCLP [DSC$A_POINTER])),
+		.LCLP [DSC$A_POINTER]);
+	    STR$APPEND (STR, %ASCID'@');
+	    STR$COPY_R (DOMP, %REF (CH$DIFF (.LCLPEND, .P)-1), CH$PLUS (.P, 1));
+	    STR$APPEND (STR, DOMP);
+	    IS_LOCAL = 0;
+	END;
+    END;
+
+    USR = HST = 0;
+
+    IF .FSRV [FSRV_L_HOSTLIM] NEQ 0 AND NOT .IS_LOCAL THEN
+    BEGIN
+	BIND HOSTQ = FSRV [FSRV_Q_HOSTQ] : QUEDEF;
+	HST = .HOSTQ [QUE_L_HEAD];
+	WHILE .HST NEQA HOSTQ [QUE_L_HEAD] DO
+	BEGIN
+	    IF CH$EQL (.HST [USE_W_ADR], HST [USE_T_ADR],
+		.DOMP [DSC$W_LENGTH], .DOMP [DSC$A_POINTER], %C' ') THEN
+		    EXITLOOP;
+	    HST = .HST [USE_L_FLINK];
+	END;
+
+	IF .HST EQLA HOSTQ [QUE_L_HEAD] THEN
+	BEGIN
+	    LIB$GET_VM (%REF (USE_S_USEDEF), HST);
+	    CH$MOVE (8, NOWTIME, HST [USE_Q_LASTACC]);
+	    HST [USE_L_COUNT] = 0;
+	    HST [USE_W_ADR] = MIN (.DOMP [DSC$W_LENGTH], USE_S_ADR);
+	    CH$MOVE (.HST [USE_W_ADR], .DOMP [DSC$A_POINTER],
+		HST [USE_T_ADR]);
+	    INSQUE (.HST, HOSTQ [QUE_L_HEAD]);
+	END
+	ELSE
+	BEGIN
+	    $NUMTIM (TIMADR=HST [USE_Q_LASTACC], TIMBUF=LASTACC);
+	    IF .LASTACC [2] EQL .NOW [2] AND .LASTACC [1] EQL .NOW [1]
+		    OR .LASTACC [0] EQL .NOW [0]
+	    THEN
+	    BEGIN
+		IF .HST [USE_L_COUNT] + .SIZE GTR .FSRV [FSRV_L_HOSTLIM] THEN
+		BEGIN
+		    TRACE ('  ... exceeds host limit (hst=!AD, cur=!UL, lim=!UL).',
+			.HST [USE_W_ADR], HST [USE_T_ADR],
+			.HST [USE_L_COUNT], .FSRV [FSRV_L_HOSTLIM]);
+		    FREE_STRINGS (STR, LCLP, DOMP);
+		    WHICH = 2;
+		    RETURN 0;
+		END;
+	    END
+	    ELSE HST [USE_L_COUNT] = 0;
+	END;
+    END;
+
+    IF .FSRV [FSRV_L_USERLIM] NEQ 0 THEN
+    BEGIN
+	BIND USERQ = FSRV [FSRV_Q_USERQ] : QUEDEF;
+	USR = .USERQ [QUE_L_HEAD];
+	WHILE .USR NEQA USERQ [QUE_L_HEAD] DO
+	BEGIN
+	    IF CH$EQL (.USR [USE_W_ADR], USR [USE_T_ADR],
+		.STR [DSC$W_LENGTH], .STR [DSC$A_POINTER], %C' ') THEN
+		    EXITLOOP;
+	    USR = .USR [USE_L_FLINK];
+	END;
+
+	IF .USR EQLA USERQ [QUE_L_HEAD] THEN
+	BEGIN
+	    LIB$GET_VM (%REF (USE_S_USEDEF), USR);
+	    CH$MOVE (8, NOWTIME, USR [USE_Q_LASTACC]);
+	    USR [USE_L_COUNT] = 0;
+	    USR [USE_W_ADR] = MIN (.STR [DSC$W_LENGTH], USE_S_ADR);
+	    CH$MOVE (.USR [USE_W_ADR], .STR [DSC$A_POINTER],
+		USR [USE_T_ADR]);
+	    INSQUE (.USR, USERQ [QUE_L_HEAD]);
+	END
+	ELSE
+	BEGIN
+	    $NUMTIM (TIMADR=USR [USE_Q_LASTACC], TIMBUF=LASTACC);
+	    IF .LASTACC [2] EQL .NOW [2] AND .LASTACC [1] EQL .NOW [1]
+		    AND .LASTACC [0] EQL .NOW [0]
+	    THEN
+	    BEGIN
+		IF .USR [USE_L_COUNT] + .SIZE GTR .FSRV [FSRV_L_USERLIM] THEN
+		BEGIN
+		    TRACE ('  ... exceeds user limit (usr=!AD, cur=!UL, lim=!UL).',
+			.USR [USE_W_ADR], USR [USE_T_ADR],
+			.USR [USE_L_COUNT], .FSRV [FSRV_L_USERLIM]);
+		    FREE_STRINGS (STR, LCLP, DOMP);
+		    WHICH = 1;
+		    RETURN 0;
+		END;
+	    END
+	    ELSE USR [USE_L_COUNT] = 0;
+	END;
+    END;
+
+    IF .USR NEQA 0 THEN
+    BEGIN
+	CH$MOVE (8, NOWTIME, USR [USE_Q_LASTACC]);
+	USR [USE_L_COUNT] = .USR [USE_L_COUNT] + .SIZE;
+	TRACE ('  ... updating user !AD count to !UL',
+	    .USR [USE_W_ADR], USR [USE_T_ADR], .USR [USE_L_COUNT]);
+    END;
+
+    IF .HST NEQA 0 THEN
+    BEGIN
+	CH$MOVE (8, NOWTIME, HST [USE_Q_LASTACC]);
+	HST [USE_L_COUNT] = .HST [USE_L_COUNT] + .SIZE;
+	TRACE ('  ... updating host !AD count to !UL',
+	    .HST [USE_W_ADR], HST [USE_T_ADR], .HST [USE_L_COUNT]);
+    END;
+
+    CH$MOVE (8, NOWTIME, FSRV [FSRV_Q_LASTACC]);
+
+    IF .FSRV [FSRV_L_SERVLIM] NEQ 0 THEN
+    BEGIN
+	FSRV [FSRV_L_SERVCNT] = .FSRV [FSRV_L_SERVCNT] + .SIZE;
+	TRACE ('  ... updating server count to !UL', .FSRV [FSRV_L_SERVCNT]);
+    END;
+
+    FREE_STRINGS (STR, LCLP, DOMP);
+
+    1
+
+END; ! FILESERV_CHECK_LIMIT
+
+
+%SBTTL 'FILESERV_ADDRESS'
+ROUTINE FILESERV_ADDRESS (FSRV_A, QCTX, TXT_A, DESTQ_A, TUNIT, FROMSTR_A) =
+BEGIN
+!++
+! FUNCTIONAL DESCRIPTION:
+!
+!   Processes a FILESERV ADDRESS command.
+!
+! RETURNS:	cond_value, longword (unsigned), write only, by value
+!
+! PROTOTYPE:
+!
+!   FILESERV_LIST
+!
+! IMPLICIT INPUTS:  None.
+!
+! IMPLICIT OUTPUTS: None.
+!
+! COMPLETION CODES:
+!
+!   SS$_NORMAL:		normal successful completion.
+!
+! SIDE EFFECTS:
+!
+!   None.
+!--
+    BIND
+	FSRV	= .FSRV_A	: FSRVDEF,
+	TXT	= .TXT_A	: TXTDEF,
+	DESTQ	= .DESTQ_A	: QUEDEF,
+	FROMSTR	= .FROMSTR_A	: $BBLOCK;
+
+    LOCAL
+	NEW_DESTQ	: QUEDEF,
+	TXT2		: TXTDEF,
+	STR		: $BBLOCK [DSC$K_S_BLN],
+	STATUS;
+
+    init_dyndesc (str);
+
+    INIT_QUEUE (new_destq);		!Initialize the new queue
+
+    IF (.TXT_A EQLA 0)			!If no address was given, say so
+    THEN
+	BEGIN
+	TLOG ('  Error: No alternate address specified.');
+	TRACE ('  FILESERV_ADDRESS: User did not provide an address.');
+	RETURN SS$_NORMAL;
+	END;
+
+    !
+    !  The user provided *something* on the line.  Let's parse it to see
+    !  if it's a valid address (list).
+    !
+    STR$COPY_R (str, txt [txt_w_len], txt [txt_t_text]);
+    status = PARSE_ADDRLIST (str, new_destq);
+
+    IF NOT (.status)				!If an error occurred, see
+    THEN					!... if the address has a
+	BEGIN					!... "<".  If so, skip to it
+	LOCAL i;				!... and try again.
+	IF (i = STR$POSITION (str, %ASCID'<')) NEQ 0
+	THEN
+	    BEGIN
+	    STR$RIGHT (str, str, i);
+	    status = PARSE_ADDRLIST (str, new_destq, 0);
+	    END;
+	END;
+
+    IF NOT (.status)
+    THEN
+	BEGIN
+	TLOG ('  Error: invalid address specified.');
+	TRACE ('  FILESERV_ADDRESS: User provided an invalid address.');
+	FREE_STRINGS (str);
+	RETURN SS$_NORMAL;
+	END;
+
+    !
+    !  Here a syntactically valid address (list) was specified.  Replace
+    !  the old destination queue with the new one.
+    !
+    TLOG ('  Original From: address: !AS', FROMSTR);
+
+    !  Free memory held by old destinations
+    WHILE NOT REMQUE (.DESTQ [QUE_L_HEAD], TXT2) DO FREETXT (TXT2);
+    !  Now move new to old
+    WHILE NOT REMQUE (.new_destq [QUE_L_HEAD], TXT2) DO
+		INSQUE (.TXT2, .destq [QUE_L_TAIL]);
+
+    FREE_STRINGS (str);
+    RETURN SS$_NORMAL;
+
+END;	!FILESERV_ADDRESS
+
+
+END
+ELUDOM

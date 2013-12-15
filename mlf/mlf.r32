@@ -1,0 +1,132 @@
+! MLF.R32
+!
+! Copyright (c) 2008, Matthew Madison.
+! 
+! All rights reserved.
+! 
+! Redistribution and use in source and binary forms, with or without
+! modification, are permitted provided that the following conditions
+! are met:
+! 
+!     * Redistributions of source code must retain the above
+!       copyright notice, this list of conditions and the following
+!       disclaimer.
+!     * Redistributions in binary form must reproduce the above
+!       copyright notice, this list of conditions and the following
+!       disclaimer in the documentation and/or other materials provided
+!       with the distribution.
+!     * Neither the name of the copyright owner nor the names of any
+!       other contributors may be used to endorse or promote products
+!       derived from this software without specific prior written
+!       permission.
+! 
+! THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
+! "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
+! LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
+! A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
+! OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
+! SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
+! LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
+! DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
+! THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
+! (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
+! OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+!
+!   Definitions for MX mailing list/file server agent.
+!
+!   05-DEC-1990	V1.1	Madison	    Added VAR definition.
+!   25-OCT-1991	V1.2	Madison	    New LISTSERV commands.
+!   28-Oct-1992 V1.3	Munroe	    Quit Commands
+!   29-Oct-1992 V1.4	Munroe	    SETACCESS error code.
+!   25-JAN-1993 V1.5	Goatley     Added FSCMD__ADDRESS.
+!   29-MAR-1994 V1.5-1	Goatley     Add STORE_ORGADR macro.
+!   10-DEC-1995 V1.6	Goatley     Add MLERR__DENY, MLERR__DIGEST
+!   29-AUG-1997	V1.7	Madison	    Add MLERR__PROCERR.
+!
+
+    LIBRARY 'MX_SRC_COMMON:FIELDS';
+
+    MACRO
+    	TABLE (TABNAM, ITEM1) [] =
+    	    %IF %LENGTH EQL 1 %THEN %EXITMACRO %FI
+    	    LITERAL %NAME (TABNAM, '_COUNT') = %LENGTH - 1;
+    	    PSECT OWN = $PLIT$;
+    	    OWN TABNAM : VECTOR [%NAME (TABNAM, '_COUNT'),LONG] INITIAL (
+    	    	%ASCID ITEM1
+    	    	%IF NOT %NULL (%REMAINING) %THEN FILLTAB (%REMAINING) %FI);
+    	    PSECT OWN = $OWN$;
+    	%,
+    	FILLTAB (X) [] =
+    	    , %ASCID X %IF NOT %NULL (%REMAINING) %THEN FILLTAB (%REMAINING) %FI
+    	%;
+
+    MACRO
+	STORE_ORGADR (qent, str) =
+	    BEGIN
+		qent [QENT_W_ORGADR] = MIN (QENT_S_ORGADR,
+					.str [DSC$W_LENGTH] + 2);
+		CH$COPY (1, UPLIT(%C'<'), .str [DSC$W_LENGTH],
+			.str [DSC$A_POINTER], 1, UPLIT(%C'>'), 0,
+			.qent [QENT_W_ORGADR], qent [QENT_T_ORGADR]);
+	    END%;
+
+
+    LITERAL
+    	MLCMD__UNKNOWN	    = 0,
+    	MLCMD__LO   	    = 1,
+    	MLCMD__ADD  	    = 1,
+    	MLCMD__SUBSCRIBE    = 2,
+    	MLCMD__SIGNOFF	    = 3,
+    	MLCMD__REMOVE	    = 4,
+    	MLCMD__REVIEW	    = 5,
+    	MLCMD__SUBFWD	    = 6,  ! not really a command, but...
+    	MLCMD__SET  	    = 7,
+    	MLCMD__QUERY	    = 8,
+    	MLCMD__LIST 	    = 9,
+    	MLCMD__HELP 	    = 10,
+	MLCMD__QUIT	    = 11,
+    	MLCMD__MODIFY	    = 12,
+    	MLCMD__HI 	    = 12,
+
+    	FSCMD__UNKNOWN	    = 0,
+    	FSCMD__LO   	    = 1,
+    	FSCMD__SEND 	    = 1,
+    	FSCMD__HELP 	    = 2,
+    	FSCMD__LIST 	    = 3,
+	FSCMD__QUIT	    = 4,
+	FSCMD__ADDRESS	    = 5,
+    	FSCMD__HI 	    = 5,
+
+    	MLERR__INVADDR	    = 36,
+    	MLERR__ALRSUB	    = 44,
+    	MLERR__NOTSUB	    = 82,
+    	MLERR__UNKSET	    = 71,
+	MLERR__SETACCESS    = 72,
+	MLERR__NODIGEST     = 73,
+	MLERR__DENIED	    = 74,
+    	MLERR__PROCERR	    = 56;
+
+    LITERAL
+    	USE_S_ADR   = 255;
+
+    _DEF (USE)
+    	USE_L_FLINK 	= _LONG,
+    	USE_L_BLINK 	= _LONG,
+    	USE_Q_LASTACC	= _QUAD,
+    	USE_L_COUNT 	= _LONG,
+    	USE_W_ADR  	= _WORD,
+    	USE_T_ADR  	= _BYTES (USE_S_ADR)
+    _ENDDEF (USE);
+
+    LITERAL
+    	VAR_S_NAME  	= 32,
+    	VAR_S_VALUE 	= 255;
+
+    _DEF (VAR)
+    	VAR_L_FLINK 	= _LONG,
+    	VAR_L_BLINK 	= _LONG,
+    	VAR_W_NAME  	= _WORD,
+    	VAR_T_NAME  	= _BYTES (VAR_S_NAME),
+    	VAR_W_VALUE 	= _WORD,
+    	VAR_T_VALUE 	= _BYTES (VAR_S_VALUE)
+    _ENDDEF (VAR);

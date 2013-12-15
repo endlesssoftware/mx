@@ -1,0 +1,566 @@
+%TITLE 'PROCESS'
+MODULE PROCESS (IDENT='V2.6',
+    	ADDRESSING_MODE (EXTERNAL=LONG_RELATIVE, NONEXTERNAL=LONG_RELATIVE)) =
+BEGIN
+!++
+! FACILITY: 	    MX_MLF
+!
+! ABSTRACT: 	    Main processing routines for MX ML/F agent.
+!
+! MODULE DESCRIPTION:
+!
+!   This module contains the standard MX processing agent's INIT and
+!   PROCESS routines, for processing of messages destined for the
+!   local file servers and mailing lists.
+!
+! AUTHOR:   	    M. Madison
+!
+! Copyright (c) 2008, Matthew Madison.
+! 
+! All rights reserved.
+! 
+! Redistribution and use in source and binary forms, with or without
+! modification, are permitted provided that the following conditions
+! are met:
+! 
+!     * Redistributions of source code must retain the above
+!       copyright notice, this list of conditions and the following
+!       disclaimer.
+!     * Redistributions in binary form must reproduce the above
+!       copyright notice, this list of conditions and the following
+!       disclaimer in the documentation and/or other materials provided
+!       with the distribution.
+!     * Neither the name of the copyright owner nor the names of any
+!       other contributors may be used to endorse or promote products
+!       derived from this software without specific prior written
+!       permission.
+! 
+! THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
+! "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
+! LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
+! A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
+! OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
+! SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
+! LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
+! DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
+! THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
+! (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
+! OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+!
+! CREATION DATE:    27-JUN-1990
+!
+! MODIFICATION HISTORY:
+!
+!   27-JUN-1990	V1.0	Madison	    Initial coding.
+!   03-OCT-1990	V1.1	Madison	    Separate file server log from regular log.
+!   20-MAR-1991	V1.1-1	Madison	    Use MEM routines.
+!   17-OCT-1991	V1.2	Madison	    Treat log file like acctg file.
+!   24-OCT-1991	V1.3	Madison	    New RCPTDEF structure.
+!   04-NOV-1991	V1.3-1	Madison	    Don't process error-return messages.
+!   15-NOV-1991	V1.3-2	Madison	    MEM RCPT rtns.
+!   13-MAR-1992	V1.3-3	Madison	    Remove MAIL_LCLHST references.
+!   08-APR-1992	V1.3-4	Madison	    Fix INIT_QUEUE reference in INIT.
+!   10-FEB-1994 V1.4	Goatley     Modify to work with FLQ V2.
+!   28-MAR-1994 V1.4-1	Goatley     Add support for owner- addresses.
+!    8-APR-1994 V1.5	Goatley     Forward local to list owner, not sys_users.
+!   12-JUL-1994 V1.6	Goatley     If RCPT_COUNT is 0, don't divide by it!
+!   11-SEP-1995 V2.0	Goatley	    Added -Digest support.
+!    4-DEC-1995 V2.0-1	Goatley     Beef up error-handling some.
+!   10-DEC-1995 V2.0-2	Goatley     Add call to FROM_DAEMON to ignore such msgs.
+!   14-JAN-1997	V2.1	Madison	    Eliminate MDMLIB.
+!    4-JUN-1997 V2.2	Goatley     On REINIT, free MLST text queues too.
+!   28-JUL-1997	V2.2-1	Goatley     Fix TRACE msgs added in V2.0-1.
+!   29-AUG-1997	V2.3	Madison	    RCPT change.
+!   12-JUL-1998	V2.4	Madison	    DSNs.
+!   04-DEC-2000	V2.4-1	Madison	    Pass message size to FORWARD_TO_LIST.
+!   14-FEB-2002 V2.5    Madison     Confirmation of transactions.
+!   07-APR-2002 V2.6    Madison     Add rwrules, pathlist, aliases.
+!--
+
+    LIBRARY 'SYS$LIBRARY:STARLET';
+    LIBRARY 'MX_SRC_COMMON:FLQ';
+    LIBRARY 'MX_SRC_COMMON:MX';
+    LIBRARY 'MX_SRC_COMMON:AGENT';
+    LIBRARY 'MX_SRC_COMMON:MX_LCLDEFS';
+    LIBRARY 'MX_SRC_COMMON:REGEX';
+    LIBRARY 'MLF';
+
+    FORWARD ROUTINE
+    	INIT,
+    	PROCESS;
+
+    EXTERNAL LITERAL
+    	MX__MAILLIST, MX__MLCTRL, MX__FILEREQ, MX__LISTOWNER, MX__MAILLISTD,
+    	MX__INVADDR;
+
+    EXTERNAL ROUTINE
+	FROM_DAEMON,
+    	LOAD_MXCONFIG,
+    	FILESERV_CHECK,
+    	MAILING_LIST,
+	FORWARD_TO_SYSTEM_USERS,
+    	FORWARD_TO_LIST_OWNER,
+    	FORWARD_TO_LIST,
+    	FORWARD_MESSAGE,
+    	LIST_CTRL_LISTSERV,
+    	LIST_CTRL_REQ,
+        MLIST_CONFIRM_TRANSACTION,
+    	FILESERV_PROCESS,
+    	ERROR_INIT,
+    	ERROR_SEND,
+        REWRITE_INIT,
+    	G_HAT (READ_ENVELOPE, DISPOSE_ENVELOPE, READ_HDRS, MX_REGFREE,
+    	       CHECK_REFS_ZERO, MEM_GETTXT, MEM_GETRCPT, MEM_FREERCPT),
+    	G_HAT (DSN_REPORT_INIT, DSN_REPORT_ADD_RCPT, DSN_REPORT_SEND),
+    	G_HAT (LIB$GET_VM, LIB$FREE_VM, STR$COPY_R, STR$COPY_DX,
+    	    LIB$DELETE_FILE, STR$CASE_BLIND_COMPARE, LIB$SUBX);
+
+    EXTERNAL
+    	CONFIG	    : CFGDEF,
+    	SHUTDOWN_FLAG,
+    	RESET_MASK;
+
+    GLOBAL
+    	MLF_INFO    	: MLFDEF,
+        ROUTER_INFO     : ROUTERDEF,
+    	MLISTS	    	: QUEDEF,
+    	SYSUSERS    	: QUEDEF,
+    	FSRVQUE	    	: QUEDEF,
+        RWRULES         : QUEDEF,
+        PATHLIST        : QUEDEF,
+        ALIASES         : QUEDEF,
+    	LOG_OPENED  	: INITIAL (0),
+    	LOG_FAB	    	: $FAB_DECL,
+    	LOG_RAB	    	: $RAB_DECL;
+
+    TRACE_DECLARATIONS (GLOBAL);
+
+    MACRO
+    	RETRY_INTERVAL = %ASCID'0 00:30:00.00'%;
+
+%SBTTL 'INIT'
+GLOBAL ROUTINE INIT (REINIT) =
+BEGIN
+!++
+! FUNCTIONAL DESCRIPTION:
+!
+!   Initialization routine.
+!
+! RETURNS:  	cond_value, longword (unsigned), write only, by value
+!
+! PROTOTYPE:
+!
+!   INIT  reinit-flag
+!
+! IMPLICIT INPUTS:  None.
+!
+! IMPLICIT OUTPUTS: None.
+!
+! COMPLETION CODES:
+!
+!   SS$_NORMAL:	    	normal successful completion.
+!
+! SIDE EFFECTS:
+!
+!   None.
+!--
+    BIND RSTMSK = REINIT    : RSTDEF;
+
+    LOCAL
+    	SYSU	: REF TXTDEF,
+    	MLST	: REF MLSTDEF,
+    	FSRV	: REF FSRVDEF,
+    	U   	: REF USEDEF,
+	T	: REF TXTDEF,
+        R       : REF RULEDEF,
+        RA      : REF RULEPRE53DEF,
+        P       : REF PATHDEF,
+    	STATUS;
+
+    IF .REINIT NEQ 0 THEN
+    BEGIN
+    	IF .RSTMSK [RST_V_ACCTG] THEN
+    	BEGIN
+    	    IF .LOG_OPENED THEN
+    	    BEGIN
+    	    	LOG_OPENED = 0;
+    	    	$DISCONNECT (RAB=LOG_RAB);
+    	    	$CLOSE (FAB=LOG_FAB);
+    	    	$FAB_INIT (FAB=LOG_FAB, FAC=PUT, SHR=SHRPUT, RFM=VAR, RAT=CR,
+    	    	    	MRS=0, FNM='FILESERV_LOG', DNM='MX_MLF_DIR:.LOG');
+    	    	$RAB_INIT (RAB=LOG_RAB, FAB=LOG_FAB);
+    	    	STATUS = $CREATE (FAB=LOG_FAB);
+    	    	IF NOT .STATUS THEN RETURN .STATUS;
+    	    	STATUS = $CONNECT (RAB=LOG_RAB);
+    	    	IF NOT .STATUS THEN
+    	    	BEGIN
+    	    	    $CLOSE (FAB=LOG_FAB);
+    	    	    RETURN .STATUS;
+    	    	END;
+    	    	LOG_OPENED = 1;
+    	    END;
+    	END;
+    	IF .RSTMSK [RST_V_CONFIG] THEN
+    	BEGIN
+	    WHILE NOT REMQUE (.RWRULES [QUE_L_HEAD], R) DO
+            BEGIN
+                IF .R [RULE_A_LHSREGEX] THEN
+                BEGIN
+                    MX_REGFREE (.R [RULE_A_LHSREGEX]);
+                    LIB$FREE_VM (%REF (REGEX_S_REGEXDEF), R [RULE_A_LHSREGEX]);
+                END;
+                FREETXT (R [RULE_A_LHS], R [RULE_A_RHS]);
+	    	LIB$FREE_VM (%REF (RULE_S_RULEDEF), R);
+            END;
+	    WHILE NOT REMQUE (.ALIASES [QUE_L_HEAD], RA) DO
+	    	LIB$FREE_VM (%REF (RULEPRE53_S_RULEPRE53DEF), RA);
+	    WHILE NOT REMQUE (.PATHLIST [QUE_L_HEAD], P) DO
+	    	LIB$FREE_VM (%REF (PATH_S_PATHDEF), P);
+    	    WHILE NOT REMQUE (.SYSUSERS, SYSU) DO FREETXT (SYSU);
+	    WHILE NOT REMQUE (.MLISTS, MLST) DO
+		BEGIN
+		BIND
+		    OWNQ	= mlst [MLST_Q_OWNQ]   : QUEDEF,
+		    MODQ	= mlst [MLST_Q_MODQ]   : QUEDEF,
+		    hdrq	= mlst [MLST_Q_HDRQ]   : QUEDEF;
+		WHILE NOT REMQUE (.ownq [QUE_L_HEAD], t) DO FREETXT (t);
+		WHILE NOT REMQUE (.modq [QUE_L_HEAD], t) DO FREETXT (t);
+		WHILE NOT REMQUE (.hdrq [QUE_L_HEAD], t) DO FREETXT (t);
+		LIB$FREE_VM (%REF (MLST_S_MLSTDEF), mlst);
+	    END;
+    	    WHILE NOT REMQUE (.FSRVQUE, FSRV) DO
+    	    BEGIN
+    	    	BIND
+    	    	    HQ = FSRV [FSRV_Q_HOSTQ] : QUEDEF,
+    	    	    UQ = FSRV [FSRV_Q_USERQ] : QUEDEF;
+    	    	WHILE NOT REMQUE (.HQ [QUE_L_HEAD], U) DO
+    	    	    LIB$FREE_VM (%REF (USE_S_USEDEF), U);
+    	    	WHILE NOT REMQUE (.UQ [QUE_L_HEAD], U) DO
+    	    	    LIB$FREE_VM (%REF (USE_S_USEDEF), U);
+    	    	LIB$FREE_VM (%REF (FSRV_S_FSRVDEF), FSRV);
+    	    END;
+    	END;
+    END
+    ELSE
+    BEGIN
+    	INIT_QUEUE (SYSUSERS, MLISTS, FSRVQUE, RWRULES, PATHLIST, ALIASES);
+    END;
+
+    IF .REINIT EQL 0 OR .RSTMSK [RST_V_CONFIG] THEN
+    BEGIN
+    	STATUS = LOAD_MXCONFIG (%ASCID'MX_CONFIG', %ASCID'MX_DIR:.MXCFG', 0,
+    	        CFG_M_MLFINFO OR CFG_M_SYSUSERS OR CFG_M_MLISTS OR CFG_M_FSRVINFO
+                OR CFG_M_RWRULES OR CFG_M_PATHLIST OR CFG_M_ALIASES OR CFG_M_ROUTERINFO);
+        IF .status THEN
+            status = REWRITE_INIT (.rstmsk [RST_V_CONFIG]);
+
+    	IF NOT .STATUS THEN RETURN .STATUS;
+    END;
+
+    SS$_NORMAL
+
+END; ! INIT
+
+%SBTTL 'PROCESS'
+GLOBAL ROUTINE PROCESS (QCTX, QENT_A) = 
+BEGIN
+!++
+! FUNCTIONAL DESCRIPTION:
+!
+!   Processes a single queue entry.
+!
+! RETURNS:  	cond_value, longword (unsigned), write only, by value
+!
+! PROTOTYPE:
+!
+!   PROCESS  qctx, qent
+!
+! IMPLICIT INPUTS:  None.
+!
+! IMPLICIT OUTPUTS: None.
+!
+! COMPLETION CODES:
+!
+!   SS$_NORMAL:	    	normal successful completion.
+!
+! SIDE EFFECTS:
+!
+!   None.
+!--
+    BIND
+    	QENT	= .QENT_A   : QENTDEF;
+
+    LOCAL
+    	MLIST	: QUEDEF,
+    	MLCTRL	: QUEDEF,
+    	HDRQ	: QUEDEF,
+    	RETRY	: QUEDEF,
+    	REFENT	: QENTDEF,
+    	envl	: ENVLDEF,
+    	RCPT	: REF RCPTDEF,
+    	RCPT2	: REF RCPTDEF,
+    	TXT 	: REF TXTDEF,
+    	MLST	: REF MLSTDEF,
+    	FSRV	: REF FSRVDEF,
+    	USR 	: BLOCK [DSC$K_S_BLN,BYTE],
+    	STR 	: BLOCK [DSC$K_S_BLN,BYTE],
+    	SENDER	: BLOCK [DSC$K_S_BLN,BYTE],
+    	INTBUF	: BLOCK [8,BYTE],
+    	NOWTIM	: BLOCK [8,BYTE],
+    	dsnctx,
+    	RCPT_COUNT,
+    	MSG_SIZE,
+	local_postmaster_msg,
+    	STATUS;
+
+    INIT_QUEUE (HDRQ);
+    INIT_DYNDESC (STR, USR);
+
+    IF NOT .LOG_OPENED THEN
+    BEGIN
+    	$FAB_INIT (FAB=LOG_FAB, FAC=PUT, SHR=SHRPUT, RFM=VAR, RAT=CR,
+    	    	MRS=0, FNM='FILESERV_LOG', DNM='MX_MLF_DIR:.LOG');
+    	$RAB_INIT (RAB=LOG_RAB, FAB=LOG_FAB);
+    	STATUS = $OPEN (FAB=LOG_FAB);
+    	IF .STATUS THEN LOG_RAB [RAB$V_EOF] = 1
+    	ELSE STATUS = $CREATE (FAB=LOG_FAB);
+    	IF .STATUS THEN
+    	BEGIN
+    	    STATUS = $CONNECT (RAB=LOG_RAB);
+    	    IF NOT .STATUS THEN
+    	    BEGIN
+    	    	$CLOSE (FAB=LOG_FAB);
+    	    	LOG_OPENED = 0;
+    	    	SIGNAL (.STATUS);
+    	    END
+    	    ELSE LOG_OPENED = 1;
+    	END
+    	ELSE LOG_OPENED = 0;
+    END;
+
+    TRACE_INIT ('mlf', 'mlf');
+
+    TRACE ('===================================================');
+    TRACE ('Processing queue entry number !UL', .QENT [QENT_L_ENTNUM]);
+
+    status = 0;
+    IF (.qent [MXQ_L_BACKREF] NEQU 0)
+    THEN
+	status = FLQ_READ (qctx, .qent [MXQ_L_BACKREF], refent);
+
+    IF NOT(.status)
+    THEN
+	BEGIN
+	ALARM ('MX MLF: error reading BACKREF !UL for entry !UL: !XL',
+			.qent [MXQ_L_BACKREF], .qent [QENT_L_ENTNUM], .status);
+	!
+	!  Cancel this entry and return
+	!
+	TRACE ('Cancelling entry---invalid BACKREF !UL', .qent [MXQ_L_BACKREF]);
+	qent [QENT_L_STATUS] = FLQ_K_STCAN;
+	FLQ_UPDATE (qctx, qent);
+	RETURN (SS$_NORMAL);
+	END
+    ELSE
+	status = FLQ_UPDATE (qctx, refent);
+
+    !
+    !  Now read the MLF_INFO file.
+    !
+    CH$FILL (%CHAR (0), ENVL_S_ENVLDEF, envl);
+    INIT_QUEUE (envl [ENVL_Q_RCPTQUE]);
+    status = READ_ENVELOPE (.qctx, qent, %ASCID'MLF_INFO', envl);
+    IF NOT(.status)
+    THEN
+	BEGIN
+	ALARM ('MX MLF: error reading MLF_INFO file for entry !UL: !XL',
+			.qent [QENT_L_ENTNUM], .status);
+	TRACE ('%PROCESS, error reading MLF_INFO file for entry !UL: !XL',
+			.qent [QENT_L_ENTNUM], .status);
+	END
+    ELSE
+	BEGIN
+	status = READ_HDRS (.qctx, refent, %ASCID'HDR_INFO', hdrq);
+	IF NOT(.status)
+	THEN
+	    BEGIN
+	    ALARM ('MX MLF: error reading HDR_INFO file for entry !UL: !XL',
+			.refent [QENT_L_ENTNUM], .status);
+	    TRACE ('%PROCESS, error reading HDR_INFO file for entry !UL: !XL',
+			.refent [QENT_L_ENTNUM], .status);
+	    END;
+	END;
+
+    IF NOT(.status) OR .envl [ENVL_L_RCPTCOUNT] EQL 0
+    THEN
+	BEGIN
+	!
+	!  Eliminate pointer to this LOCAL entry and CANCEL the Router
+	!  entry if there are no other forward pointers.
+	!
+	refent [MXQ_L_MLFREF] = 0;
+	IF CHECK_REFS_ZERO (refent)	!If there are no other forwards....
+	THEN
+	    BEGIN
+	    ALARM ('MX MLF: HOLDing Router entry !UL', .refent [QENT_L_ENTNUM]);
+	    refent [QENT_L_STATUS] = FLQ_K_STOPH;
+	    END;
+
+	status = FLQ_UPDATE (qctx, refent);
+	qent [QENT_L_STATUS] = FLQ_K_STCAN;	!Cancel this entry
+	status = FLQ_UPDATE (qctx, qent);
+	FREE_STRINGS (str);
+	RETURN (SS$_NORMAL);
+	END;
+
+    MSG_SIZE = .QENT [QENT_L_SIZE] / .envl [ENVL_L_RCPTCOUNT];
+    BEGIN
+    	BIND_ENVL_FIELDS (envl);
+    	INIT_SDESC (sender, .fromadr [TXT_W_LEN], fromadr [TXT_T_TEXT]);
+    END;
+
+    ERROR_INIT (.QCTX, QENT, SENDER, HDRQ);
+    DSN_REPORT_INIT (dsnctx, envl);
+
+    local_postmaster_msg = ((.envl [ENVL_L_ORIGIN] EQL MX_K_ORG_LOCAL) AND
+	    	CH$EQL (.sender [DSC$W_LENGTH], .sender [DSC$A_POINTER], 2,
+		UPLIT ('<>'), %C' '));
+
+    !
+    !  If it's not a local postmaster message, see if it's from some
+    !  other automated mail daemon.
+    !
+    IF NOT(.local_postmaster_msg)
+    THEN
+	local_postmaster_msg = FROM_DAEMON (hdrq);
+
+    IF (.local_postmaster_msg)
+    THEN
+	TRACE ('  This is from an automated mail daemon; ignoring it....');
+
+    WHILE NOT REMQUE_HEAD (envl [ENVL_Q_RCPTQUE], RCPT) DO
+    BEGIN
+    	BIND
+    	    Xaddr = .rcpt [RCPT_A_ADDR]  : TXTDEF,
+    	    Xrte  =  rcpt [RCPT_A_ROUTE] : REF TXTDEF;
+
+    	IF .Xaddr [TXT_W_LEN] GTR 1 AND CH$RCHAR (Xaddr [TXT_T_TEXT]) EQL %C'"'
+    	THEN
+    	BEGIN
+    	    LOCAL newadr    : REF TXTDEF;
+    	    newadr = MEM_GETTXT (.Xaddr [TXT_W_LEN]-2, CH$PLUS (Xaddr [TXT_T_TEXT], 1));
+    	    FREETXT (Xaddr);
+    	    Xaddr = .newadr;
+    	END;
+
+    	TRACE ('  Checking local name: !AD', .Xaddr [TXT_W_LEN], Xaddr [TXT_T_TEXT]);
+
+        FREE_STRINGS (str);
+    	STATUS = FILESERV_CHECK (.RCPT, FSRV);
+    	IF NOT .STATUS THEN
+    	    STATUS = MAILING_LIST (.RCPT, MLST, str);
+
+    	SELECTONE .STATUS OF
+    	SET
+    	    [MX__MAILLIST, MX__MAILLISTD] :
+    	    	BEGIN
+    	    	    TRACE ('    This is a mailing list.');
+		    IF NOT(.local_postmaster_msg) THEN
+			FORWARD_TO_LIST (.qctx, qent, sender, .rcpt, .mlst,
+					hdrq, (.status EQLU MX__MAILLISTD), .msg_size)
+		    ELSE
+			FORWARD_TO_SYSTEM_USERS (.qctx, qent, sender, hdrq);
+    	    	    rcpt [RCPT_L_DSN_STATUS] = MX__DSN_S__OTHER;
+    	    	    rcpt [RCPT_L_STATUS] = SS$_NORMAL;
+    	    	    rcpt [RCPT_L_DSN_ACTION] = (IF .local_postmaster_msg THEN DSN__EXPANDED ELSE DSN__DELIVERED);
+    	    	    DSN_REPORT_ADD_RCPT (dsnctx, rcpt, 2);
+    	    	END;
+
+	    [MX__LISTOWNER] :
+		BEGIN
+    	    	    TRACE ('    This is a mailing list owner message.');
+    	    	    FORWARD_TO_LIST_OWNER (.qctx, qent, sender, .rcpt, .mlst, hdrq);
+    	    	    rcpt [RCPT_L_DSN_STATUS] = MX__DSN_S__OTHER;
+    	    	    rcpt [RCPT_L_STATUS] = SS$_NORMAL;
+    	    	    rcpt [RCPT_L_DSN_ACTION] = DSN__EXPANDED;
+    	    	    DSN_REPORT_ADD_RCPT (dsnctx, rcpt, 2);
+		END;
+
+    	    [MX__MLCTRL] :
+    	    	BEGIN
+    	    	    TRACE ('    This is a list control address.');
+                    IF .str [DSC$W_LENGTH] NEQU 0 THEN
+                        local_postmaster_msg = 0;
+		    IF NOT .local_postmaster_msg THEN
+                    BEGIN
+                        IF .str [DSC$W_LENGTH] NEQU 0 THEN
+                            MLIST_CONFIRM_TRANSACTION (.qctx, qent, sender, hdrq, str)
+                        ELSE IF .mlst EQLA 0 THEN
+			    LIST_CTRL_LISTSERV (.QCTX, QENT, SENDER, HDRQ)
+			ELSE
+			    LIST_CTRL_REQ (.QCTX, QENT, SENDER, .MLST, HDRQ);
+                    END
+		    ELSE
+			FORWARD_TO_SYSTEM_USERS (.qctx, qent, sender, hdrq);
+    	    	    rcpt [RCPT_L_DSN_STATUS] = MX__DSN_S__OTHER;
+    	    	    rcpt [RCPT_L_STATUS] = SS$_NORMAL;
+    	    	    rcpt [RCPT_L_DSN_ACTION] = (IF .local_postmaster_msg THEN DSN__EXPANDED ELSE DSN__DELIVERED);
+    	    	    DSN_REPORT_ADD_RCPT (dsnctx, rcpt, 2);
+    	    	END;
+
+    	    [MX__FILEREQ] :
+    	    	BEGIN
+    	    	    TRACE ('    This is a FileServ request.');
+		    IF NOT(.local_postmaster_msg)
+		    THEN
+			FILESERV_PROCESS (.qctx, qent, sender, .rcpt, .fsrv,
+					hdrq)
+		    ELSE
+			FORWARD_TO_SYSTEM_USERS (.qctx, qent, sender, hdrq);
+    	    	    rcpt [RCPT_L_DSN_STATUS] = MX__DSN_S__OTHER;
+    	    	    rcpt [RCPT_L_STATUS] = SS$_NORMAL;
+    	    	    rcpt [RCPT_L_DSN_ACTION] = (IF .local_postmaster_msg THEN DSN__EXPANDED ELSE DSN__DELIVERED);
+    	    	    DSN_REPORT_ADD_RCPT (dsnctx, rcpt, 2);
+    	    	END;
+
+    	    [OTHERWISE] :
+    	    	BEGIN
+    	    	    TRACE ('     Don''t know what this is.');
+    	    	    rcpt [RCPT_L_DSN_STATUS] = MX__DSN_FA_BADMBX;
+    	    	    rcpt [RCPT_L_STATUS] = MX__INVADDR;
+    	    	    DSN_REPORT_ADD_RCPT (dsnctx, rcpt, 2);
+    	    	END;
+
+    	TES;
+
+    	MEM_FREERCPT (RCPT);
+
+    END; ! while not remque
+
+    ERROR_SEND ();
+    DSN_REPORT_SEND (dsnctx, .qctx, MX_K_ORG_LOCAL, hdrq, refent, envl);
+    DISPOSE_ENVELOPE (envl);
+
+    STATUS = FLQ_READ (QCTX, .QENT [MXQ_L_BACKREF], REFENT);
+    REFENT [MXQ_L_MLFREF] = 0;
+    IF CHECK_REFS_ZERO (REFENT) THEN REFENT [QENT_L_STATUS] = FLQ_K_STFIN;
+    FLQ_UPDATE (QCTX, REFENT);
+    QENT [QENT_L_STATUS] = FLQ_K_STFIN;
+    TRACE ('  All done with this entry.');
+
+    FLQ_UPDATE (QCTX, QENT);
+
+    WHILE NOT REMQUE (.HDRQ [QUE_L_HEAD], TXT) DO FREETXT (TXT);
+
+    FREE_STRINGS (STR, USR);
+
+    IF .LOG_OPENED THEN $FLUSH (RAB=LOG_RAB);
+
+    TRACE_CLOSE;
+
+    SS$_NORMAL
+
+END; ! PROCESS
+
+END
+ELUDOM

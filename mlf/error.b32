@@ -1,0 +1,709 @@
+%TITLE 'ERROR'
+MODULE ERROR (IDENT='V2.1',
+	ADDRESSING_MODE (EXTERNAL=LONG_RELATIVE, NONEXTERNAL=LONG_RELATIVE)) =
+BEGIN
+!++
+! FACILITY:	    MX mailing list/fileserver agent
+!
+! ABSTRACT:	    routines for composing error messages.
+!
+! MODULE DESCRIPTION:
+!
+!   Not reentrant!!
+!
+! AUTHOR:	    M. Madison
+!
+! Copyright (c) 2008, Matthew Madison.
+! 
+! All rights reserved.
+! 
+! Redistribution and use in source and binary forms, with or without
+! modification, are permitted provided that the following conditions
+! are met:
+! 
+!     * Redistributions of source code must retain the above
+!       copyright notice, this list of conditions and the following
+!       disclaimer.
+!     * Redistributions in binary form must reproduce the above
+!       copyright notice, this list of conditions and the following
+!       disclaimer in the documentation and/or other materials provided
+!       with the distribution.
+!     * Neither the name of the copyright owner nor the names of any
+!       other contributors may be used to endorse or promote products
+!       derived from this software without specific prior written
+!       permission.
+! 
+! THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
+! "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
+! LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
+! A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
+! OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
+! SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
+! LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
+! DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
+! THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
+! (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
+! OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+!
+! CREATION DATE:    17-SEP-1990
+!
+! MODIFICATION HISTORY:
+!
+!   17-SEP-1990	V1.0	Madison	    Initial coding.
+!   07-FEB-1991	V1.0-1	Madison	    Use COPY_FILE to copy in msg text.
+!   25-OCT-1991	V1.1	Madison	    Use RCPTDEF.
+!   15-NOV-1991	V1.1-1	Madison	    New MEM RCPT rtns.
+!   13-MAR-1992	V1.1-2	Madison	    Use MAKE_ADDRESS.
+!   29-Oct-1992 V1.2	Munroe	    Add another error code.
+!    4-FEB-1993 V1.3	Goatley     Change "Message follows" to "Rejected Msg".
+!   30-APR-1993 V1.4	Goatley     Changed LISTSERV to MXserver.
+!   10-FEB-1994 V1.5	Goatley     Modify to work with FLQ V2.
+!   29-MAR-1994 V1.5-1	Goatley     Make ORGADR look better.
+!   12-SEP-1995 V1.6	Goatley     Add digest support.
+!   14-JAN-1997	V1.7	Madison	    Eliminate MDMLIB.
+!   02-MAY-1997	V1.8	Madison	    New address formatter.
+!    6-MAY-1997 V1.8-1	Goatley	    For mailing lists, use HOSTNAME if there.
+!   29-AUG-1997	V1.9	Madison	    New RCPT structure.
+!   01-SEP-1997	V1.9-1	Madison	    Reset state after sending error msg.
+!    2-OCT-1997 V1.9-2	Goatley     Add optional second str for MLIST_ERROR.
+!    2-OCT-1997 V1.9-3	Goatley	    Add routine to add 2nd address to rcptq.
+!   12-JUL-1998	V2.0	Madison	    Got rid of RCP_ERROR -- no longer needed.
+!    9-FEB-2012 V2.1	Goatley     Add Message-ID:.
+!--
+    LIBRARY 'SYS$LIBRARY:STARLET';
+    LIBRARY 'MX_SRC_COMMON:FLQ';
+    LIBRARY 'MX_SRC_COMMON:MX';
+    LIBRARY 'MX_SRC_COMMON:AGENT';
+    LIBRARY 'MX_SRC_COMMON:MX_LCLDEFS';
+    LIBRARY 'MLF';
+
+    FORWARD ROUTINE
+	ERROR_INIT,
+	MLIST_ERROR,
+	MLIST_CTRL_ERROR,
+	FSRV_ERROR,
+	FORWARD_ERROR,
+	ERROR_SEND,
+	OPEN_ERROR_FILE,
+	ERROR_ADD_RCPT;
+
+    EXTERNAL LITERAL
+	MX__INVADDR, MX__ALRSUB, MX__NOTSUB, MX__UNKSET, MX__SETACCESS,
+	MX__NODIGEST, MX__PROCERR;
+
+    EXTERNAL
+	CONFIG	: CFGDEF;
+
+    EXTERNAL ROUTINE
+    	G_HAT (MX_FILE_OPEN, MX_FILE_WRITE, MX_FILE_CLOSE, MX_MKDATE),
+	G_HAT (WRITE_ENVELOPE, WRITE_HDRS, READ_HDRS, FORMAT_HDR, COPY_FILE,
+		MEM_GETRCPT, MEM_FREERCPT, MX_FMT_LCL_ADDR, MEM_GETTXT,
+    	    	DISPOSE_ENVELOPE, MAKE_MESSAGE_ID),
+	G_HAT (LIB$SYS_FAO, STR$CONCAT, STR$PREFIX, STR$FREE1_DX,
+	    STR$COMPARE, STR$COPY_DX, STR$DUPL_CHAR, STR$COMPARE_EQL);
+
+    OWN
+	QCTX,
+	QENT	: REF QENTDEF,
+	RETADR	: BLOCK [DSC$K_S_BLN,BYTE],
+	OWNADR	: BLOCK [DSC$K_S_BLN,BYTE],
+	ERRENT	: QENTDEF,
+	HDRQ	: REF QUEDEF,
+	LAST_DEST_ERR_DEST,
+	UNIT,
+	ERRMSGF	: BLOCK [DSC$K_S_BLN,BYTE] PRESET (
+		    [DSC$B_DTYPE] = DSC$K_DTYPE_T,
+		    [DSC$B_CLASS] = DSC$K_CLASS_D,
+		    [DSC$W_LENGTH] = 0,
+		    [DSC$A_POINTER] = 0),
+	ERROR_FOUND,
+	DID_FSERR;
+
+    BIND
+	postmaster	= %ASCID'Postmaster',
+	ascid_atsign	= %ASCID'@',
+	ascid_blanks	= %ASCID'    ',
+	src_info_d	= %ASCID'SRC_INFO',
+	null_addr_d	= %ASCID'<>';
+
+
+%SBTTL 'ERROR_INIT'
+GLOBAL ROUTINE ERROR_INIT (XQCTX, XQENT_A, RET_A, HDRQ_A) =
+BEGIN
+!++
+! FUNCTIONAL DESCRIPTION:
+!
+!   Initializes things for an error return message.
+!
+! RETURNS:	cond_value, longword (unsigned), write only, by value
+!
+! PROTOTYPE:
+!
+!   ERROR_INIT	qctx, qent, retadr
+!
+! IMPLICIT INPUTS:  None.
+!
+! IMPLICIT OUTPUTS: None.
+!
+! COMPLETION CODES:
+!
+!   SS$_NORMAL:		normal successful completion.
+!
+! SIDE EFFECTS:
+!
+!   None.
+!--
+
+    QCTX = .XQCTX;
+    QENT = .XQENT_A;
+    HDRQ = .HDRQ_A;
+    INIT_DYNDESC (RETADR, ownadr);
+
+    IF STR$COMPARE_EQL (.RET_A, null_addr_d) NEQ 0 THEN
+	STR$COPY_DX (RETADR, .RET_A);
+
+    ERROR_FOUND = 0;
+
+    SS$_NORMAL
+
+END; ! ERROR_INIT
+
+%SBTTL 'MLIST_ERROR'
+GLOBAL ROUTINE MLIST_ERROR (MLST_A, ERRMSG_A, ERRMSG2_A) =
+BEGIN
+!++
+! FUNCTIONAL DESCRIPTION:
+!
+!   Adds general error message for mailing list delivery.
+!
+! RETURNS:	cond_value, longword (unsigned), write only, by value
+!
+! PROTOTYPE:
+!
+!   MLIST_ERROR  mlst, errmsg
+!
+! IMPLICIT INPUTS:  None.
+!
+! IMPLICIT OUTPUTS: None.
+!
+! COMPLETION CODES:
+!
+!   SS$_NORMAL:		normal successful completion.
+!
+! SIDE EFFECTS:
+!
+!   None.
+!--
+    BIND
+	MLST	= .MLST_A   : MLSTDEF,
+	ERRMSG	= .ERRMSG_A : BLOCK [,BYTE];
+
+    BUILTIN
+	ACTUALCOUNT;
+
+    LOCAL
+	STR	: BLOCK [DSC$K_S_BLN,BYTE];
+
+    IF NOT .ERROR_FOUND THEN
+	OPEN_ERROR_FILE (mlst);
+    IF NOT .ERROR_FOUND THEN RETURN SS$_NORMAL;
+
+    INIT_DYNDESC (STR);
+
+    IF (.mlst_a EQLA 0)
+    THEN
+	STR$COPY_DX (str, %ASCID'Error in MXserver request:')
+    ELSE
+	LIB$SYS_FAO (%ASCID'Error in delivery to mailing list !AD:', 0, str,
+		.mlst [MLST_W_NAME], mlst [MLST_T_NAME]);
+
+    MX_FILE_WRITE (.UNIT, STR);
+    ERRENT [QENT_L_SIZE] = .ERRENT [QENT_L_SIZE] + .STR [DSC$W_LENGTH];
+    STR$CONCAT (STR, ascid_blanks, ERRMSG);
+    MX_FILE_WRITE (.UNIT, STR);
+    ERRENT [QENT_L_SIZE] = .ERRENT [QENT_L_SIZE] + .STR [DSC$W_LENGTH];
+
+    IF (ACTUALCOUNT() GTR 2) AND (.errmsg2_a NEQA 0)
+    THEN
+	BEGIN
+	STR$CONCAT (str, ascid_blanks, .errmsg2_a);
+	MX_FILE_WRITE (.unit, str);
+	errent [QENT_L_SIZE] = .errent [QENT_L_SIZE] + .str [DSC$W_LENGTH];
+	END;
+
+    FREE_STRINGS (STR);
+
+    SS$_NORMAL
+
+END; ! MLIST_ERROR
+
+%SBTTL 'MLIST_CTRL_ERROR'
+GLOBAL ROUTINE MLIST_CTRL_ERROR (MLST_A, ERRQ_A, CODE) =
+BEGIN
+!++
+! FUNCTIONAL DESCRIPTION:
+!
+!   Adds general error message for mailing list delivery.
+!
+! RETURNS:	cond_value, longword (unsigned), write only, by value
+!
+! PROTOTYPE:
+!
+!   MLIST_CTRL_ERROR  mlst, errmsg
+!
+! IMPLICIT INPUTS:  None.
+!
+! IMPLICIT OUTPUTS: None.
+!
+! COMPLETION CODES:
+!
+!   SS$_NORMAL:		normal successful completion.
+!
+! SIDE EFFECTS:
+!
+!   None.
+!--
+    BIND
+	MLST	= .MLST_A   : MLSTDEF,
+	ERRQ	= .ERRQ_A   : QUEDEF;
+
+    LOCAL
+	R	: REF TXTDEF,
+	MSGBUF	: VECTOR [255,BYTE],
+	MSGDSC	: BLOCK [DSC$K_S_BLN,BYTE],
+	MSGLEN	: WORD,
+	STR	: BLOCK [DSC$K_S_BLN,BYTE];
+
+    IF NOT .ERROR_FOUND THEN
+	OPEN_ERROR_FILE (mlst);
+    IF NOT .ERROR_FOUND THEN RETURN SS$_NORMAL;
+
+    MSGDSC [DSC$B_DTYPE] = DSC$K_DTYPE_T;
+    MSGDSC [DSC$B_CLASS] = DSC$K_CLASS_S;
+    MSGDSC [DSC$A_POINTER] = MSGBUF;
+    MSGDSC [DSC$W_LENGTH] = %ALLOCATION (MSGBUF);
+
+
+    INIT_DYNDESC (STR);
+
+    SELECTONE .CODE OF
+    SET
+    [MLCMD__ADD] :
+	LIB$SYS_FAO (%ASCID'Error adding users to mailing list !AD:', 0, STR,
+	.MLST [MLST_W_NAME], MLST [MLST_T_NAME]);
+    [MLCMD__REMOVE] :
+	LIB$SYS_FAO (%ASCID'Error removing users from mailing list !AD:', 0, STR,
+	.MLST [MLST_W_NAME], MLST [MLST_T_NAME]);
+    [MLCMD__SET] :
+	LIB$SYS_FAO (%ASCID'Error SETting users on mailing list !AD:', 0, STR,
+	.MLST [MLST_W_NAME], MLST [MLST_T_NAME]);
+    TES;
+    MX_FILE_WRITE (.UNIT, STR);
+    ERRENT [QENT_L_SIZE] = .ERRENT [QENT_L_SIZE] + .STR [DSC$W_LENGTH];
+
+    R = .ERRQ [QUE_L_HEAD];
+    WHILE .R NEQA ERRQ [QUE_L_HEAD] DO
+    BEGIN
+	LOCAL ERRSTAT;
+	ERRSTAT = (SELECTONE .R [TXT_W_CODE] OF
+	    SET
+		[MLERR__INVADDR]    : MX__INVADDR;
+		[MLERR__ALRSUB]	    : MX__ALRSUB;
+		[MLERR__NOTSUB]	    : MX__NOTSUB;
+		[MLERR__UNKSET]	    : MX__UNKSET;
+		[MLERR__SETACCESS]  : MX__SETACCESS;
+		[MLERR__NODIGEST]   : MX__NODIGEST;
+    	    	[MLERR__PROCERR]    : MX__PROCERR;
+	    TES);
+	MSGDSC [DSC$W_LENGTH] = %ALLOCATION (MSGBUF);
+	$GETMSG (MSGID=.ERRSTAT, MSGLEN=MSGLEN, BUFADR=MSGDSC, FLAGS=1);
+	MSGDSC [DSC$W_LENGTH] = .MSGLEN;
+	LIB$SYS_FAO (%ASCID'  !AD: !AS', 0, STR, .R [TXT_W_LEN],
+	    R [TXT_T_TEXT], MSGDSC);
+	MX_FILE_WRITE (.UNIT, STR);
+	ERRENT [QENT_L_SIZE] = .ERRENT [QENT_L_SIZE] + .STR [DSC$W_LENGTH];
+	R = .R [TXT_L_FLINK];
+    END;
+
+    FREE_STRINGS (STR);
+
+    SS$_NORMAL
+
+END; ! MLIST_CTRL_ERROR
+
+%SBTTL 'FSRV_ERROR'
+GLOBAL ROUTINE FSRV_ERROR (FSRV_A, ERRMSG_A) =
+BEGIN
+!++
+! FUNCTIONAL DESCRIPTION:
+!
+!   Adds general error message for file server processing.
+!
+! RETURNS:	cond_value, longword (unsigned), write only, by value
+!
+! PROTOTYPE:
+!
+!   FSRV_ERROR	errmsg
+!
+! IMPLICIT INPUTS:  None.
+!
+! IMPLICIT OUTPUTS: None.
+!
+! COMPLETION CODES:
+!
+!   SS$_NORMAL:		normal successful completion.
+!
+! SIDE EFFECTS:
+!
+!   None.
+!--
+    BIND
+	FSRV	= .FSRV_A   : FSRVDEF,
+	ERRMSG	= .ERRMSG_A : BLOCK [,BYTE];
+
+    IF NOT .ERROR_FOUND THEN
+	OPEN_ERROR_FILE (0);
+    IF NOT .ERROR_FOUND THEN RETURN SS$_NORMAL;
+
+    IF NOT .DID_FSERR THEN
+    BEGIN
+	LOCAL STR : BLOCK [DSC$K_S_BLN,BYTE];
+	INIT_DYNDESC (STR);
+	DID_FSERR = 1;
+	LIB$SYS_FAO (
+	    %ASCID'Error(s) occurred in processing request to file server !AD',
+	    0, STR, .FSRV [FSRV_W_NAME], FSRV [FSRV_T_NAME]);
+	MX_FILE_WRITE (.UNIT, STR);
+	ERRENT [QENT_L_SIZE] = .ERRENT [QENT_L_SIZE] + .STR [DSC$W_LENGTH];
+	MX_FILE_WRITE (.UNIT, %ASCID'');
+	FREE_STRINGS (STR);
+    END;
+
+    MX_FILE_WRITE (.UNIT, ERRMSG);
+    ERRENT [QENT_L_SIZE] = .ERRENT [QENT_L_SIZE] + .ERRMSG [DSC$W_LENGTH];
+
+    SS$_NORMAL
+
+END; ! MLIST_ERROR
+
+%SBTTL 'FORWARD_ERROR'
+GLOBAL ROUTINE FORWARD_ERROR (RCP_A, FWDQ_A, ERRSTAT) =
+BEGIN
+!++
+! FUNCTIONAL DESCRIPTION:
+!
+!   Adds error message for forwarding error.
+!
+! RETURNS:	cond_value, longword (unsigned), write only, by value
+!
+! PROTOTYPE:
+!
+!   FORWARD_ERROR
+!
+! IMPLICIT INPUTS:  None.
+!
+! IMPLICIT OUTPUTS: None.
+!
+! COMPLETION CODES:
+!
+!   SS$_NORMAL:		normal successful completion.
+!
+! SIDE EFFECTS:
+!
+!   None.
+!--
+    BIND
+	RCP	= .RCP_A    : TXTDEF,
+	FWDQ	= .FWDQ_A   : QUEDEF;
+
+    LOCAL
+	FWDUSR	: REF TXTDEF,
+	MSGBUF	: VECTOR [255,BYTE],
+	MSGDSC	: BLOCK [DSC$K_S_BLN,BYTE],
+	MSGLEN	: WORD,
+	STR	: BLOCK [DSC$K_S_BLN,BYTE];
+
+    IF NOT .ERROR_FOUND THEN
+	OPEN_ERROR_FILE (0);
+    IF NOT .ERROR_FOUND THEN RETURN SS$_NORMAL;
+
+    INIT_DYNDESC (STR);
+
+    MSGDSC [DSC$B_DTYPE] = DSC$K_DTYPE_T;
+    MSGDSC [DSC$B_CLASS] = DSC$K_CLASS_S;
+    MSGDSC [DSC$A_POINTER] = MSGBUF;
+    MSGDSC [DSC$W_LENGTH] = %ALLOCATION (MSGBUF);
+    $GETMSG (MSGID=.ERRSTAT, MSGLEN=MSGLEN, BUFADR=MSGDSC, FLAGS=1);
+    LIB$SYS_FAO (%ASCID'Error in resend from username !AD to:', 0,
+	STR, .RCP [TXT_W_LEN], RCP [TXT_T_TEXT]);
+    MX_FILE_WRITE (.UNIT, STR);
+    ERRENT [QENT_L_SIZE] = .ERRENT [QENT_L_SIZE] + .STR [DSC$W_LENGTH];
+    FWDUSR = .FWDQ [QUE_L_HEAD];
+    WHILE .FWDUSR NEQA FWDQ [QUE_L_HEAD] DO
+    BEGIN
+	LIB$SYS_FAO (%ASCID'      !AD', 0, STR, .FWDUSR [TXT_W_LEN],
+	    FWDUSR [TXT_T_TEXT]);
+	MX_FILE_WRITE (.UNIT, STR);
+	ERRENT [QENT_L_SIZE] = .ERRENT [QENT_L_SIZE] + .STR [DSC$W_LENGTH];
+	FWDUSR = .FWDUSR [TXT_L_FLINK];
+    END;
+    LIB$SYS_FAO (%ASCID'  !AD', 0, STR, .MSGLEN, MSGBUF);
+    MX_FILE_WRITE (.UNIT, STR);
+    ERRENT [QENT_L_SIZE] = .ERRENT [QENT_L_SIZE] + .STR [DSC$W_LENGTH];
+
+    FREE_STRINGS (STR);
+
+    SS$_NORMAL
+
+END; ! FORWARD_ERROR
+
+%SBTTL 'OPEN_ERROR_FILE'
+ROUTINE OPEN_ERROR_FILE (mlst_a) =
+BEGIN
+!++
+! FUNCTIONAL DESCRIPTION:
+!
+!   Opens an error message file.
+!
+! RETURNS:	cond_value, longword (unsigned), write only, by value
+!
+! PROTOTYPE:
+!
+!   OPEN_ERROR_FILE
+!
+! IMPLICIT INPUTS:  None.
+!
+! IMPLICIT OUTPUTS: None.
+!
+! COMPLETION CODES:
+!
+!   SS$_NORMAL:		normal successful completion.
+!
+! SIDE EFFECTS:
+!
+!   None.
+!--
+    BIND
+	mlst	= .mlst_a	: MLSTDEF;
+
+    LOCAL
+    	envl	: ENVLDEF,
+	HDRQ	: QUEDEF,
+	TXT	: REF TXTDEF,
+	RCPT	: REF RCPTDEF,
+	STR	: BLOCK [DSC$K_S_BLN,BYTE],
+	host	: $BBLOCK [DSC$K_S_BLN],
+	STATUS;
+
+    IF .RETADR [DSC$W_LENGTH] EQL 0 THEN RETURN SS$_NORMAL;
+
+    INIT_DYNDESC (STR);
+
+    DID_FSERR = 0;
+    ERROR_FOUND = 1;
+
+    CH$FILL (%CHAR (0), ENVL_S_ENVLDEF, envl);
+    INIT_QUEUE (envl [ENVL_Q_RCPTQUE], hdrq);
+    FLQ_INIT_QENT (ERRENT);
+    ERRENT [QENT_L_STATUS] = FLQ_K_STINP;
+    ERRENT [QENT_V_LOCK] = 1;
+    errent [QENT_L_DSTPRC] = FLQ_K_MX_ROUTER;
+    errent [QENT_L_ORIGIN] = MX_K_ORG_LOCAL;
+    errent [QENT_W_ORGADR] = 2;
+    CH$MOVE(2, UPLIT(%ASCII'<>'), errent [QENT_T_ORGADR]);
+
+    STATUS = FLQ_ADD (QCTX, ERRENT);
+    IF NOT .STATUS THEN SIGNAL (.STATUS);
+
+    MX_MKDATE (0, STR, 0);
+    INSTXT (STR, .HDRQ [QUE_L_TAIL], MX_K_HDR_DATE);
+    MAKE_MESSAGE_ID (errent [QENT_L_ENTNUM], str);
+    INSTXT (str, .HDRQ [QUE_L_TAIL], MX_K_HDR_MESSAGE_ID);
+
+    !
+    !  If this is a mailing list and it has a hostname, use it.
+    !
+    IF (mlst NEQA 0) AND (.mlst [MLST_W_HOSTNAME] NEQ 0) THEN
+    BEGIN
+	INIT_SDESC (host, .mlst [MLST_W_HOSTNAME], mlst [MLST_T_HOSTNAME]);
+	STR$CONCAT (str, postmaster, ascid_atsign, host);
+    END
+    ELSE
+	MX_FMT_LCL_ADDR (MX__FMT_FROM, postmaster, str);
+
+    STORE_ORGADR (errent, str);
+
+    LIB$SYS_FAO(%ASCID'MX mailing list and file server <!AS>', 0, str, str);
+    INSTXT (STR, .HDRQ [QUE_L_TAIL], MX_K_HDR_FROM);
+
+    INSTXT (RETADR, .HDRQ [QUE_L_TAIL], MX_K_HDR_TO);
+    INSTXT (%ASCID'Mailing list or file server error', .HDRQ [QUE_L_TAIL], MX_K_HDR_SUBJECT);
+    WRITE_HDRS (.QCTX, ERRENT, %ASCID'HDR_INFO', HDRQ);
+    WHILE NOT REMQUE (.HDRQ [QUE_L_HEAD], TXT) DO FREETXT (TXT);
+
+    MEM_GETRCPT (RCPT);
+    rcpt [RCPT_A_ADDR] = MEM_GETTXT (.retadr [DSC$W_LENGTH], .retadr [DSC$A_POINTER]);
+    rcpt [RCPT_V_DSN_NEVER] = 1;
+    INSQUE_TAIL (.RCPT, envl [ENVL_Q_RCPTQUE]);
+    envl [ENVL_L_RCPTCOUNT] = .envl [ENVL_L_RCPTCOUNT] + 1;
+    IF (.ownadr [DSC$W_LENGTH] NEQU 0)		!Send to list owner too?
+    THEN
+	BEGIN
+	MEM_GETRCPT (rcpt);
+	rcpt [RCPT_A_ADDR] = MEM_GETTXT (.ownadr [DSC$W_LENGTH], .ownadr [DSC$A_POINTER]);
+    	rcpt [RCPT_V_DSN_NEVER] = 1;
+	INSQUE_TAIL (.rcpt, envl [ENVL_Q_RCPTQUE]);
+    	envl [ENVL_L_RCPTCOUNT] = .envl [ENVL_L_RCPTCOUNT] + 1;
+	END;
+    envl [ENVL_V_FROMADR] = 1;
+    envl [ENVL_A_FROMADR] = MEM_GETTXT (2, UPLIT ('<>'));
+    envl [ENVL_V_ORGSENDER] = 1;
+    envl [ENVL_A_ORGSENDER] = MEM_GETTXT (2, UPLIT ('<>'));
+    envl [ENVL_V_ORIGIN] = 1;
+    envl [ENVL_L_ORIGIN] = MX_K_ORG_LOCAL;
+    WRITE_ENVELOPE (.QCTX, ERRENT, src_info_d, envl);
+    DISPOSE_ENVELOPE (envl);
+
+    FLQ_MAKE_FSPEC (.ERRENT [QENT_L_ENTNUM], %ASCID'MSG_TEXT', STR);
+    MX_FILE_OPEN (MX__FILE_WRITE, STR, UNIT, 0, ERRMSGF);
+
+    MX_FILE_WRITE (.UNIT, %ASCID'Note: this message was generated automatically.');
+    MX_FILE_WRITE (.UNIT, %ASCID'');
+    MX_FILE_WRITE (.UNIT, %ASCID %STRING ('The following error(s) occurred during',
+    	' local delivery of your message.'));
+    MX_FILE_WRITE (.UNIT, %ASCID'');
+    ERRENT [QENT_L_SIZE] = 118;  ! total count of above characters
+
+    FREE_STRINGS (STR);
+
+    SS$_NORMAL
+
+END; ! OPEN_ERROR_FILE
+
+%SBTTL 'ERROR_SEND'
+GLOBAL ROUTINE ERROR_SEND =
+BEGIN
+!++
+! FUNCTIONAL DESCRIPTION:
+!
+!   Sends off the completed error message, if there was one.
+!
+! RETURNS:	cond_value, longword (unsigned), write only, by value
+!
+! PROTOTYPE:
+!
+!   ERROR_SEND
+!
+! IMPLICIT INPUTS:  None.
+!
+! IMPLICIT OUTPUTS: None.
+!
+! COMPLETION CODES:
+!
+!   SS$_NORMAL:		normal successful completion.
+!
+! SIDE EFFECTS:
+!
+!   None.
+!--
+
+    LOCAL
+	HDR	: REF TXTDEF,
+	TXT	: REF TXTDEF,
+	TXTQ	: QUEDEF,
+	STR	: BLOCK [DSC$K_S_BLN,BYTE],
+	STATUS,
+	COUNT;
+
+    IF NOT .ERROR_FOUND THEN
+    BEGIN
+	FREE_STRINGS (RETADR, ownadr);
+	RETURN SS$_NORMAL;
+    END;
+
+    INIT_DYNDESC (STR);
+    TXTQ [QUE_L_TAIL] = TXTQ [QUE_L_HEAD] = TXTQ [QUE_L_HEAD];
+
+    MX_FILE_WRITE (.UNIT, %ASCID'');
+    MX_FILE_WRITE (.UNIT, %ASCID %STRING (%EXACTSTRING(30,%C'-',''),
+			' Rejected message ', %EXACTSTRING(30,%C'-','')));
+    ERRENT [QENT_L_SIZE] = .ERRENT [QENT_L_SIZE] + 78;
+
+!    MX_FILE_WRITE (.UNIT, %ASCID'Message follows.');
+!    MX_FILE_WRITE (.UNIT, %ASCID'');
+!    ERRENT [QENT_L_SIZE] = .ERRENT [QENT_L_SIZE] + 16;
+
+    HDR = .HDRQ [QUE_L_HEAD];
+    WHILE .HDR NEQA HDRQ [QUE_L_HEAD] DO
+    BEGIN
+	LOCAL DSC : BLOCK [DSC$K_S_BLN,BYTE];
+	DSC [DSC$B_DTYPE] = DSC$K_DTYPE_T;
+	DSC [DSC$B_CLASS] = DSC$K_CLASS_S;
+	FORMAT_HDR (.HDR, TXTQ);
+	WHILE NOT REMQUE (.TXTQ [QUE_L_HEAD], TXT) DO
+	BEGIN
+	    DSC [DSC$A_POINTER] = TXT [TXT_T_TEXT];
+	    DSC [DSC$W_LENGTH] = .TXT [TXT_W_LEN];
+	    MX_FILE_WRITE (.UNIT, DSC);
+	    ERRENT [QENT_L_SIZE] = .ERRENT [QENT_L_SIZE] + .TXT [TXT_W_LEN];
+	    FREETXT (TXT);
+	END;
+	HDR = .HDR [TXT_L_FLINK];
+    END;
+    MX_FILE_WRITE (.UNIT, %ASCID'');
+    MX_FILE_CLOSE (.UNIT);
+    ERRENT [QENT_L_STATUS] = FLQ_K_STRDY;
+
+    IF CH$EQL (MXQ_S_FILEID, QENT [MXQ_X_FILEID], 4, UPLIT (0), %CHAR (0)) THEN
+    BEGIN
+	FLQ_MAKE_FSPEC (.QENT [MXQ_L_BACKREF], %ASCID'MSG_TEXT', STR);
+	STATUS = COPY_FILE (STR, ERRMSGF, 0, 1, COUNT);
+    END
+    ELSE STATUS = COPY_FILE (0, ERRMSGF, 0, 1, COUNT, QENT [MXQ_X_FILEID]);
+    IF .STATUS THEN
+	ERRENT [QENT_L_SIZE] = .ERRENT [QENT_L_SIZE] + .COUNT
+    ELSE
+    BEGIN
+	STATUS = MX_FILE_OPEN (MX__FILE_APPEND, ERRMSGF, UNIT);
+	IF .STATUS THEN
+	BEGIN
+	    MX_FILE_WRITE (.UNIT, %ASCID'(ERROR: cannot get message text)');
+	    ERRENT [QENT_L_SIZE] = .ERRENT [QENT_L_SIZE] + 32;
+	    MX_FILE_CLOSE (.UNIT);
+	END
+	ELSE
+	    ERRENT [QENT_L_STATUS] = FLQ_K_STCAN;
+    END;
+
+    FLQ_UPDATE (QCTX, ERRENT);
+
+    FREE_STRINGS (STR, ERRMSGF, RETADR);
+    QCTX = 0;
+    QENT = 0;
+    HDRQ = 0;
+    ERROR_FOUND = 0;
+
+    SS$_NORMAL
+
+END; ! ERROR_SEND
+
+
+GLOBAL ROUTINE ERROR_ADD_RCPT (NEWADDR_A) =
+BEGIN
+    BIND
+	newaddr	= .newaddr_a	: $BBLOCK;
+
+    IF (CH$RCHAR(.newaddr [DSC$A_POINTER]) EQLU %C'<') AND
+	(CH$RCHAR (CH$PLUS (.newaddr [DSC$A_POINTER],
+		.newaddr [DSC$W_LENGTH]-1)) EQLU %C'>')
+    THEN
+	STR$COPY_DX (ownadr, newaddr)
+    ELSE
+	STR$CONCAT (ownadr, %ASCID'<', newaddr, %ASCID'>');
+
+    SS$_NORMAL
+
+END;	!ERROR_SEND_TO_OWNER
+
+END
+ELUDOM

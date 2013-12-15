@@ -1,0 +1,520 @@
+%TITLE 'PARSE_LISTSERV_CMD'
+MODULE PARSE_LISTSERV_CMD (IDENT='V1.3-2',
+    	ADDRESSING_MODE (EXTERNAL=LONG_RELATIVE, NONEXTERNAL=LONG_RELATIVE)) =
+BEGIN
+!++
+! FACILITY: 	    MX MLF
+!
+! ABSTRACT: 	    Parses LISTSERV emulation commands.
+!
+! MODULE DESCRIPTION:
+!
+!
+! AUTHOR:   	    M. Madison
+!
+! Copyright (c) 2008, Matthew Madison.
+! 
+! All rights reserved.
+! 
+! Redistribution and use in source and binary forms, with or without
+! modification, are permitted provided that the following conditions
+! are met:
+! 
+!     * Redistributions of source code must retain the above
+!       copyright notice, this list of conditions and the following
+!       disclaimer.
+!     * Redistributions in binary form must reproduce the above
+!       copyright notice, this list of conditions and the following
+!       disclaimer in the documentation and/or other materials provided
+!       with the distribution.
+!     * Neither the name of the copyright owner nor the names of any
+!       other contributors may be used to endorse or promote products
+!       derived from this software without specific prior written
+!       permission.
+! 
+! THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
+! "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
+! LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
+! A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
+! OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
+! SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
+! LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
+! DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
+! THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
+! (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
+! OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+!
+! CREATION DATE:    25-OCT-1991
+!
+! MODIFICATION HISTORY:
+!
+!   25-OCT-1991	V1.0	Madison	    Initial coding.
+!   22-Aug-1992 V1.1	Munroe	    Don't parse garbage characters.
+!    8-JAN-1993 V1.1-1	Goatley     Added Dick Munroe's code for QUIT command.
+!   10-MAR-1993 V1.2	Goatley     Modified for AXP.
+!   17-MAR-1993 V1.3	Goatley     Add /[NO]NOTIFY to ADD & REMOVE (match docs)
+!   26-APR-1993 V1,3-1	Goatley     Allow blank after ADD and REMOVE.
+!   13-NOV-1999	V1.3-2	Madison	    Parity with -request interface.
+!--
+
+    LIBRARY 'SYS$LIBRARY:STARLET';
+    LIBRARY 'SYS$LIBRARY:TPAMAC';
+    LIBRARY 'MX_SRC_COMMON:MX';
+    LIBRARY 'MLF';
+
+    FORWARD ROUTINE
+    	PARSE_LISTSERV_CMD,
+    	PLC_STORE,
+    	PLC_STORE_CODE,
+	TEST_CHARACTER;
+
+    EXTERNAL ROUTINE
+    	G_HAT (LIB$TPARSE, STR$UPCASE, STR$COPY_R, STR$COPY_DX, STR$APPEND);
+
+    MACRO
+    	TPA_A_P1    	=   TPA$C_LENGTH0+00,0,32,0%,
+    	TPA_A_P2    	=   TPA$C_LENGTH0+04,0,32,0%,
+    	TPA_A_P3    	=   TPA$C_LENGTH0+08,0,32,0%,
+    	TPA_A_P4    	=   TPA$C_LENGTH0+12,0,32,0%,
+    	TPA_A_P5    	=   TPA$C_LENGTH0+16,0,32,0%,
+    	TPA_A_P6    	=   TPA$C_LENGTH0+20,0,32,0%,
+    	TPA_A_P7    	=   TPA$C_LENGTH0+24,0,32,0%,
+    	TPA_A_P8    	=   TPA$C_LENGTH0+28,0,32,0%,
+    	TPA_A_P9    	=   TPA$C_LENGTH0+32,0,32,0%;
+
+%SBTTL 'State table for PARSE_LISTSERV_CMD'
+
+    $INIT_STATE (PLC_STATE, PLC_KEY);
+
+    $STATE (START,
+    	('SUBSCRIBE', GETNAME, PLC_STORE,,, MLCMD__SUBSCRIBE),
+    	('ADD', CHKADDSW, PLC_STORE,,, MLCMD__ADD),
+    	('SET', GETNAME, PLC_STORE,,, MLCMD__SET),
+    	('QUERY', GETNAME, PLC_STORE,,, MLCMD__QUERY),
+    	('LIST', TPA$_EXIT, PLC_STORE,,, MLCMD__LIST),
+    	('MODIFY', CHKMODSW, PLC_STORE,,, MLCMD__MODIFY),
+    	('DIRECTORY', TPA$_EXIT, PLC_STORE,,, MLCMD__LIST),
+    	('HELP', TPA$_EXIT, PLC_STORE,,, MLCMD__HELP),
+    	('SIGNOFF', GETNAME, PLC_STORE,,, MLCMD__SIGNOFF),
+    	('UNSUBSCRIBE', GETNAME, PLC_STORE,,, MLCMD__SIGNOFF),
+    	('REMOVE', CHKREMSW, PLC_STORE,,, MLCMD__REMOVE),
+    	('REVIEW', CHKREVSW, PLC_STORE,,, MLCMD__REVIEW),
+	('QUIT', TPA$_EXIT, PLC_STORE_CODE,,, MLCMD__QUIT));
+
+    $STATE (CHKADDSW,
+	(TPA$_BLANK, CHKADDSW),
+    	('/', GETADDSW),
+    	(TPA$_LAMBDA, GETNAME, PLC_STORE,,, -100));
+
+    $STATE (GETADDSW,
+    	('NOTIFY', CHKADDSW, PLC_STORE,,, -101),
+    	('NONOTIFY', CHKADDSW, PLC_STORE,,, -102),
+    	('MAIL', CHKADDSW, PLC_STORE,,, -103),
+    	('NOMAIL', CHKADDSW, PLC_STORE,,, -104),
+    	('REPRO', CHKADDSW, PLC_STORE,,, -105),
+    	('NOREPRO', CHKADDSW, PLC_STORE,,, -106),
+    	('CONCEAL', CHKADDSW, PLC_STORE,,, -107),
+    	('NOCONCEAL', CHKADDSW, PLC_STORE,,, -108),
+    	('CASE', CHKADDSW, PLC_STORE,,, -109),
+    	('NOCASE', CHKADDSW, PLC_STORE,,, -110),
+	('ACCESS', CHKADDSW, PLC_STORE,,, -111),
+	('NOACCESS', CHKADDSW, PLC_STORE,,, -112),
+	('DIGEST', CHKADDSW, PLC_STORE,,, -113),
+	('NODIGEST', CHKADDSW, PLC_STORE,,, -114),
+	('DENY', CHKADDSW, PLC_STORE,,, -115),
+	('NODENY', CHKADDSW, PLC_STORE,,, -116),
+	('NOPOST', CHKADDSW, PLC_STORE,,, -118),
+        ('CONFIRM', CHKADDSW, PLC_STORE,,, -119),
+        ('NOCONFIRM', CHKADDSW, PLC_STORE,,, -120));
+
+    $STATE (CHKMODSW,
+	(TPA$_BLANK, CHKMODSW),
+    	('/', GETMODSW),
+    	(TPA$_LAMBDA, GETNAME, PLC_STORE,,, -100));
+
+    $STATE (GETMODSW,
+    	('MAIL', CHKMODSW, PLC_STORE,,, -103),
+    	('NOMAIL', CHKMODSW, PLC_STORE,,, -104),
+    	('REPRO', CHKMODSW, PLC_STORE,,, -105),
+    	('NOREPRO', CHKMODSW, PLC_STORE,,, -106),
+    	('CONCEAL', CHKMODSW, PLC_STORE,,, -107),
+    	('NOCONCEAL', CHKMODSW, PLC_STORE,,, -108),
+    	('CASE', CHKMODSW, PLC_STORE,,, -109),
+    	('NOCASE', CHKMODSW, PLC_STORE,,, -110),
+	('ACCESS', CHKMODSW, PLC_STORE,,, -111),
+	('NOACCESS', CHKMODSW, PLC_STORE,,, -112),
+	('DIGEST', CHKMODSW, PLC_STORE,,, -113),
+	('NODIGEST', CHKMODSW, PLC_STORE,,, -114),
+	('DENY', CHKMODSW, PLC_STORE,,, -115),
+	('NODENY', CHKMODSW, PLC_STORE,,, -116),
+	('POST', CHKMODSW, PLC_STORE,,, -117),
+	('NOPOST', CHKMODSW, PLC_STORE,,, -118));
+
+    $STATE (CHKREMSW,
+	(TPA$_BLANK, CHKREMSW),
+    	('/', GETREMSW),
+    	(TPA$_LAMBDA, GETNAME, PLC_STORE,,, -100));
+
+    $STATE (GETREMSW,
+    	('NOTIFY', CHKREMSW, PLC_STORE,,, -101),
+    	('NONOTIFY', CHKREMSW, PLC_STORE,,, -102),
+    	('CASE', CHKREMSW, PLC_STORE,,, -109),
+    	('NOCASE', CHKREMSW, PLC_STORE,,, -110));
+
+    $STATE (CHKREVSW,
+	(TPA$_BLANK, CHKREVSW),
+    	('/', GETREVSW),
+    	(TPA$_LAMBDA, GETNAME, PLC_STORE,,, -100));
+
+    $STATE (GETREVSW,
+        ('BRIEF', CHKREVSW, PLC_STORE,,, -121));
+
+    $STATE (GETNAME,
+    	(TPA$_BLANK, GETNAME),
+    	((LISTNAME), GETARG, PLC_STORE,,, -1));
+    $STATE (GETARG,
+    	(TPA$_EOS, TPA$_EXIT),
+    	(TPA$_BLANK, GETARG),
+    	((GETARG1), TPA$_EXIT, PLC_STORE,,, -2));
+    $STATE (GETARG1,					! The relevant characters are only those which are alphabetic (printable).
+	(TPA$_EOS, TPA$_EXIT),				! Stop if the parse gets to the end of string.
+	(TPA$_ANY, GETARG1, TEST_CHARACTER),		! Test the character for < ' '
+	(TPA$_LAMBDA, TPA$_EXIT)) ;			! This stops the parse when the previous transition fails.
+    $STATE (LISTNAME,
+    	('_', LISTNAME),
+    	('-', LISTNAME),
+    	('$', LISTNAME),
+    	(TPA$_BLANK, TPA$_EXIT),
+    	(TPA$_EOS, TPA$_EXIT),
+    	(TPA$_ALPHA, LISTNAME),
+     	(TPA$_DIGIT, LISTNAME),
+ 	(TPA$_LAMBDA, TPA$_EXIT));			! Terminate the parse if this character is "none of the above".  This allows
+ 							! some mailers which embed non-ascii characters in lines to work.
+
+%SBTTL 'PARSE_LISTSERV_CMD'
+GLOBAL ROUTINE PARSE_LISTSERV_CMD (STR_A, CODE_A, NOTIFY_A,
+		MLNAM_A, CMDSTR_A, PARS_A, FLAGS_A, SFLAGS_A) =
+BEGIN
+!++
+! FUNCTIONAL DESCRIPTION:
+!
+!   Parses a mailing-list processor command.
+!
+! RETURNS:  	cond_value, longword (unsigned), write only, by value
+!
+! PROTOTYPE:
+!
+!   PARSE_LISTSERV_CMD  str, rtq, lcl, dom
+!
+! IMPLICIT INPUTS:  None.
+!
+! IMPLICIT OUTPUTS: None.
+!
+! COMPLETION CODES:
+!
+!   SS$_NORMAL:	    	normal successful completion.
+!
+! SIDE EFFECTS:
+!
+!   None.
+!--
+    BIND
+	notify	= .notify_a,
+    	STR 	= .STR_A    : BLOCK [DSC$K_S_BLN,BYTE];
+
+    LITERAL
+    	TPA_C_LENGTH	=   TPA$C_LENGTH0 + 36,
+    	TPA_K_COUNT 	=   TPA$K_COUNT0 + 9;
+
+    LOCAL
+    	TPABLK	: BLOCK [TPA_C_LENGTH,BYTE],
+    	TMP 	: BLOCK [DSC$K_S_BLN,BYTE],
+    	STATUS;
+
+    INIT_DYNDESC (TMP);
+    STR$UPCASE (TMP, STR);
+    TPABLK [TPA$L_COUNT] = TPA_K_COUNT;
+    TPABLK [TPA$L_OPTIONS] = TPA$M_ABBREV;
+    TPABLK [TPA$L_STRINGCNT] = .TMP [DSC$W_LENGTH];
+    TPABLK [TPA$L_STRINGPTR] = .TMP [DSC$A_POINTER];
+    TPABLK [TPA_A_P1] = .STR [DSC$A_POINTER];
+    TPABLK [TPA_A_P2] = .TMP [DSC$A_POINTER];
+    TPABLK [TPA_A_P3] = .CODE_A;
+    TPABLK [TPA_A_P4] = .NOTIFY_A;
+    TPABLK [TPA_A_P5] = .MLNAM_A;
+    TPABLK [TPA_A_P6] = .CMDSTR_A;
+    TPABLK [TPA_A_P7] = .PARS_A;
+    TPABLK [TPA_A_P8] = .FLAGS_A;
+    TPABLK [TPA_A_P9] = .SFLAGS_A;
+
+    notify = 1;			!By default, users are notified for ADD/REMOVE
+    .FLAGS_A = .SFLAGS_A = 0;
+
+    STATUS = LIB$TPARSE (TPABLK, PLC_STATE, PLC_KEY);
+
+    IF NOT .STATUS THEN
+    	.CODE_A = MLCMD__UNKNOWN;
+
+    FREE_STRINGS (TMP);
+
+    SS$_NORMAL
+
+END; ! PARSE_LISTSERV_CMD
+
+%SBTTL 'PLC_STORE'
+TPA_ROUTINE (PLC_STORE, (OPTIONS, STRINGCNT, STRINGPTR, TOKENCNT,
+    	    TOKENPTR, CHAR, NUMBER, PARAM, REALBASE, STRINGBASE, CODE_A,
+    	    NOTIFY_A, MLNAM_A, CMDSTR_A, PARS_A, FLAGS_A, SFLAGS_A))
+!++
+! FUNCTIONAL DESCRIPTION:
+!
+!   Invoked by TPARSE to store any arguments on the mailing list command.
+!
+! RETURNS:  	cond_value, longword (unsigned), write only, by value
+!
+! PROTOTYPE:
+!
+!   PLC_STORE opt, scnt, sptr, tcnt, tptr, chr, num, par, p1, p2, p3
+!
+! IMPLICIT INPUTS:  None.
+!
+! IMPLICIT OUTPUTS: None.
+!
+! COMPLETION CODES:
+!
+!   SS$_NORMAL:	    	normal successful completion.
+!
+! SIDE EFFECTS:
+!
+!   None.
+!--
+    BIND
+    	CODE	= .CODE_A,
+	NOTIFY	= .NOTIFY_A,
+    	MLNAM	= .MLNAM_A  	: BLOCK [DSC$K_S_BLN,BYTE],
+    	CMDSTR	= .CMDSTR_A 	: BLOCK [DSC$K_S_BLN,BYTE],
+    	PARS	= .PARS_A   	: BLOCK [DSC$K_S_BLN,BYTE],
+    	FLAGS	= .FLAGS_A,
+    	SFLAGS	= .SFLAGS_A;
+
+    SELECTONE .PARAM OF
+    SET
+
+    	[-1] :
+    	    STR$COPY_R (MLNAM, %REF (.TOKENCNT), .TOKENPTR);
+
+    	[-2] :
+	    IF .TOKENCNT GTR 0
+	    THEN
+		STR$COPY_R (PARS, %REF(.TOKENCNT), CH$PLUS (.REALBASE, CH$DIFF (.TOKENPTR, .STRINGBASE))) ;
+							! Copy the parsed token, but do so in a way that preserves the case of the
+							! original parameter.
+    	[-100] :
+    	    OPTIONS = .OPTIONS OR TPA$M_BLANKS;
+
+    	[-101] :
+    	    NOTIFY<0,1,0> = 1;		                ! This entry is to receive notifications.
+
+    	[-102] :
+    	    NOTIFY<0,1,0> = 0;		                ! This entry is NOT to receive notifications.
+
+        [-119] :
+            NOTIFY<1,2,0> = 1;                          ! CONFIRM override
+
+        [-120] :
+            NOTIFY<1,2,0> = 2;                          ! NOCONFIRM override
+
+    	[-103] :
+	    BEGIN
+	    SFLAGS<0,1,0> = 1;				! User specified this...
+    	    FLAGS<0,1,0> = 0;				! This entry is to receive mail.
+	    END;
+
+    	[-104] :
+	    BEGIN
+	    SFLAGS<0,1,0> = 1;				! User specified this...
+    	    FLAGS<0,1,0> = 1;				! This entry is NOT to receive mail.
+	    END;
+
+    	[-105] :
+	    BEGIN
+	    SFLAGS<2,1,0> = 1;				! User specified this...
+    	    FLAGS<2,1,0> = 0;				! This entry is REPRO.
+	    END;
+
+    	[-106] :
+	    BEGIN
+	    SFLAGS<2,1,0> = 1;				! User specified this...
+    	    FLAGS<2,1,0> = 1;				! This entry is NOT REPRO.
+	    END;
+
+    	[-107] :
+	    BEGIN
+	    SFLAGS<1,1,0> = 1;				! User specified this...
+    	    FLAGS<1,1,0> = 1;				! This entry is CONCEALed.
+	    END;
+
+    	[-108] :
+	    BEGIN
+	    SFLAGS<1,1,0> = 1;				! User specified this...
+    	    FLAGS<1,1,0> = 0;				! This entry is NOT CONCEALED.
+	    END;
+
+    	[-109] :
+	    BEGIN
+	    SFLAGS<3,1,0> = 1;				! User specified this...
+    	    FLAGS<3,1,0> = 0;				! This entry is CASE sensitive.
+	    END;
+
+    	[-110] :
+	    BEGIN
+	    SFLAGS<3,1,0> = 1;				! User specified this...
+    	    FLAGS<3,1,0> = 1;				! This entry is NOT case sensitive.
+	    END;
+
+    	[-111] :
+	    BEGIN
+	    SFLAGS<4,1,0> = 1;				! User specified this...
+    	    FLAGS<4,1,0> = 1;				! This entry is an access control entry.
+	    END;
+
+    	[-112] :
+	    BEGIN
+	    SFLAGS<4,1,0> = 1;				! User specified this...
+    	    FLAGS<4,1,0> = 0;				! This entry is NOT an access control entry (default).
+	    END;
+
+    	[-113] :
+	    BEGIN
+	    SFLAGS<5,1,0> = 1;				! User specified this...
+    	    FLAGS<5,1,0> = 1;				! This entry is a digest entry.
+	    END;
+
+    	[-114] :
+	    BEGIN
+	    SFLAGS<5,1,0> = 1;				! User specified this...
+    	    FLAGS<5,1,0> = 0;				! This entry is NOT a digest entry (default).
+	    END;
+
+    	[-115] :
+	    BEGIN
+	    SFLAGS<6,1,0> = 1;				! User specified this...
+    	    FLAGS<6,1,0> = 1;			! This entry is a DENY entry.
+	    END;
+
+    	[-116] :
+	    BEGIN
+	    SFLAGS<6,1,0> = 1;				! User specified this...
+    	    FLAGS<6,1,0> = 0;			! This entry is NOT a DENY entry (default).
+	    END;
+
+    	[-117] :
+	    BEGIN
+	    SFLAGS<7,1,0> = 1;				! User specified this...
+    	    FLAGS<7,1,0> = 0;			! This entry is a POST entry.
+	    END;
+
+    	[-118] :
+	    BEGIN
+	    SFLAGS<7,1,0> = 1;				! User specified this...
+    	    FLAGS<7,1,0> = 1;			! This entry is a NOPOST entry
+	    END;
+
+        [-121] :
+            SFLAGS<16,1,0> = 1;                 ! Review: /BRIEF
+
+    	[OTHERWISE] :
+    	    BEGIN
+    	    	CODE = .PARAM;
+    	    	OPTIONS = .OPTIONS OR TPA$M_BLANKS;
+    	    	STR$COPY_R (CMDSTR, %REF (.TOKENCNT), .TOKENPTR);
+    	    END;
+    TES;
+
+    SS$_NORMAL
+
+END; ! PLC_STORE
+
+
+%SBTTL 'PLC_STORE_CODE'
+TPA_ROUTINE (PLC_STORE_CODE, (OPTIONS, STRINGCNT, STRINGPTR, TOKENCNT,
+	    TOKENPTR, CHAR, NUMBER, PARAM, REALBASE, STRINGBASE, CODE_A,
+	    MLNAM_A, CMDSTR_A, PARS_A))
+!++
+! FUNCTIONAL DESCRIPTION:
+!
+!   Invoked by TPARSE to handle CODE only commands.
+!
+! RETURNS:  	cond_value, longword (unsigned), write only, by value
+!
+! PROTOTYPE:
+!
+!   PLC_STORE opt, scnt, sptr, tcnt, tptr, chr, num, par, p1, p2, p3
+!
+! IMPLICIT INPUTS:  None.
+!
+! IMPLICIT OUTPUTS: None.
+!
+! COMPLETION CODES:
+!
+!   SS$_NORMAL:	    	normal successful completion.
+!
+! SIDE EFFECTS:
+!
+!   None.
+!--
+BIND
+	CODE	= .CODE_A,
+	MLNAM	= .MLNAM_A  	: BLOCK [DSC$K_S_BLN,BYTE],
+	CMDSTR	= .CMDSTR_A 	: BLOCK [DSC$K_S_BLN,BYTE],
+	PARS	= .PARS_A   	: BLOCK [DSC$K_S_BLN,BYTE];
+
+     CODE = .PARAM;
+ 
+     SS$_NORMAL
+ 
+END; ! PLC_STORE_CODE
+
+
+%SBTTL 'TEST_CHARACTER'
+TPA_ROUTINE (TEST_CHARACTER, (OPTIONS, STRINGCNT, STRINGPTR, TOKENCNT,
+    	    TOKENPTR, CHAR, NUMBER, PARAM, REALBASE, STRINGBASE, CODE_A,
+    	    MLNAM_A, CMDSTR_A, PARS_A))
+!++
+! FUNCTIONAL DESCRIPTION:
+!
+!   Invoked by TPARSE to see if this is a printable character (blank or
+!   greater).
+!
+! RETURNS:  	cond_value, longword (unsigned), write only, by value
+!
+! PROTOTYPE:
+!
+!   PLC_STORE opt, scnt, sptr, tcnt, tptr, chr, num, par, p1, p2, p3
+!
+! IMPLICIT INPUTS:  None.
+!
+! IMPLICIT OUTPUTS: None.
+!
+! COMPLETION CODES:
+!
+!   SS$_NORMAL:	    	normal successful completion.
+!
+! SIDE EFFECTS:
+!
+!   None.
+!--
+    BIND
+    	CODE	= .CODE_A,
+    	MLNAM	= .MLNAM_A  	: BLOCK [DSC$K_S_BLN,BYTE],
+    	CMDSTR	= .CMDSTR_A 	: BLOCK [DSC$K_S_BLN,BYTE],
+    	PARS	= .PARS_A   	: BLOCK [DSC$K_S_BLN,BYTE];
+    IF (.CHAR LSSU ' ') AND (.CHAR NEQU %CHAR(9))
+    THEN
+	RETURN 2
+    ELSE
+	RETURN SS$_NORMAL ;
+END; ! TEST_CHARACTER
+
+END
+ELUDOM
