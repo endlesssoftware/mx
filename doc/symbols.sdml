@@ -1,0 +1,15 @@
+<CHECK_FOR_INCLUSION>(SYMBOLS_SDML)
+<DEFINE_BOOK_NAME>(mgmtguide\Message Exchange Management Guide)
+<DEFINE_BOOK_NAME>(instguide\Message Exchange Installation Guide)
+<DEFINE_BOOK_NAME>(userguide\Message Exchange User's Guide)
+<DEFINE_BOOK_NAME>(progguide\Message Exchange Programmer's Guide)
+<DEFINE_BOOK_NAME>(relnotes\Message Exchange Release Notes)
+<DEFINE_BOOK_NAME>(mlfguide\Message Exchange Mailing List/File Server Guide)
+<DEFINE_BOOK_NAME>(rfc821\RFC 821: Simple Mail Transfer Protocol)
+<DEFINE_BOOK_NAME>(rfc822\RFC 822: Standard for the Format of ARPA
+Internet Text Messages)
+<DEFINE_BOOK_NAME>(rfc1123\RFC 1123: Requirements for Internet Hosts --
+Application and Support)
+<DEFINE_BOOK_NAME>(maildoc\VMS Mail Utility Manual)
+<DEFINE_BOOK_NAME>(mailutil\VMS Mail Utility Manual)
+<ENDCHECK_FOR_INCLUSION>

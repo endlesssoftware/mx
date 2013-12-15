@@ -1,0 +1,578 @@
+<CHAPTER>(Post-Installation Information\postinst)
+<INCLUDE>(SYMBOLS.SDML)
+<P>
+This chapter contains important information about setting up MX
+configuration and startup options.
+
+<HEAD1>(Configuring MX\INSTALL_GUIDE_22)
+<P>
+When installing MX for the first time, or upgrading from a previous
+version, the installation procedure automatically invokes the MXCONFIG
+command procedure to assist in creating or updating your MX configuration
+files.  If you are adding options to an existing MX installation, and
+have already created a configuration database, this step is skipped.
+If you want to create a new MX configuration from scratch,
+you may use the MXCONFIG command
+procedure to create an MX configuration database after the installation
+completes:
+
+<INTERACTIVE>
+<s>($ )<u>(@SYS$STARTUP:MX_STARTUP LOGICALS)
+<S>($ )<U>(@MX_DIR:MXCONFIG)
+<ENDINTERACTIVE>
+<P>MXCONFIG prompts you for some basic information about the MX message
+queue, your local host name, and MX processing agents.  This information
+is used to create logical names used by MX and control the parts of MX
+that are started during the system startup procedure.  The prompts for
+these configuration elements contain detailed descriptions for each
+of these configuration options.
+<P>
+If MXCONFIG is invoked as part of an initial installation, it will also
+ask about your network connectivity, and create an MCP command
+file to create an MX configuration database.  You can use MXCONFIG to define
+all routing information and Postmaster aliases for a typical Internet-connected system.
+Once the basic configuration is created with
+MXCONFIG, you can tailor it as you wish using the MCP commands described
+in <reference>(mgmtguide).
+
+
+<HEAD1>(Message Queue Location and Limits\MSMQL)
+<P>The first step of the MXCONFIG procedure (option 1 on the menu when
+invoked outside the installation procedure) asks questions about
+configuring the MX message queue.   The first question asks for the
+directory where the queue should be located.  If you are configuring
+MX for the first time, the default location will be MX_ROOT:[QUEUE]; 
+however, the queue may be located on any accessible disk on the
+system or cluster.  If you are re-configuring MX, the default
+answer to this question will be your current MX message queue
+directory.  You may use this procedure to move the message queue
+to a new location, if needed.
+
+
+<P>After other questions about the
+cluster name and whether completed messages should be deleted from the
+queue immediately, MXCONFIG prompts for configuration information regarding
+the maximum allowable size for messages and minimum amount of space
+that should be kept free on the disk device containing the message queue.
+<HEAD2>(Maximum Message Size\MAXMSGSIZE)
+<P>You may specify a maximum size for any message that enters your system.  By default,
+the maximum size is set to zero, indicating that there is no fixed maximum.  This
+default setting is adequate for most systems; users sometimes send very large files
+through e-mail, and if sufficient space is available, this is not a problem.
+However, if your system has limited disk space available, restricting messages to
+a reasonable maximum size may help prevent mailboxes from consuming too much
+disk space.
+
+<HEAD2>(Message Queue Limits\MSGQLIMITS)
+<P>To prevent system failures or other undesirable behavior from occurring due
+to disk devices becoming too full, MX checks the amount of free space available
+on the disk containing the message queue before accepting a message for delivery.
+MXCONFIG prompts you for a value that represents, as a percentage value, the
+amount of free space that should be reserved on the queue disk.  If a message
+is entered (via SMTP, VMS MAIL, or any other source) that would cause the amount
+of free space to drop below this value, the message is automatically
+refused and deleted from the system.
+<P>MXCONFIG sets the reserved free space to a default value of 10%, which will
+ensure that MX never causes the disk to become more than 90% full.  If you elected
+during installation to place the message queue on a very large disk (larger than
+1GB), you may wish to configure the reserved free space to a smaller value; the 
+minimum allowed value is 1% (which allows the disk to become 99% full before MX
+refuses to accept messages).  If your message queue is on a very small disk
+(smaller than 500MB), you may wish to configure the reserved free space to a
+larger value.
+<P>At some sites, the message queue disk may be located on a very large disk that
+is also very full, and even the 1% minimum that is settable through MXCONFIG may
+not be low enough to allow MX to operate consistently.  MX provides a means
+for configuring the minimum reserved free space as an absolute number of disk blocks,
+rather than a percentage.  This is not settable through MXCONFIG; to configure
+the reserved free space in disk blocks, you must add the following logical name
+definition to your system startup procedure:
+<INTERACTIVE>
+<S>($)<U>(DEFINE/SYSTEM/EXEC MX_FLQ_DISK_FREE_ABSOLUTE <EMPHASIS>(n))
+<ENDINTERACTIVE>
+<CP>where <EMPHASIS>(n) is the minimum allowed free space on the disk, in disk
+blocks.  This logical name overrides the percentage setting that is configured
+through MXCONFIG.  The minimum allowed value for <EMPHASIS>(n) is 1024.
+<NOTE>
+Warning: MX may temporarily exceed the reserved free space setting while
+a message is being entered into the queue.  Configuring the reserved free
+space setting to too low a value may cause the disk containing the message
+queue to become 100% full at times; this may have undesirable side-effects,
+especially if the message queue resides on your system disk.
+<ENDNOTE>
+
+<head1>(Establishing a Postmaster\INSTALL_GUIDE_23)
+<p>All Internet sites that use electronic mail must be able to
+accept mail to the username <emphasis>(Postmaster\bold).  If you do not have
+a real username called POSTMASTER on your system, you should either establish
+aliases with the MCP DEFINE ALIAS command:
+<interactive>
+<s>(MCP> )<u>(DEFINE ALIAS Postmaster "user@host")
+<endinteractive>
+<p>
+(substituting appropriate values for <keyword>(user) and <keyword>(host)),
+or use the SET FORWARD command in VMS Mail to forward mail from Postmaster
+to a real user:
+<interactive>
+<s>(MAIL> )<u>(SET FORWARD/USER=POSTMASTER user)
+<endinteractive>
+<p>Even if you are not connected to the Internet, it is still a good
+idea to create a Postmaster username or forwarding address.
+
+<head1>(Adding MX Startup to System Startup\adding)
+<p>The startup procedure for MX may vary depending on:
+<list>(unnumbered)
+<le>you are running in a cluster environment
+<le>you are running MX processes under a separate mailer account
+<endlist>
+<p>In either case, remember that if you are running the MX SMTP-over-TCP/IP
+support, you should start MX <emphasis>(after\bold) you start your TCP/IP
+software.
+
+<subhead1>(Standalone Systems\INSTALL_GUIDE_24)
+<p>If you intend to run MX under the SYSTEM account, all you need to
+add to your system startup procedure is the command:
+<interactive>
+<s>($ @SYS$STARTUP:MX_STARTUP)
+<endinteractive>
+<p>If you are using a separate mailer account, you would use the following
+commands instead:
+<interactive>
+<s>($ @SYS$STARTUP:MX_STARTUP LOGICALS)
+<s>($ SUBMIT/NOPRINT/USER=mailer SYS$STARTUP:MX_STARTUP)
+<endinteractive>
+<p>For <emphasis>(mailer) substitute the username you assigned to your
+mailer account.
+
+<subhead1>(Clustered Systems\INSTALL_GUIDE_25)
+<P>In a cluster environment, as long as you are running MX under the
+SYSTEM account, the startup command is as easy as for standalone
+systems:
+<interactive>
+<s>($ @SYS$STARTUP:MX_STARTUP)
+<endinteractive>
+<p>However, if you are running MX under a separate mailer account, how
+each node in the cluster starts MX depends on whether or not it will
+run one or more of the MX processes (as selected during MX installation).
+<p>If the node <emphasis>(will not\bold) run one or more of the MX processing
+agents, such as a satellite node in a Local-Area or Mixed-Interconnect
+VMScluster, all it needs to start up MX is the command:
+<interactive>
+<s>($ @SYS$STARTUP:MX_STARTUP)
+<endinteractive>
+<cp>which just defines the necessary logical names and install the
+necessary images for interfacing VMS Mail with MX.
+<p>If the node <emphasis>(will\bold) run one or more MX processes,
+those processes need to be started up under the mailer account's username,
+so you would use the commands:
+<interactive>
+<s>($ @SYS$STARTUP:MX_STARTUP LOGICALS)
+<s>($ SUBMIT/NOPRINT/USER=mailer/QUEUE=nodeque SYS$STARTUP:MX_STARTUP)
+<endinteractive>
+<cp>substituting the mailer account name for <emphasis>(mailer) and
+the name of a batch queue that runs on the local system for <emphasis>(nodeque).
+
+<head2>(Example\INSTALL_GUIDE_27)
+<p>As an example, take a homogeneous VMScluster
+with two nodes, NODE1  and NODE2, each with a TCP/IP connection,
+and several satellite nodes that will just
+be used for sending and receiving mail by users (i.e., no MX processes
+will run on them).
+<p>Both NODE1 and NODE2 have batch queues, called NODE1_BATCH and NODE2_BATCH,
+respectively.  The mailer account username is MAILER.
+<p>The commands to be added to SYS$MANAGER:SYSTARTUP_V5.COM,
+<emphasis>(after) TCP/IP startup,
+would be:
+<interactive>
+<s>($ NODE = F$GETSYI ("NODENAME"))
+<s>($ IF NODE .NES. "NODE1" .AND. NODE .NES. "NODE2")
+<s>($ THEN)
+<s>($    @SYS$STARTUP:MX_STARTUP)
+<s>($ ELSE)
+<s>($    SUBMIT/NOPRINT/USER=MAILER/QUEUE='NODE'_BATCH SYS$STARTUP:MX_STARTUP)
+<s>($ ENDIF)
+<endinteractive>
+
+<head1>(Adding MX Shutdown to System Shutdown\INSTALL_GUIDE_28)
+<p>To ensure that MX agent processes are shut down cleanly when the
+system is shut down, add the following lines to SYS$MANAGER:SYSHUTDWN.COM:
+<interactive>
+<s>($ MCP := $MX_EXE:MCP)
+<s>($ MCP SHUTDOWN/WAIT)
+<endinteractive>
+<cp>This will notify any agent processes on the system that they
+should shut down without affecting the agent processes on other nodes
+in the cluster.  The /WAIT qualifier will cause MCP to wait until
+the agent processes exit before continuing.  This may take several
+seconds, but ensures that agents shut down cleanly to maintain
+the integrity of the MX message queue.
+
+<head1>(Establishing Your Time Zone\INSTALL_GUIDE_29)
+<p>If you are not in the US Eastern time zone,
+or you are not following US standard daylight savings time, or you
+do not like "EST" and "EDT" as time zone names, you must
+make sure that at least one of several time zone logicals is defined
+in SYSTARTUP_V5.COM.
+
+<HEAD2>(The Product-Specific Time Zone Logicals\INSTALL_OTHER_TZ_LOGICALS)
+<P>
+MX checks for the existence of one of several time zone logicals that
+specify the timezone string to be used when generated RFC822 mail
+message headers.  Because most of the delivery transports (DECUS
+UUCP, the TCP/IP implementations, etc.) already define time zone
+logicals compatible with MX, it is not necessary to define MX-specific
+logicals.
+<P>
+On OpenVMS V6.0 and later, MX automatically uses the logical name
+SYS$TIMEZONE_DIFFERENTIAL as the basis for its time zone strings.
+If you have not correctly set that logical name, use the command
+<INTERACTIVE>
+<S>($ )<U>(@SYS$MANAGER:UTC$CONFIGURE_TDF)
+<ENDINTERACTIVE>
+<P>
+to set the timezone differential.  If your site observes Daylight
+Savings Time, you may need to adjust the timezone differential
+each time you adjust your system clock.
+
+<P>
+On systems where SYS$TIMEZONE_DIFFERENTIAL is not defined (typically
+pre-V6.0 VMS), the value of the first logical defined in the following
+ordered list is used with no time-zone calculations.
+
+<TABLE>
+<TABLE_ATTRIBUTES>(SINGLE_SPACED)
+<TABLE_SETUP>(2\25)
+<TABLE_ROW>(MX_TIMEZONE\MX)
+<TABLE_ROW>(MULTINET_TIMEZONE\MultiNet)
+<TABLE_ROW>(UUCP_TIME_ZONE\DECUS UUCP)
+<TABLE_ROW>(WIN$TIME_ZONE\WIN/TCP and PathWay)
+<ENDTABLE>
+
+<HEAD2>(The MX Timezone Logicals\INSTALL_MX_TZ_LOGICALS)
+<p>If you wish to define a specific timezone logical name for
+use by MX, you should define it as follows:
+<interactive>
+<s>($ DEFINE/SYS/EXEC MX_TIMEZONE "tzstr")
+<endinteractive>
+<p>where <emphasis>(tzstr) is a valid (RFC822-compliant) time zone designation,
+such as "-0500". No validity checking is performed on this string. Note that the
+string you specify with MX_TIMEZONE is used verbatim. If you use MX_TIMEZONE and
+you observe daylight savings time in your area, it is your responsibility for
+modifying the definition of MX_TIMEZONE as needed.  You do not need to shut down
+MX to do this.
+
+<head1>(Interfacing with TCP/IP\netlibmods)
+<p>The SMTP interface uses the NETLIB transport-independent library
+to interface with the TCP/IP package or packages you have installed
+on the system.
+
+<head2>(Disabling Vendor SMTP Support\INSTALL_GUIDE_30)
+<p>If your TCP/IP vendor provides SMTP support as part of its package,
+you should disable that support before starting MX.
+
+<NOTE>
+The instructions provided below were valid for various versions of
+each vendor's software.  Please consult your TCP/IP documentation for
+more accurate instructions.
+<ENDNOTE>
+
+<HEAD3>(Disabling CMUIP SMTP\DIS_CMUIP_SMTP)
+<P>
+For CMU-OpenVMS/IP (aka CMU-Tek TCP/IP), edit your INTERNET.CONFIG
+file and comment out the line that begins with <quote>(WKS:25), then
+restart TCP/IP.  In addition, you may wish to deassign the system
+logical name TCP$SMTPSV.
+
+<HEAD3>(Disabling MultiNet SMTP\DIS_MULTI_SMTP)
+
+<p>For MultiNet, use the Server Configuration Utility to disable
+MultiNet's SMTP service:
+<interactive>
+<s>($ )<u>(MULTINET CONFIGURE/SERVER)
+<s>(MultiNet Server Configuration Utility 2.2(25))
+<s>([Reading in symbols from SERVER image MULTINET:SERVER.EXE])
+<s>([Reading in configuration from MULTINET:SERVICES.MASTER_SERVER])
+<s>(SERVER-CONFIG>)<u>(DISABLE SMTP)
+<s>(SERVER-CONFIG>)<u>(RESTART)
+<s>(SERVER-CONFIG>)<u>(EXIT)
+<endinteractive>
+
+
+<P>
+If the SMTP was previously enabled, you will also need to stop the
+MultiNet SMTP batch queue.  For example:
+
+<INTERACTIVE>
+<S>($ )<U>(STOP/QUEUE MULTINET_SMTP_QUEUE)
+<ENDINTERACTIVE>
+
+
+<HEAD3>(Disabling TCPware SMTP\DIS_TCPWARE_SMTP)
+<p>For TCPware, use the TCPware configuration utility to disable
+TCPware's SMTP server,
+if you installed TCPware-SMTP.
+For TCPware v3.0, type:
+<INTERACTIVE>
+<S>($ )<U>(@TCPWARE:CNFNET FULL SMTP)
+<ENDINTERACTIVE>
+
+<P>
+For versions of TCPware prior to v3.0, type:
+<INTERACTIVE>
+<S>($ )<U>(@TCPIP_ROOT:CNFNET FULL SMTP)
+<ENDINTERACTIVE>
+
+<P>
+When asked
+<INTERACTIVE>
+<S>(Enter the number of listening SMTP-VMS servers [1]:)
+<ENDINTERACTIVE>
+<P>
+enter <EMPHASIS>(0\BOLD). When asked whether to restart SMTP, answer
+<EMPHASIS>(YES\BOLD).
+
+<HEAD3>(Disabling UCX SMTP\DIS_UCX_SMTP)
+<P>
+VMS/ULTRIX Connection (in versions 1.0 through 1.3B) does not include any
+native SMTP support.
+
+<P>
+DEC TCP/IP Services for VMS V2.x does include native SMTP
+support.   To disable the UCX SMTP server under V2.x, perform the following:
+
+<LIST>(UNNUMBERED)
+<LE>	Disable the currently running SMTP service:
+
+	<INTERACTIVE>
+	<S>($ )<U>(UCX DISABLE SERVICE SMTP)
+	<ENDINTERACTIVE>
+
+<LE>	Stop the UCX SMTP queues.  For example:
+
+	<INTERACTIVE>
+	<S>($ )<U>(STOP/QUEUE UCX_node_00)
+	<S>($ )<U>(STOP/QUEUE UCX_node_01)
+	<ENDINTERACTIVE>
+
+<LE>	Modify the system startup (SYSTARTUP*.COM in SYS$MANAGER:)
+	procedure to not invoke UCX$SMTP_STARTUP.COM.
+<ENDLIST>
+
+<CP>For DEC TCP/IP Services for VMS V3.0 and higher, perform the
+following:
+
+<LIST>(UNNUMBERED)
+<LE>	Run the UCX configuration procedure:
+
+	<INTERACTIVE>
+	<S>($ )<U>(@SYS$MANAGER:UCX$CONFIG.COM)
+	<ENDINTERACTIVE>
+
+<LE>	Select <QUOTE>(Client components).
+<LE>	Select <QUOTE>(SMTP).
+<LE>	Answer <EMPHASIS>(YES\BOLD) to reconfigure SMTP.
+<LE>	Answer <EMPHASIS>(NO\BOLD) to disable SMTP.
+<ENDLIST>      
+
+
+<HEAD3>(Disabling Wollongong PathWay SMTP\DIS_TWG_SMTP)
+<P>
+To disable the SMTP server for Wollongong's PathWay,
+follow these steps:
+
+<LIST>(UNNUMBERED)
+<LE>	Edit the file TWG$TCP:[NETDIST.ETC]SERVERS.DAT.
+<LE>	Find the server description for the SMTP service and place pound
+	signs <PARENDCHAR>(#) in front of each line, including the
+	blank lines preceding and following the SMTP server description.
+	This marks those lines as comments and they will be ignored by
+	INET_SERVERS during its startup.
+<LE>	If the INET_SERVERS process is running, kill it.
+<LE>	Restart INET_SERVER by executing the following command:
+	<INTERACTIVE>
+	<S>($ )<U>(@TWG$TCP:[NETDIST.MISC]INETSERV.COM)
+	<ENDINTERACTIVE>
+<LE>	List the registered TCP/UDP services to make sure the SMTP
+	service is not listed:
+	<INTERACTIVE>
+	<S>($ )<U>(netstat -a)
+	<ENDINTERACTIVE>
+<LE>	You can now start the MX SMTP_SERVER process.
+<ENDLIST>
+
+<P>
+To prevent the PathWay SMTP server from restarting on the next system
+boot, comment out the SMTP_INIT line in the PathWay startup file,
+TWG$TCP:[NETDIST.MISC]STARTINET.COM.
+
+<P>
+This procedure should permanently disable the PathWay SMTP server. 
+To reenable the PathWay SMTP server, undo all the edit changes,
+kill the MX SMTP_SERVER, kill the INET_SERVER, and restart the
+INET_SERVER.
+
+
+<head2>(Ensuring SMTP Server Restarts\INSTALL_GUIDE_31)
+<p>The MX SMTP Server process automatically exits when it detects the
+shutdown of the TCP/IP software.  If you want to ensure that it starts
+back up again after restarting your TCP/IP software, you should
+create a command procedure for starting up TCP/IP:
+<interactive>
+$ @vendor-supplied-startup
+$ IF F$TRNLNM ("MX_EXE") .NES. "" THEN @SYS$STARTUP:MX_STARTUP SMTP_SERVER
+<endinteractive>
+<P>Substitute the name of the vendor-supplied startup procedure for
+your TCP/IP package in the first line.
+
+<HEAD1>(SMTP Support for DECnet\install_guide_53a)
+<p>If you elected to install support for SMTP-over-DECnet, you must take
+some additional steps to configure DECnet and MX.
+<HEAD2>(Creating a DECnet Object for DECnet-SMTP\INSTALL_GUIDE_54)
+<p>You must create a DECnet
+object called DECSMTP for establishing SMTP-over-DECnet connections, both
+incoming and outgoing.
+<p>If you intend to accept incoming SMTP-over-DECnet
+connections, you should
+establish an account (either your mailer account or a dedicated server
+account) for use with each DECnet object.  See <reference>(dedacct) for
+more information on the requirements for the DECnet object account.
+<p>
+A DECnet object needs to be created to handle the incoming SMTP-over-DECnet
+connections and to map the DECSMTP object name to a DECnet object number.
+Choose an unused DECnet object number.  To see what object numbers
+are currently in use, use the command:
+<interactive>
+<s>($ )<u>(MCR NCP SHOW KNOWN OBJECT)
+<endinteractive>
+<p>
+Assign the object name DECSMTP to an unused object number; the number used
+<emphasis>(must) be identical on all nodes on your network that use
+SMTP-over-DECnet (this example uses 254).  In NCP, use these commands:
+<INTERACTIVE>
+<S>(NCP> )<U>(PURGE OBJECT DECSMTP ALL)
+<s>(NCP> )<u>(DEFINE OBJECT DECSMTP NUMBER 254 PROXY NONE FILE -)
+<s>(_NCP> )<u>(   MX_EXE:DNSMTP_SERVER.EXE USER <emphasis>(server-acct) PASSWORD <emphasis>(some-password))
+<S>(NCP> )<U>(SET OBJECT DECSMTP ALL)
+<ENDINTERACTIVE>
+<p>You do not need to specify the FILE, USER, or PASSWORD parameters if
+you do not intend to accept incoming SMTP connections over DECnet.
+Be sure that the password in the DECnet database matches the password you
+set for the server account in AUTHORIZE.
+<SUBhead1>(Using Proxies\usingprox)
+<p>Instead of storing the username and password for the server account in
+the DECnet database, you could grant access using DECnet proxies.  Proxies
+give you more control over who on the network has access to the object, and
+eliminate the need for storing the password to the server account in the
+DECnet object database.
+
+<NOTE>
+Using proxies allows the remote system access to all
+files the server account can access (by using regular DECnet
+file transfers with FAL).  If you do not manage the remote
+system, it is recommended that you use DECnet objects instead
+of proxies.
+<ENDNOTE>
+
+<p>To enable proxy access to the DECSMTP object, use the following commands
+in NCP:
+<INTERACTIVE>
+<S>(NCP> )<U>(PURGE OBJECT DECSMTP ALL)
+<s>(NCP> )<u>(DEFINE OBJECT DECSMTP NUMBER 254 PROXY INCOMING FILE -)
+<s>(_NCP> )<u>(   MX_EXE:DNSMTP_SERVER.EXE)
+<S>(NCP> )<U>(SET OBJECT DECSMTP ALL)
+<ENDINTERACTIVE>
+<p>Then in AUTHORIZE, create proxy entries for the mailer accounts on the
+other systems on the network that will be sending you mail via SMTP-over-DECnet:
+<interactive>
+<s>(UAF> )<u>(ADD/PROXY <emphasis>(remote::mailer) <emphasis>(server-acct)/DEFAULT)
+<endinteractive>
+<p>For <keyword>(remote::mailer) substitute the DECnet node of the remote system
+and the username of the mailer account on that system.  For 
+<keyword>(server-acct) substitute the name of the server account you set up
+for use with the DECnet-SMTP object.
+
+<HEAD1>(Customizing Mailing List and File Server Files\INSTALL_GUIDE_35)
+<p>The MX installation procedure provides three files, MLIST_ADD_MESSAGE.TXT,
+MLIST_REMOVE_MESSAGE.TXT, and MLIST_FORWARD_MESSAGE.TXT, for use with the
+mailing list processor, and a help file called FILESERV_HELP.TXT for use
+with a file server.
+If you intend to use the mailing list or file server features of MX, you
+should modify the contents of these files to reflect site dependencies.
+If you already had customized versions of these files, they are not purged;
+you should delete the new versions created by the installation procedure.
+<p>Refer to <reference>(mlfguide) for more information on setting up
+mailing lists.
+
+<HEAD1>(Setting Up MXALIAS\INSTALL_GUIDE_MXALIAS)
+<P>
+MX includes a utility called MXALIAS which users can execute to define
+personal MX aliases for e-mail addresses.  MXALIAS is fully documented
+in the <REFERENCE>(userguide).
+
+<P>
+In order to make MXALIAS accessible to users on the system, you should
+add a symbol like the following to your system login procedure
+(SYS$SYLOGIN)
+
+or to the user's LOGIN.COM:
+
+
+<INTERACTIVE>
+$ mxalias :== $mx_exe:mxalias.exe
+<ENDINTERACTIVE>
+
+<P>
+Alternatively, you can add a command to the DCLTABLES on your system
+that will invoke MXALIAS.  In order to do so, create a file called
+MXALIAS.CLD containing the following lines:
+
+<INTERACTIVE>
+!
+!  CLD file for defining MXALIAS command as DCL command
+!
+!  To install for all users, modify the dev:[dir] strings below and
+!  execute the following commands:
+!
+!       $ SET COMMAND MXALIAS.CLD/TABLE=SYS$LIBRARY:DCLTABLES.EXE-
+!               /OUTPUT=SYS$COMMON:[SYSLIB]DCLTABLES.EXE
+!       $ INSTALL :== $INSTALL/COMMAND
+!       $ INSTALL REPLACE SYS$LIBRARY:DCLTABLES.EXE
+!
+DEFINE VERB MXALIAS
+        IMAGE   MX_EXE:MXALIAS.EXE
+        CLIFLAGS(FOREIGN)
+<ENDINTERACTIVE>
+
+<P>
+The instructions in the file show you would enter the command in the
+system-wide DCLTABLES.  This undocumented technique can be used for
+any program that must be run with a foreign symbol.
+
+<P>
+MXALIAS includes its own on-line help.  A brief description of
+MXALIAS that can be placed in the system help library can be found in
+MX_DIR: as MXALIAS_MAIN.HLP.  To install it in the system-wide help
+library, execute the following command:
+
+<INTERACTIVE>
+<S>($ )<U>(LIBRARY/HELP/REPLACE SYS$HELP:HELPLIB.HLB MX_DIR:MXALIAS_MAIN)
+<ENDINTERACTIVE>
+
+<P>
+Of course, any local help library may be specified instead of
+SYS$HELP:HELPLIB.HLB.
+
+<head1>(Starting MX\INSTALL_GUIDE_36)
+<p>Once you have created an MX configuration database and added the
+appropriate startup commands to your system startup, you are ready
+to start up the MX software.  From the SYSTEM account, or other suitably
+privileged account, enter the command:
+<interactive>
+<s>($ @SYS$STARTUP:MX_STARTUP)
+<endinteractive>
+<p>If you are using a separate mailer account, you instead use the command:
+<interactive>
+<s>($ SUBMIT/NOPRINT/USER=mailer/QUEUE=batchque SYS$STARTUP:MX_STARTUP)
+<endinteractive>
+<p>In a VMScluster environment, you should execute MX_STARTUP on each
+node in the cluster.

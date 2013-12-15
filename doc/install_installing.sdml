@@ -1,0 +1,226 @@
+<chapter>(Installing Message Exchange\INSTALL_GUIDE_12)
+<INCLUDE>(SYMBOLS.SDML)
+<p>MX uses VMSINSTAL for installation.  If you do not know how to use
+VMSINSTAL, you should first read the chapter on installing software
+in the <emphasis>(VMS System Manager's Manual).  For the installation, you
+should be logged into the SYSTEM account, or another suitably privileged
+account.
+
+<NOTE>
+MX <EMPHASIS>(must) be installed <EMPHASIS>(multiple times) on a
+mixed-architecture VMScluster: once per architecture. The
+first installation will also provide the architecture-independent
+files.
+
+When installing on a mixed VMScluster, be sure to specify a device name
+for the MX installation directory that is valid for all systems in the
+cluster, and refers to the same device in all cases.  Using a
+platform-specific logical name, such as SYS$SYSDEVICE, will cause
+subsequent installations to fail.
+<ENDNOTE>
+
+<head1>(Shutting down MX\INSTALL_GUIDE_13)
+<p>If any MX processes are currently running, you should stop them before
+installing a new version of MX.
+Unprocessed mail should remain queued until you start the new MX processes.
+<head1>(Invoking VMSINSTAL\INSTALL_GUIDE_14)
+<p>Invoke VMSINSTAL to install MX.
+<interactive>
+<s>($ )<u>(@SYS$UPDATE:VMSINSTAL MXvvn ddcu:)
+<endinteractive>
+<p>Substitute the appropriate values for <emphasis>(vvn) and <emphasis>(ddcu).
+<interactive>
+
+         OpenVMS Alpha Software Product Installation Procedure V7.2
+
+It is dd-Mmm-yyyy at hh:mm.
+Enter a question mark (?) at any time for help.
+
+<endinteractive>
+<p>If there are any users logged into the system, you will see the message
+<interactive>
+%VMSINSTAL-W-ACTIVE, The following processes are still active:
+...process names...
+
+<endinteractive>
+<p>You can install MX while users are logged in, though it is safer to
+perform the installation while no one is logged in and while your network
+links are shut down.
+<interactive>
+<s>(* Do you want to continue anyway [NO]?)
+<endinteractive>
+<p>If you wish to continue, answer YES.
+<interactive>
+<s>(* Are you satisfied with the backup of your system disk [YES]?)
+<endinteractive>
+<p>If you feel comfortable with your system disk backup, answer YES.
+Otherwise, answer NO, perform the backup, then restart the installation
+procedure.
+
+<HEAD1>(Preliminary Installation Checks\install_prelimchecks)
+<P>
+The installation procedure first checks to make sure that the version of
+VMS that you are running is compatible with the version of MX being installed,
+and does some preliminary checks on disk space.  It then tries to determine
+the type of installation and the location of the MX directory tree.
+
+<HEAD2>(Ensuring that MX is Currently Shut Down\mxupcheck)
+<P>
+If a version of MX is currently installed, the installation procedure will
+check to see if any MX delivery agents are currently running.  If so, it
+will warn you of this and ask if you wish to continue with the installation:
+<INTERACTIVE>
+<S>(%MX-I-NOTDOWN, MX delivery agents have not been shut down.)
+<S>(* Do you wish to continue [NO]?)
+<ENDINTERACTIVE>
+<CP>
+It is <EMPHASIS>(strongly) recommended that you answer NO to this question,
+shut down MX, then restart the installation.
+
+<HEAD2>(Determining the Installation Type\detinsttype)
+<P>
+The installation procedure examines the system to determine if a version
+of MX is already installed.  If there is a version of MX installed, it
+then determines whether this is an <emphasis>(upgrade) from an upgradable
+previous version of MX, or a <emphasis>(reinstall) of the current version.
+In either case, the installation procedure asks you if you wish to update
+the MX installation it found:
+<INTERACTIVE>
+<S>(%MX-I-INSTALDET, An installation of MX V<EMPHASIS>(v.u) has been detected at <EMPHASIS>(dev:[dir]).)
+<S>(* Do you wish to update the existing installation [YES]? )
+<ENDINTERACTIVE>
+<CP>If you answer YES to this question, the installation procedure will
+skip the question about selecting a location for the MX directory tree.
+<P>
+If this is a fresh install, or you answer NO when asked about updating
+an existing installation, you are then asked:
+
+<interactive>
+<s>(* Where should the MX top directory be located [SYS$SYSDEVICE:[MX]]:)
+<endinteractive>
+<p>You may place the MX directories on any disk you like.  If MX is already
+installed on the system and its logical names are defined, the default
+answer will be the definition of your existing MX root directory.
+
+<NOTE>
+If you are installing MX on a mixed VMScluster where 
+systems of different architectures
+will share a common directory, be sure you specify a disk that
+is common to all types of systems.  The default device (SYS$SYSDEVICE:)
+may not be appropriate, especially if you do not cross-mount
+your system disks between systems of different architectures.
+<ENDNOTE>
+
+<HEAD2>(Mixed-Architecture Installation\install_mixed_arch)
+<P>
+MX next determines if the system is part of a VMScluster, and if
+the version of MX currently being installed has already been installed
+once on a node in the cluster of a different architecture.  If both of
+these are found to be true the installation procedure then asks:
+<INTERACTIVE>
+*  Do you wish to install only <EMPHASIS>(arch)-specific files [YES]?
+<ENDINTERACTIVE>
+<P>
+You should answer YES to this question unless you really want to re-install
+the architecture-independent files.
+
+<p>The last of the preliminary questions is
+<interactive>
+<s>(* Do you want to purge files replaced by this installation [YES]?)
+<endinteractive>
+<p>
+If this is the first time you have installed MX, answering NO to this
+question can save some time when the MX files are moved into their
+directories.
+
+<head1>(Component Selection\INSTALL_GUIDE_16)
+<p>A menu of MX components appears next, and you are asked
+to enter your choices from the menu:
+<interactive>
+     1. [ ] Base MX software
+     2. [ ] NETLIB network support
+     3. [ ] SMTP interface support
+     4. [ ] SMTP-over-DECnet support
+     5. [ ] Site-provided interface support
+     6. [ ] Mailing List/File Server support
+     7. [ ] Documentation
+     8. [ ] Example files and programs
+
+     9.     Exit
+ 
+*       Your choice [9]:
+<endinteractive>
+
+<P>
+The exact contents of this menu may differ from the above display,
+depending on the system's architecture.  In addition,
+if this is an architecture-specific-only installation
+(see <reference>(install_mixed_arch)), the last
+three choices in the menu will not be displayed.
+
+<p>
+Enter the number corresponding to the component you wish to install;
+multiple components may be selected by entering the numbers as a
+comma-separated list.  The menu is displayed again after each
+selection, with asterisks appearing next to the items you have
+selected; selecting a component twice removes it from the selection
+list.
+
+
+<P>
+When you are upgrading to a new version of MX, the installation procedure will
+look at your current configuration to automatically determine the components
+that should be installed.  If you wish to omit any of those components that
+were selected, simply select them again to remove it from the list.
+
+
+<P>
+When you have selected the components you want to install,
+enter <EMPHASIS>(9\BOLD) to exit the menu.  Your selections are displayed again and
+you are asked to confirm your selections:
+
+<interactive>
+    You have selected the following optional components:
+
+    (selected components listed here)
+
+* Is this correct [YES]?
+<endinteractive>
+<p>Press RETURN to continue the installation, or enter NO to return to
+the components menu.
+<subhead1>(Component Notes\INSTALL_GUIDE_52)
+<p>You <emphasis>(must) install the Base software component if this
+is your first installation of MX, or if you are upgrading from a previous
+version of MX.  The other components are optional and may be installed at
+any time after the Base component is installed.  If you re-install the
+Base component, you must also re-install all desired optional components
+as well, except for documentation, examples and contributed files.
+<p>If you elect to install SMTP support, NETLIB support will automatically
+be installed as well.  If you have already installed the NETLIB support
+component, you can disable the NETLIB re-installation by re-selecting it
+on the menu.
+
+<HEAD1>(NETLIB Component Installation\INSTALL_GUIDE_20)
+<p>If you are installing the NETLIB component
+(required for SMTP support using TCP/IP), the saveset containing the NETLIB support
+files will be loaded and you will be asked some questions regarding the configuration
+of NETLIB.
+<P>
+The NETLIB installation procedure asks where the NETLIB
+shareable libraries should be placed:
+<interactive>
+<s>(* Where should the NETLIB libraries be placed [<EMPHASIS>(device:[directory])]:)
+<endinteractive>
+<p>If this is your first installation of NETLIB, the default answer for this question
+will be the directory where the MX executables are located.  However, you may specify any
+valid location for these files.
+
+<head1>(The Installation Completes\optinst)
+<p>
+After the configuration questions and NETLIB component installations,
+which always require input from the installer, all selected components
+are installed. Files are copied from the each save set of the
+installation kit, then all
+installed files are copied to their destination directories. 
+Informational messages about the individual components are displayed
+as needed.

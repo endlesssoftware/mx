@@ -1,0 +1,25 @@
+<APPENDIX>(Contents of Distribution Kit\INSTALL_GUIDE_41)
+<p>MX is provided in a VMSINSTALlable distribution kit consisting of
+14 save sets.  Each save set is briefly described in
+<reference>(sstab).
+<table>(MX installation kit save sets\sstab)
+<table_setup>(2\10)
+<table_heads>(Save Set\Contents)
+
+<table_row>(MX<REFERENCE>(KITVER).A\Kit files and common base installation files.)
+<table_row>(MX<REFERENCE>(KITVER).B\Base installation files (Alpha).)
+<table_row>(MX<REFERENCE>(KITVER).C\Base installation files (IA64).)
+<table_row>(MX<REFERENCE>(KITVER).D\Base installation files (VAX).)
+<table_row>(MX<REFERENCE>(KITVER).E\MX SMTP (TCP/IP, DECnet) files (Alpha).)
+<table_row>(MX<REFERENCE>(KITVER).F\MX SMTP (TCP/IP, DECnet) files (IA64).)
+<table_row>(MX<REFERENCE>(KITVER).G\MX SMTP (TCP/IP, DECnet) files (VAX).)
+<table_row>(MX<REFERENCE>(KITVER).H\MX SITE and MLF files (Alpha).)
+<table_row>(MX<REFERENCE>(KITVER).I\MX SITE and MLF files (IA64).)
+<table_row>(MX<REFERENCE>(KITVER).J\MX SITE and MLF files (VAX).)
+<table_row>(MX<REFERENCE>(KITVER).K\Mailing List/File Server (MLF) common files.)
+<table_row>(MX<REFERENCE>(KITVER).L\Documentation files, in PostScript, PDF, HTML, and plain ASCII formats.)
+<table_row>(MX<REFERENCE>(KITVER).M\Examples.)
+<table_row>(MX<REFERENCE>(KITVER).M\Full source code.)
+<endtable>
+
+<endappendix>

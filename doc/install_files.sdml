@@ -1,0 +1,148 @@
+<APPENDIX>(Files Created During Installation\INSTALL_GUIDE_50)
+<P>
+The files in <reference>(filetab) are created during the installation
+of the MX software. 
+
+<p>The following notes are referenced in <reference>(filetab):
+<list>(numbered)
+<le>Only if Mailing List/File Server support is installed.
+<le>Only if Documentation is installed.
+<le>Only if Examples are installed.
+<le>Only if SMTP-over-DECnet is installed.
+<le>Only if SMTP support is installed.
+<le>Only if SITE support is installed.
+<le>Only if NETLIB support is installed.
+<endlist>
+
+<table>(Message Exchange files created during installation\filetab)
+<table_attributes>(WIDE)
+<table_setup>(2\30)
+<table_heads>(File name\Description)
+<table_unit>
+<table_unit_heads>(<span>(2)Files in MX_FLQ_DIR:)
+<TABLE_ROW>(MX_SYSTEM_QUEUE.FLQ_CTL\System queue sequential file)
+<endtable_unit>
+<table_unit>
+<table_unit_heads>(<span>(2)Files in MX_ROOT:[000000])
+<table_row>(MGLICENSE_DATABASE.MGLICDB\License key database)
+<table_row>(MXALIAS_MAIN.HLP\Top-level MXALIAS help file for HELPLIB.HLB)
+<table_row>(MX_ALIAS_HELPLIB.HLB\Help library for MXALIAS)
+<table_row>(MX_MCP_HELPLIB.HLB\Help library for MCP)
+<table_row>(MX_REJMAN_HELPLIB.HLB\Help library for REJMAN utility)
+<table_row>(MLF_CONFIG.COM\ML/FS configuration procedure (Note 1))
+<table_row>(MX_LICENSE.COM\Command procedure for license management)
+<TABLE_ROW>(MXCONFIG.COM\MX configuration creation procedure)
+<TABLE_ROW>(MX_CREATE_CONFIG_DATABASE.COM\MX configuration database creation procedure)
+<TABLE_ROW>(MX_LOGICALS.DAT\Logical name definitions used by MX___STARTUP.COM)
+<TABLE_ROW>(MX_STARTUP_INFO.DAT\Describes which MX processes get started)
+<endtable_unit>
+<table_unit>
+<table_unit_heads>(<span>(2)Files in MX_ROOT:[DOC] (Note 2))
+<table_row>(INDEX.HTML\Index of HTML documentation (HTML))
+<table_row>(MX_INSTALL_GUIDE.HTML\Installation guide (HTML))
+<table_row>(MX_INSTALL_GUIDE.PS\Installation guide (PostScript))
+<table_row>(MX_INSTALL_GUIDE.TXT\Installation guide (ASCII))
+<table_row>(MX_MGMT_GUIDE.HTML\Management guide (HTML))
+<table_row>(MX_MGMT_GUIDE.PS\Management guide (PostScript))
+<table_row>(MX_MGMT_GUIDE.TXT\Management guide (ASCII))
+<table_row>(MX_MLF_GUIDE.HTML\Mailing List/File Server guide (HTML))
+<table_row>(MX_MLF_GUIDE.PS\Mailing List/File Server guide (PostScript))
+<table_row>(MX_MLF_GUIDE.TXT\Mailing List/File Server guide (ASCII))
+<table_row>(MX_PROG_GUIDE.HTML\Programmer's guide (HTML))
+<table_row>(MX_PROG_GUIDE.PS\Programmer's guide (PostScript))
+<table_row>(MX_PROG_GUIDE.TXT\Programmer's guide (ASCII))
+<table_row>(MX_USER_GUIDE.HTML\User guide (HTML))
+<table_row>(MX_USER_GUIDE.PS\User guide (PostScript))
+<table_row>(MX_USER_GUIDE.TXT\User guide (ASCII))
+<endtable_unit>
+
+<table_unit>
+<table_unit_heads>(<span>(2)Files in MX_ROOT:[EXAMPLES] (Note 3))
+<TABLE_ROW>(00README.ADDRESS_REWRITER\README file for address rewriter.)
+<TABLE_ROW>(00README.NAME_CONVERSION\README file for name conversion module.)
+<TABLE_ROW>(ACCESS_CHECK.ZIP\Sample callout for SMTP client access checks.)
+<TABLE_ROW>(ACCESS_CHECK_EXAMPLE.C\Sample callout for SMTP client access checks.)
+<TABLE_ROW>(ADDRESS_REWRITER.B32\BLISS source for address rewriter.)
+<TABLE_ROW>(ADDRESS_REWRITER.C\C source for address rewriter.)
+<TABLE_ROW>(ADDRESS_REWRITER.MMS\Makefile for address rewriter.)
+<TABLE_ROW>(AUTH_CALLOUT_EXAMPLE.C\Sample callout for SMTP authentication.)
+<TABLE_ROW>(CHARCONV_EXAMPLE.C\Sample character set conversion callout.)
+<TABLE_ROW>(CHARCONV_EXAMPLE_README.TXT\Documentation for the sample character set conversion callout.)
+<TABLE_ROW>(DOM_EXPANSION_CMU.B32\Sample domain name expander for CMU TCP/IP.)
+<TABLE_ROW>(DOM_EXPANSION_UCX.B32\Sample domain name expander for DEC TCP/IP.)
+<TABLE_ROW>(FILTER.C\Sample message filter callout.)
+<TABLE_ROW>(MX_FILTERDEF.H\Header file for sample message filter callout.)
+<TABLE_ROW>(MX_FILTERDEF.R32\BLISS REQUIRE file for creating a message filter.)
+<TABLE_ROW>(MX_HDR.H\C header file with MX header definitions.)
+<TABLE_ROW>(NAME_CONVERSION.B32\BLISS source for name conversion module.)
+<TABLE_ROW>(NAME_CONVERSION.MAR\MACRO source for name conversion module.)
+<TABLE_ROW>(NAME_CONVERSION.C\C source for name conversion module.)
+<TABLE_ROW>(VIRTDOM.ZIP\ZIP file containing a sample address-rewriter callout that implements <quote>(virtual domains).)
+<endtable_unit>
+
+<table_unit>
+<table_unit_heads>(<span>(2)Files in MX executables directories)
+<table_row>(DNSMTP_SERVER.EXE\SMTP-over-DECnet receiver module (Note 4))
+<table_row>(DOMAIN_EXPANSION.EXE\Domain name expander (Note 5))
+<TABLE_ROW>(MAILQUEUE.EXE\Program for listing delayed messages in queue)
+<table_row>(MCP.EXE\MX Control Program)
+<table_row>(MLFAKE.EXE\Utility for faking messages to mailing list servers)
+<TABLE_ROW>(MXALIAS.EXE\Utility for defining MX aliases)
+<TABLE_ROW>(MX_DECODE.EXE\Utility to decode BASE64 mail messages)
+<table_row>(MX_DNSMTP.COM\SMTP-over-DECnet command procedure (Note 4))
+<table_row>(MX_DNSMTP.EXE\SMTP-over-DECnet delivery module (Note 4))
+<TABLE_ROW>(MX_FLQ_MGR.COM\MX FLQ Manager command procedure)
+<TABLE_ROW>(MX_FLQ_MGR.EXE\MX FLQ Manager)
+<table_row>(MX_FLQ_SHR.EXE\Shareable image implementing file queues)
+<TABLE_ROW>(MX_LOCAL.EXE\MX Local delivery module)
+<table_row>(MX_MAILSHR.EXE\VMS MAIL foreign protocol interface)
+<table_row>(MX_MAILSHRP.EXE\Service routines for foreign protocol interface)
+<table_row>(MX_MLF.COM\Mailing list/file server command procedure (Note 1))
+<table_row>(MX_MLF.EXE\Mailing list/file server module (Note 1))
+<table_row>(MX_MSG.EXE\Messages file)
+<table_row>(MX_ROUTER.COM\MX Router command procedure)
+<table_row>(MX_ROUTER.EXE\MX Router module)
+<table_row>(MX_SHR.EXE\MX common routines shareable library)
+<table_row>(MX_SITE.COM\Command procedure used by site-spec interface (Note 6))
+<table_row>(MX_SITE.EXE\Site-spec delivery agent (Note 6))
+<table_row>(MX_SITE_IN.COM\Site-spec message entry program (Note 6))
+<TABLE_ROW>(MX_SMTP.COM\SMTP outbound delivery command procedure (Note 5))
+<TABLE_ROW>(MX_SMTP.EXE\SMTP outbound delivery module (Note 5))
+<TABLE_ROW>(MX_SMTP_MSG.EXE\Message file for delivery status and SMTP messages)
+<TABLE_ROW>(MX_START.COM\Command procedure for starting MX components)
+<TABLE_ROW_BREAK>(LAST)
+<TABLE_ROW>(MX___STARTUP.COM\Master startup procedure for MX.)
+<TABLE_ROW>(REJMAN.EXE\REJMAN utility)
+<TABLE_ROW>(SMTP_SERVER.COM\SMTP inbound receiver command procedure (Note 5))
+<TABLE_ROW>(SMTP_SERVER.EXE\SMTP inbound receiver module (Note 5))
+<endtable_unit>
+<table_unit>
+<TABLE_UNIT_HEADS>(<span>(2)Files in MX_ROOT:[MLF] (Note 1))
+<TABLE_ROW>(FILESERV_HELP.TXT\Help text for use with file server)
+<endtable_unit>
+<table_unit>
+<TABLE_UNIT_HEADS>(<span>(2)Files in MX_ROOT:[MLF.MAILING_LISTS] (Note 1))
+<TABLE_ROW>(MLIST_ADD_MESSAGE.TEMPLATE\Template for mailing list add message)
+<TABLE_ROW>(MLIST_ADD_MESSAGE.TXT\Template for mailing list add message)
+<TABLE_ROW>(MLIST_FORWARD_MESSAGE.TEMPLATE\Template for forwarded-to-list-owner message)
+<TABLE_ROW>(MLIST_FORWARD_MESSAGE.TXT\Template for forwarded-to-list-owner message)
+<table_row>(MLIST_HELP.TXT\Help file for mailing list processor)
+<TABLE_ROW>(MLIST_REMOVE_MESSAGE.TEMPLATE\Template for mailing list removal message)
+<TABLE_ROW>(MLIST_REMOVE_MESSAGE.TXT\Template for mailing list removal message)
+<endtable_unit>
+<table_unit>
+<TABLE_UNIT_HEADS>(<span>(2)Files in NETLIB_DIR: (Note 7))
+<TABLE_ROW>(NETLIB_SHR.EXE\NETLIB shareable library)
+<endtable_unit>
+<table_unit>
+<TABLE_UNIT_HEADS>(<span>(2)Files in SYS$COMMON:[SYSHLP])
+<table_row>(MXvvn.RELEASE_NOTES\Release notes for MX)
+<table_row>(NETLIBvvn.RELEASE_NOTES\Release notes for NETLIB)
+<endtable_unit>
+<table_unit>
+<TABLE_UNIT_HEADS>(<span>(2)Files in SYS$COMMON:[SYS$STARTUP])
+<TABLE_ROW>(MX_STARTUP.COM\Startup procedure for MX)
+<TABLE_ROW>(NETLIB_STARTUP.COM\Startup procedure for NETLIB (Note 7))
+<endtable_unit>
+<endtable>
+<endappendix>

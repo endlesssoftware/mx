@@ -1,0 +1,1193 @@
+<COMMENT>
+
+   File:	MLF_GUIDE.SDML
+
+   Abstract:	VAX DOCUMENT source for _Message Exchange MLF Guide_
+
+   Authors:	Matt Madison
+		Hunter Goatley
+
+Copyright (c) 2008, Matthew Madison.
+Copyright (c) 2011, Endless Software Solutions.
+
+All rights reserved.
+
+Redistribution and use in source and binary forms, with or without
+modification, are permitted provided that the following conditions
+are met:
+
+    * Redistributions of source code must retain the above
+      copyright notice, this list of conditions and the following
+      disclaimer.
+    * Redistributions in binary form must reproduce the above
+      copyright notice, this list of conditions and the following
+      disclaimer in the documentation and/or other materials provided
+      with the distribution.
+    * Neither the name of the copyright owner nor the names of any
+      other contributors may be used to endorse or promote products
+      derived from this software without specific prior written
+      permission.
+
+THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
+"AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
+LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
+A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
+OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
+SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
+LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
+DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
+THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
+(INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
+OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+
+   Modified by:
+
+	10-JAN-1994	Goatley		Updated for MX V4.0.
+	15-APR-1993	Goatley		Updated for MX V3.3.
+	15-FEB-1993	Goatley		Updated for MX v3.2.
+    	14-JAN-1997 	Madison	    	Add RECIPIENT_MAXIMUM info.
+	 5-MAY-1997	Goatley		Add new header info.
+    	11-OCT-1998 	Madison	    	Another RECIPIENT_MAXIMUM update.
+    	13-NOV-1999 	Madison	    	Parity in listserv interface ADD/REMOVE.
+        15-FEB-2002     Madison         text only, confirmations, review/brief.
+        03-Feb-2008     Madison         Updated for open source release.
+	03-Aug-2011	Sneddon		Update software revisions.
+
+<ENDCOMMENT>
+<INCLUDE>(SYMBOLS.SDML)
+<FRONT_MATTER>(MLF_GUIDE_1)
+
+<TITLE_PAGE>
+<TITLE>(Message Exchange Mailing List/File Server Guide)
+<ABSTRACT>(<REFERENCE>(RELMONTH))
+<p>This manual describes the management and operation of
+Message Exchange, electronic mail software for VMS systems.
+<ENDABSTRACT>
+<REVISION_INFO>(This is a revised manual.)
+<REVISION_INFO>(Operating System and Version:\OpenVMS VAX V6.2 or later)
+<REVISION_INFO>(\OpenVMS Alpha V6.2 or later)
+<REVISION_INFO>(\OpenVMS Industry Standard 64 V8.2 or later)
+<REVISION_INFO>(Software Version:\Message Exchange <REFERENCE>(VER))
+<ENDTITLE_PAGE>(Endless Software Solutions<LINE>Perth, Western Australia)
+
+<INCLUDE>(COPYRIGHT.SDML)
+<CONTENTS_FILE>
+
+
+<PREFACE>(7\MLF_GUIDE_2)
+<P>
+This guide describes the management and operation of the Message
+Exchange Mailing List/File Server (MX MLF).
+
+<head1>(Intended Audience\MLF_GUIDE_3)
+<p>This manual is intended for use by the system manager or any individual
+responsible for installing and maintaining MX, and for users responsible for
+creating or managing MX-based mailing lists and file servers.  The reader
+should be generally familiar with VMS system concepts, electronic mail
+systems and networking terminology.
+<head1>(Document Structure\MLF_GUIDE_4)
+<p>This guide consists of 
+<table>
+<table_setup>(2\10)
+<table_row>(Chapter 1\Contains a general description of MLF.)
+<table_row>(Chapter 2\Describes how to use the MLF_CONFIG procedure.)
+<table_row>(Chapter 3\Describes how to manage a mailing list.)
+<table_row>(Chapter 4\Describes how to manage a file server.)
+<endtable>
+<head1>(Related Documents\MLF_GUIDE_5)
+<p>You can find additional information in the following documents:
+<list>(unnumbered)
+<le><reference>(mgmtguide) describes how to manage MX and contains the command
+dictionary for the MX Control Program (MCP).
+<le><reference>(userguide) describes MX features available to general users.
+<endlist>
+<ENDPREFACE>
+<ENDFRONT_MATTER>
+
+
+<CHAPTER>(The Mailing List/File Server\mlfdescrip)
+<P>
+Message Exchange (MX) includes a program called the Mailing List/File
+Server (MLF).  This program provides the services needed to distribute
+messages to mailing lists and manage those lists through mailed
+commands.  It also provides services for distributing packages of
+files by electronic mail.
+
+<HEAD1>(Mailing Lists\mailinglists)
+<P>
+When talking about electronic mail, the term <newterm>(mailing list)
+is generally used to describe an E-mail address that forwards 
+messages to one or more <newterm>(subscribers).  Mailing lists abound
+on the Internet, on a wide variety of technical and
+non-technical topics.
+
+<P>
+Unfortunately, there are no widely-enforced standards on the implementation of mailing
+lists, so their use will vary depending on the systems on which the
+mailing lists are set up. 
+
+<P>
+For most Internet mailing lists, there are generally two addresses: one for
+the mailing list itself, and one for <quote>(administrivia) (subscription
+requests, etc.).  The administrative address is usually the mailing list name
+with <quote>(-request) added.
+
+<P>
+MLF provides support for both the typical Internet -request interface and a
+subset of the interface used by L-Soft's ListServ for its automatic command handling.
+
+The special addresses MXSERVER and MXSERV are recognized by
+MX Router as the MLF ListServ-style interface.  If you also want
+LISTSERV to be recognized, then you must define it as an alias using
+the MCP command DEFINE ALIAS.  For example:
+
+<INTERACTIVE>
+<S>(MCP> )<U>(DEFINE ALIAS LISTSERV "MXserver@hostname")
+<ENDINTERACTIVE>
+
+
+<HEAD1>(File Servers\fileservers)
+<P>
+There are no standards for file servers.  There
+are several file server implementations in existence: LISTSERV,
+VMSSERV, MAILSERV, and several others. Some take commands on the subject line of a message, and
+some in the body of a message.  The way files are distributed can also
+vary from server to server.
+
+<P>
+The MLF file server command interface accepts commands by E-mail only,
+and returns files only by E-mail.
+
+
+<P>
+MX allows the use of any name for the file server; FileServ is commonly
+used.
+
+
+
+<CHAPTER>(Using MLF_CONFIG.COM\usinmlfconf)
+<P>
+MLF comes with a command procedure, MLF_CONFIG.COM, which is placed at
+installation time in the MX_DIR: directory.  This command procedure
+uses a simple question-and-answer script to develop the MCP commands
+needed to create mailing lists and file servers.
+
+<HEAD1>(List Server Managers\lsvmgrs)
+<P>
+MLF_CONFIG begins by reading in your current MX configuration and
+checking to see if you have any list server managers (called
+SYSTEM_USERS in MCP) defined.  If not, MLF_CONFIG will prompt you
+first for the primary list server manager's address, followed by any
+other users who should be given manager access to mailing lists.
+
+<P>
+List server managers are granted control access to all mailing lists
+on the system, allowing them to use the ADD and REMOVE commands.  In
+addition, they are granted access through the SYSTEM protection class
+on all mailing lists.
+
+<NOTE>
+Unless the list is defined with /NOCASE_SENSITIVE, the
+mailing list processor is case sensitive when matching the
+username portion of addresses.  Be sure to enter the list manager
+addresses using the correct case.  MX, by default, converts all
+usernames to lower case for local users, so you should generally use
+lower case when specifying local list managers' addresses.
+<ENDNOTE>
+
+<SUBHEAD1>(Primary List Server Manager\prilsvmgr)
+<P>
+The first address on the SYSTEM_USERS list is for the primary list
+server manager. The primary list server manager's address is used as
+the return address for non-list-related mail messages sent by MLF. If
+you would rather not have an actual person's E-mail address be used
+for that purpose, you should set up an alias.
+
+<HEAD1>(Mailing Lists\cfgmlists)
+<P>
+Once you have defined your list server managers, or if they were
+already defined before you ran MLF_CONFIG, you can then set up one or
+more mailing lists.  MLF_CONFIG will prompt you for the name of the
+mailing list and the address of the owner of the list, which are
+required.  It will then prompt you for the optional information
+related to the list.
+
+<P>
+To move on to the File Server section of MLF_CONFIG, just press RETURN
+when prompted for a mailing list name.
+<NOTE>
+Unless the list is defined with /NOCASE_SENSITIVE, the
+mailing list processor is case sensitive when matching the
+username portion of addresses.  Be sure to enter the owner addresses
+using the correct case.  MX, by default, converts all usernames to
+lower case for local users, so you should generally use lower case
+when specifying local owner addresses.
+<ENDNOTE>
+
+<HEAD1>(File Servers\cfgfsrv)
+<P>
+After the mailing lists phase, MLF_CONFIG will ask you about file
+servers.  To create a file server, you must specify the name,
+manager's address, and the device and directory that will serve as the
+root of the file server.  MLF_CONFIG will prompt you for this
+information, and will create the root directory for you, if you wish. 
+It will then prompt for optional information regarding the file
+server.
+
+<HEAD1>(Using the Results\useresul)
+<P>
+When MLF_CONFIG finishes, it leaves you with an MCP command file,
+called MX_DIR:MLF_CONFIG.MCP by default.  You should review the
+contents of that file; if satisfied with the results, you should then
+execute the command file in MCP, save the resulting configuration
+information, then reset the Router and MLF processes to have the new
+mailing lists and file servers recognized:
+<interactive>
+<s>($ )<u>(MCP)
+<s>(MCP> )<u>(@MLF_CONFIG.MCP)
+<s>(MCP> )<u>(SAVE)
+<S>(MCP> )<U>(RESET/CLUSTER ROUTER,MLF)
+<endinteractive>
+<p>Your newly-created mailing lists and file servers will then be ready.
+
+
+<chapter>(Mailing Lists\MLF_GUIDE_27)
+<x>(Mailing lists)
+<P>
+The MCP DEFINE LIST command is used to create a mailing list.  The
+mailing list processor supports the automatic archiving of mailing
+list messages, automatic subscription processing, and limited remote
+control of mailing lists.  In addition, mailing lists can be protected
+in a variety of ways to restrict the automatic subscription facility
+as well as postings to the list.
+
+
+<P>
+Four local addresses are set up for each mailing list: one
+<x>(Mailing lists<xs>addresses)
+for the list itself, a request address
+(<emphasis>(list-name)-REQUEST), an owner address
+(owner-<EMPHASIS>(list-name)), and a digest address
+(<EMPHASIS>(list-name)-digest) for those lists supporting digests.
+
+The mailing list processor accepts
+subscription requests and other control messages on a list's request
+address.
+
+<P>
+The list of subscribers is maintained by the MLF agent in the file
+MX_MLIST_DIR:<emphasis>(list-name).MAILING_LIST.  The format used for
+this file is not readable by humans; you should use the list server
+command interface or the MCP REVIEW command to examine the subscriber
+list.
+
+<head1>(Archives\MLF_GUIDE_28)
+<x>(Mailing lists<xs>archives)
+<P>
+A mailing list is archived automatically by the mailing list processor
+when the /ARCHIVE qualifier is used on the DEFINE LIST command. You
+must specify at least a device and directory for the archive.  The
+file name for the archive defaults to the name of the mailing list,
+and the file type for the archive defaults to <emphasis>(yyyy-mm), the
+current year and month.  By keeping with the default, a new archive
+file will be created every month.
+
+<head1>(Protection Codes\MLF_GUIDE_29)
+<x>(Mailing lists<xs>protection)
+<p>The standard VMS protection code syntax is used to describe access
+to mailing lists.  <reference>(protab0) describes how each of the
+protection classes relates to mailing lists, and <reference>(protab0a)
+describes the protection codes.
+<table>(Mailing list protection classes\protab0)
+<table_setup>(2\10)
+<table_heads>(Class\Description)
+<table_row>(SYSTEM\any address matching one of the addresses on the system
+user list (see DEFINE SYSTEM_USERS))
+<table_row>(OWNER\any address matching one of the owner addresses specified on
+the /OWNER qualifier)
+<table_row>(GROUP\any address matching one the addresses on the subscriber
+list for the mailing list)
+<table_row>(WORLD\any other address)
+<endtable>
+<table>(Mailing list protection codes\protab0a)
+<table_setup>(2\10)
+<table_heads>(Code\Description)
+<table_row>(R (Read)\allows the use of the REVIEW command)
+<table_row>(W (Write)\allows the user to post messages to the list)
+<table_row>(E (Enroll)\allows the automatic handling of the SUBSCRIBE command)
+<table_row>(D (Delete)\allows the automatic handling of the SIGNOFF command)
+<endtable>
+
+<P>
+Note that Enroll access is only meaningful to WORLD-class users, and
+Delete access is only meaningful to GROUP-class users.  For most, if
+not all, mailing lists, you should grant RWED access to both SYSTEM
+and OWNER classes.  SYSTEM and OWNER also implicitly have Control
+access, allowing them to add and remove other users from the mailing
+list.  Some typical protection codes for GROUP and WORLD users are
+given in <reference>(protab0b).
+
+<table>(Typical protection codes\protab0b)
+<table_setup>(2\15)
+<table_row>((G:RWED,W:RWE)\Public list.  Anyone can subscribe, sign off,
+and review the list; anyone can post to the list.)
+<table_row>((G:RWED,W:E)\Semi-public list.  Anyone can subscribe and
+sign off the list, but only subscribers can review or post to the list.)
+<table_row>((G:W,W)\Private list.  Only subscribers can post to the list,
+and all subscription requests are screened by the owners of the mailing
+list.)
+<table_row>((G,W)\One-way list.  Only the owners can post to the list,
+and they also screen all the subscription requests.)
+<endtable>
+<NOTE>
+Since electronic mail can readily be forged, you should not depend on
+this protection scheme for absolute security of your mailing lists.
+The mailing list processor attempts no authentication of addresses when
+it receives messages.
+<ENDNOTE>
+
+<P>
+By default, information about all defined mailing lists is returned to
+a user in response to a DIRECTORY command sent to MXSERVER or a
+-Request address.  The /PRIVATE qualifier can be given on the DEFINE
+LIST command to prevent information about a list from being included
+in MXSERVER directories.  The list information will only include those
+lists that are not marked /PRIVATE.
+
+<head1>(Automatic Request Handling\MLF_GUIDE_30)
+<P>
+MLF will answer requests automatically at both a list's -Request
+address and through the MXSERVER interface. The commands it recognizes
+through the -Request interface are listed in <reference>(reqcmds). 
+MXSERVER commands are listed in <reference>(lsvcmds).
+
+<table>(MLF -Request commands\reqcmds)
+<table_setup>(2\25)
+<table_heads>(Command\Description)
+<table_row>(ADD address[,...]\Control command: allows list owner to add other users to
+the list.)
+<table_row>(HELP\Sends file MX_MLIST_DIR:MLIST_HELP.TXT.)
+<table_row>(LIST\Lists all available non-private mailing lists.)
+<table_row>(MODIFY address\Control command: allows list owner to modify a subscriber's settings.)
+<table_row>(QUERY\Returns the subscriber's status on the list.)
+<TABLE_ROW>(QUIT\Causes all remaining lines in the message to be ignored.)
+<table_row>(REMOVE address[,...]\Control command: allows list owner to remove other users
+from the list.)
+<table_row>(REVIEW\Returns information about the list, and the list of subscribers.)
+<table_row>(REVIEW/BRIEF\Returns only the list of subscribers.)
+<table_row>(SET [NO]MAIL\Enables/disables receipt of list messages.)
+<table_row>(SET [NO]CONCEAL\Controls whether subscriber is concealed from
+view in REVIEW listings.)
+<table_row>(SET [NO]REPRO\Controls whether subscriber receives a posting
+s/he makes to the mailing list.)
+
+<table_row>(SET [NO]DIGEST\Controls whether subscriber receives all posts
+		or a daily digest of posts to a list.)
+
+<table_row>(SIGNOFF\Removes the user from the list of subscribers.)
+<table_row>(SUBSCRIBE\Adds the user to the subscriber list.)
+<endtable>
+
+<table>(MLF MXSERVER commands\lsvcmds)
+<table_setup>(2\25)
+<table_heads>(Command\Description)
+<table_row>(ADD list-name address[,...]\Control command: allows list owner to
+    add other users to the list.)
+<table_row>(HELP\Sends file MX_MLIST_DIR:MLIST_HELP.TXT.)
+<table_row>(LIST\Lists all available non-private mailing lists.)
+<table_row>(MODIFY list-name address[,...]\Control command: allows list owner
+    to modify subscriber settings.)
+<table_row>(QUERY list-name\Returns the subscriber's status on the list.)
+<TABLE_ROW>(QUIT\Causes all remaining lines in the message to be ignored.)
+<table_row>(REMOVE list-name address[,...]\Control command: allows list owner
+    to remove other users from the list.)
+<table_row>(REVIEW list-name\Returns information about the list, and the list of subscribers.)
+<table_row>(REVIEW/BRIEF list-name\Returns only the list of subscribers.)
+<table_row>(SET list-name [NO]MAIL\Enables/disables receipt of list messages.)
+<table_row>(SET list-name [NO]CONCEAL\Controls whether subscriber is concealed from
+view in REVIEW listings.)
+<table_row>(SET list-name [NO]REPRO\Controls whether the subscriber receives
+a posting s/he makes to the mailing list.)
+
+<table_row>(SET list-name [NO]DIGEST\Controls whether subscriber receives all posts
+		or a daily digest of posts to a list.)
+
+<table_row>(SIGNOFF list-name\Removes the user from the list of subscribers.)
+<table_row>(SUBSCRIBE list-name\Adds the user to the subscriber list.)
+<endtable>
+
+<P>
+SUBSCRIBE requests are handled automatically only if the WORLD
+protection class is granted E (Enroll) access to the list.  Otherwise,
+they are forwarded to the list owners for manual handling.  If the
+list is configured with /REQUEST_CONFIRMATION, subscribers will be
+asked to confirm their subscription requests before being added to
+the list; if a reply to the requested confirmation does not arrive
+within the confirmation interval, the subscription request is ignored.
+
+<P>
+SIGNOFF requests are handled automatically only if the GROUP
+protection class is granted D (Delete) access to the list.  Otherwise,
+they are forwarded to the list owners for manual handling.
+
+<P>
+REVIEW requests are handled automatically only if the requesting user
+is granted R (Read) access to the list.  Read access may be granted
+only to GROUP (i.e., the subscribers of the list) or to GROUP and
+WORLD.  If access is denied, the request is returned with an error
+message.
+
+<HEAD2>(Control Commands\ctrlcmds)
+<P>
+The mailing list processor supports three control
+<x>(Mailing lists<xs>control commands)
+requests: ADD, MODIFY, and REMOVE.  They may be used by the owners of a mailing
+list to add and remove other users to and from the list of
+subscribers, or change their per-subscriber settings.
+
+<P>
+The owners of a mailing list also receive the full list of subscribers
+when they REVIEW their list, regardless of the CONCEAL setting of each
+subscriber.  Non-owners receive a list consisting of subscribers who
+have not set the CONCEAL flag for their subscription to the list.
+
+<HEAD1>(List Owner Notification Messages\ownerntfy)
+<P>
+The mailing list processor can notify the list owner(s) of
+changes to the mailing list.  By default, no such notifications
+are sent.   Supported list owner notifications
+are show in <REFERENCE>(ownerntfy_types). 
+To enable any or all these notifications, use the /NOTIFY qualifier
+on the MCP DEFINE LIST command.  See the <REFERENCE>(mgmtguide) for
+more information.
+<TABLE>(List Owner Notifications\ownerntfy_types)
+<TABLE_SETUP>(2\10)
+<TABLE_HEADS>(Type\Description)
+<TABLE_ROW>(ADD\Notification sent when a user is successfully added to the list.)
+<TABLE_ROW>(REMOVE\Notification sent when a user is successfully removed from the list.)
+<TABLE_ROW>(REQUEST\Notification sent when a confirmation request is sent or timed out.)
+<TABLE_ROW>(SET\Notification sent when a user's subscription settings are successfully modified.)
+<ENDTABLE>
+
+<head1>(User Notification Messages\mladdrem)
+<P>
+You can control the text of the message that is sent to the user when
+he or she subscribes or signs off from a mailing list, on a per-list
+and/or global basis.  <reference>(msgfiles) lists the types of
+messages you can set up and when they are sent.
+
+<table>(User notification messages\msgfiles)
+<table_attributes>(wide)
+<table_setup>(3\20\25)
+<table_heads>(Per-list qualifier\Global default\When sent)
+<table_row>(/ADD_MESSAGE\MLIST_ADD_MESSAGE.TXT\when a user is added
+to a mailing list)
+<table_row>(/REMOVE_MESSAGE\MLIST_REMOVE_MESSAGE.TXT\when a user is
+removed from a mailing list)
+<table_row>(/FORWARD_MESSAGE\MLIST_FORWARD_MESSAGE.TXT\when a user
+attempts to subscribe to a list with no W:E access)
+<table_row>(/CONFIRMATION_MESSAGE\MLIST_CONFIRM_MESSAGE.TXT\when
+a subscription confirmation request is issued)
+<endtable>
+
+<P>
+The global default message files are located in MX_MLIST_DIR. You can
+customize these files to suit your site's needs for all mailing lists,
+or use them as templates for the per-list files.
+
+<subhead1>(Customization Variables\MLF_GUIDE_31)
+<P>
+The text of a notification message can contain references to
+customization <quote>(variables) whose values are supplied by the
+mailing list processor.  Available variables are:
+<table>
+<table_setup>(2\20)
+<table_row>({list-address}\the RFC822 address of the mailing list)
+<table_row>({request-address}\the RFC822 address of the list's -Request address)
+<table_row>({list-name}\the name of the mailing list (no @hostname))
+<table_row>({list-desc}\the contents of the list description, as specified
+by the /DESCRIPTION qualifier on the DEFINE LIST command)
+<table_row>({list-owner}\the address of the owner of the mailing list
+(if there are multiple owner addresses, only the first is used))
+<table_row>({confirmation-deadline}\an RFC822 date/time stamp for
+displaying the deadline by which a subscription request must be
+confirmed; meaningful only in confirmation messages.)
+<endtable>
+
+<P>
+Note that each variable name must be surrounded by curly braces to be
+recognized.  All other text (including unrecognized variable
+references) is sent verbatim.
+
+<head1>(VMS Mail Forwarding\mailfwdg)
+<P>
+You can make it easier for local users and DECnet-connected users to
+send messages to a mailing list by creating a forwarding address in
+VMS Mail for the list name:
+
+<interactive>
+<s>($ )<U>(MAIL)
+<S>(MAIL> )<U>(SET FORWARD/USER=list-name MX%list-name)
+<ENDINTERACTIVE>
+
+<P>
+This will allow users to use just the list name when addressing the
+mailing list, without the MX% prefix.
+
+<P>
+If the list name ever changes or the list is deleted, you should
+remember to remove the forwarding address from VMS Mail for the list
+name:
+<interactive>
+<s>(MAIL> )<U>(REMOVE list-name)
+<endinteractive>
+
+<P>
+This will prevent a possible mail looping problem from occurring.
+
+<HEAD1>(Using the ADD, MODIFY, and REMOVE Commands\useaddrem)
+<P>
+The list processor provides commands for use exclusively by list
+owners and list server managers: ADD, MODIFY, and REMOVE.
+
+<HEAD2>(ADD and MODIFY Commands\addcmd)
+<P>
+The ADD command adds one or more users to a mailing list.  The
+MODIFY command modifies the various per-user settings for an
+existing list subscriber.
+The syntax for these command for the -Request interface is:
+
+<syntax>
+  ADD [qualifiers] address [,...]
+  MODIFY [qualifiers] address [,...]
+<endsyntax>
+
+<cp>The syntax for the MXSERVER interface is:
+<syntax>
+  ADD [qualifiers]  list-name  address [,...]
+<ENDsyntax>
+
+<P>
+You may specify multiple addresses to be added by separating the list
+with commas, but note that the entire command <emphasis>(must) fit on
+one line in the E-mail message.
+
+<P>
+For <keyword>(address), you should enter the RFC822-type address for
+the user to be added.  It should generally appear <emphasis>(exactly)
+as it does on the From line of a message, since the mailing list
+processor is case sensitive in the username part of addresses.  You
+may include the personal name, if desired:
+
+<INTERACTIVE>(ADD/NONOTIFY "Joe User" <user@host.site.domain>)
+
+<P>
+Valid qualifiers that can be specified are:
+<P>
+<LIST>(UNNUMBERED)
+<LE>	/[NO]NOTIFY  (on ADD command only)
+<LE>    /[NO]CONFIRM (on ADD command only)
+<LE>	/[NO]MAIL
+<LE>	/[NO]CASE
+<LE>	/[NO]CONCEAL
+<LE>	/[NO]REPRO
+<LE>	/[NO]DIGEST
+<LE>	/[NO]DENY
+<LE>	/[NO]ACCESS
+<LE>	/[NO]POST
+<ENDLIST>
+<P>
+By default, subscriber entries are set to MAIL, CASE, NOCONCEAL, REPRO,
+NODIGEST, NODENY, NOACCESS, and POST.  The default settings for a list can be
+set using the /SETTINGS qualifier on the MCP commands DEFINE LIST and MODIFY
+LIST.  See the <reference>(mgmtguide) for more information.
+
+<P>
+Use the /NONOTIFY qualifier when you do not want the new subscribers
+to receive the <quote>(you have been added) message for the mailing
+list.  MODIFY commands do not trigger any notification to the affected
+subscribers.
+
+<P>
+Use the /[NO]CONFIRM qualifier to override the /[NO]REQUEST_CONFIRMATION
+setting for the list -- with /CONFIRM, a confirmation request is sent
+to the subscriber before the addition is processed.  With /NOCONFIRM, the
+addition is processed immediately.
+
+<P>
+The /NOMAIL qualifier is used to add the user to the mailing list as a
+NOMAIL subscriber.  That is, the user is on the list without receiving
+any mail from the list.  NOMAIL subscriptions are used for private
+mailing lists, where only the subscribers are allowed to post, and for
+mailing lists that control access to file servers; a subscriber might
+have multiple addresses and may need access to the list or file server
+from any of those addresses.
+
+<P>
+The /NOCASE qualifier is used to add the user to the mailing list
+while having the list processor disregard the case of the username
+portion of the address.  Normally, the list processor is
+case-sensitive regarding usernames unless the list was defined with
+DEFINE LIST/NOCASE_SENSITIVE.
+
+<P>
+The /CONCEAL qualifier is used to set the CONCEAL flag in the
+subscriber's entry in the list.  CONCEALed users do not appear in
+REVIEW listings, except for those requested by the list owners.
+
+<P>
+The /NOREPRO qualifier is used to prevent the subscriber from
+receiving a copy of postings s/he makes to the list.
+
+<P>
+The /NOPOST qualifier is used to prevent the subscriber from posting to the
+list.  Note that if the list protection allows WORLD=WRITE access, /NOPOST
+has no effect.
+
+<P>
+The /DIGEST qualifier is used to mark the subscriber entry so that
+it will receive mailing lists posts made to the "-digest" address
+for a list.  For more information on digests, see <REFERENCE>(digsupt).
+
+<P>
+The /DENY qualifier can be used to add a subscriber to a closed mailing
+list (one which does not allow WORLD writes) and still prevent that
+subscriber from posting to the list, thus denying the subscriber
+access to the list.  Subscribers with the DENY flag set cannot
+post to the list, will not receive posts to the list, cannot
+change their subscriber entry, and cannot remove themselves
+from the list.
+
+<P>
+The DENY setting was added specifically to provide the list owner
+with the ability to keep problem subscribers from accessing the
+list.
+
+
+<P>
+The /ACCESS qualifier is used to establish an access control address
+for the list.  Access control addresses can be used to provide normal
+VMS wildcard matching for determining access to a mailing list.  Any
+address that matches an access control entry is granted the
+corresponding GROUP privileges for the list.  For example, if a list
+is open to posts only from members of the list, an access control
+address can be specified to allow any user from a particular site to
+post a message.
+
+<P>
+In addition, file servers, described in <REFERENCE>(MLF_GUIDE_FS), can
+be set up so that they are associated with a mailing list.  Any user
+wishing to use such a file server must be subscribed to the associated
+mailing list, or access to the file server will be denied.  The
+/ACCESS qualifier provides a way to allow unrestricted file server
+access to certain addresses without having to subscribe every possible
+address to the mailing list.
+
+<P>
+For example, suppose you have a file server that is to be used only by
+users from systems at XYZ.COM and YYZ.COM.  Instead of listing each
+possible user at both sites, ACCESS entries can be made to the list
+that will match users at those sites:
+
+<INTERACTIVE>
+ADD/ACCESS/NOCASE <*@*.XYZ.COM>
+ADD/ACCESS/CONCEAL <*@*.YYZ.COM>
+<ENDINTERACTIVE>
+
+<P>
+These addresses are automatically marked /NOMAIL and /NOREPRO so that
+they never receive messages posted to the mailing list.  They also never
+receive any notifications when added to or removed from the list.  The
+/NOCASE and /CONCEAL qualifiers may be given as desired.
+
+<P>
+Subscriber reviews of lists containing access control entries show
+those entries as having the ACCESS attribute.
+
+
+<HEAD2>(REMOVE\remcmd)
+<p>The REMOVE command removes other users from a mailing list.  The syntax for
+this command for the -Request interface is:
+
+<syntax>
+  REMOVE [/NONOTIFY] [/NOCASE] address [,...]
+<endsyntax>
+
+<cp>The syntax for the MXSERVER interface is:
+<syntax>
+  REMOVE [/NONOTIFY]  [/NOCASE] list-name  address [,...]
+<ENDsyntax>
+
+<P>
+You may specify multiple addresses to be added by separating the list
+with commas, but note that the entire command <emphasis>(must) fit on
+one line in the E-mail message.
+
+<P>
+For <keyword>(address), you should enter the RFC822-type address for
+the user to be
+removed.
+
+It should appear <emphasis>(exactly) as it does in the subscriber list
+(use the REVIEW command to check this). You may include the personal
+name, if desired, but only the address part is checked when MLF does
+the removal.
+
+<P>
+Use the /NONOTIFY qualifier when you do not want the subscribers
+to receive the <quote>(you have been removed) message for the mailing
+list.
+
+
+<P>
+The /NOCASE qualifier is used to remove the user from the mailing list
+while having the list processor disregard the case of the username
+portion of the address.  Normally, the list processor is
+case-sensitive regarding usernames unless the list was defined with
+DEFINE LIST/NOCASE_SENSITIVE.
+
+
+<HEAD1>(Deleting a Mailing List\dellist)
+<P>
+The MCP REMOVE LIST command removes the definition of a mailing list
+from the MX configuration database.  The file containing the list of
+subscribers will remain after the definition is removed, however.  You 
+should delete that file also:
+<interactive>
+<s>($ )<u>(DELETE MX_MLIST_DIR:list-name.MAILING_LIST;*)
+<endinteractive>
+
+<P>
+You should also remember to delete any add, remove, or forward message
+files you set up for the mailing list at creation time.
+
+
+<HEAD1>(Mailing List Digest Support\digsupt)
+<P>
+The MX MLF processor supports mailing list digests in that subscriber
+entries can be marked "DIGEST" and mail sent to a "-digest" list address
+(for example, "List-digest") will be forwarded only to those subscribers.
+Digest subscribers do not receive posts made to the standard mailing list
+address.
+
+<P>
+MX MLF does not provide any support for creating the mailing list
+digests.  However, the MX_ROOT:[CONTRIB] directory does contain a
+package, MX_DIGEST, for creating digests.  You can use MX_DIGEST to
+implement mailing list digests, or you can supply your own software
+to do so.
+
+<P>
+All digest posts should be mailed to the "-digest" address for the
+list.  For example, digests for "MX-List" would be mailed to
+"MX-List-Digest".  Only the list owner(s) and system user(s) can post
+to the "-digest" address; messages from other users are diverted
+to the mailing list address and treated as normal postings.
+
+
+<HEAD1>(Controlling Mailing List Processing\mlfcontrol)
+<P>
+Large and busy mailing lists can put a significant burden on a single MX
+installation, especially if they have many remote subscribers.  This can
+cause large backlogs to develop in the MX message queue, and may prevent
+non-mailing list mail from being processed in a timely fashion.  If you
+intend to host several large mailing lists, you may want to dedicate
+an entire system just to processing mailing list mail.
+<P>
+There are two mechanisms you can use, separately or together, to prevent
+mailing list traffic from dominating your mailer.  One is to set up
+multiple delivery agents (SMTP agents, in particular, for Internet-connected
+systems).  The number of delivery agents your system can reasonably support
+will vary based on your CPU and memory configuration, as well as the
+speed of your network connection.
+
+<P>
+The second mechanism is to limit the number of recipients per message
+generated by the mailing list processor, using the /RECIPIENT_MAXIMUM
+qualifier on either the DEFINE LIST command or the SET MLF
+command in MCP.  When a message comes in for a mailing list with a large
+number of subscribers, MLF will create several copies of the outgoing message,
+each with no more than the maximum number of recipients you set.  By breaking
+up the messages into smaller numbers of recipients, you can enhance the
+parallelism of having multiple delivery agents, and prevent a single message
+from tying up any one delivery agent for an extended period of time.
+However, setting the recipient maximum to too low a value can increase the
+storage requirements for your MX message queue and create a larger backlog
+of messages.
+
+<P>
+Finding the right combination of delivery agents and recipient limits requires
+careful monitoring of your system.  You may need to adjust the settings
+several times before you achieve a reasonable balance.  In addition, you may
+need to alter the values on a regular basis if your mailing list traffic is
+<quote>(bursty;) i.e., the number of mailing list messages is not relatively
+even over time.
+
+<HEAD1>(Mailing List Headers\mlfmlheaders)
+<P>
+The MCP commands DEFINE LIST and MODIFY LIST accept three qualifiers
+that allow you to control the header content of mailing list posts. 
+These qualifiers are:
+<P>
+<LIST>(UNNUMBERED)
+<LE>	/STRIP_HEADERS
+<LE>	/LIST_HEADERS
+<LE>	/XHEADERS
+<ENDLIST>
+<P>
+/STRIP_HEADERS=RECEIVED lets you strip multiple <QUOTE>(Received:) headers from
+posts.  Stripping out the <QUOTE>(Received:) headers can make it impossible
+to accurately track the source of a message, but for posts coming
+through multiple gateways, it can significantly cut down on the total
+number of headers per post.
+
+<P>
+/STRIP_HEADERS=OTHERS lets you strip out all <QUOTE>(other) headers from
+the incoming message before it is mailed out.  <QUOTE>(Other) headers are
+any headers not documented in the <REFERENCE>(MGMTGUIDE) under SET
+LOCAL/TOP_HEADERS.  You can use this qualifier to strip posts from
+return-receipt headers, X.400 headers, etc.
+
+<P>
+/LIST_HEADERS can be used to enable or disable the following headers,
+currently proposed as a new Internet standard:
+
+<P>
+<LIST>(UNNUMBERED)
+<LE>	X-List-Subscribe (/LIST_HEADERS=(SUBSCRIBE[=string])
+	<P>
+	Provides a URL for subscribing to a list.  If the string is
+	omitted, MX MLF supplies the proper URL when each post is
+	processed.
+<LE>	X-List-Unsubscribe (/LIST_HEADERS=(UNSUBSCRIBE[=string])
+	<P>
+	Provides a URL for unsubscribing from a list.  If the string is
+	omitted, MX MLF supplies the proper URL when each post is
+	processed.
+<LE>	X-List-Help (/LIST_HEADERS=(HELP=string)
+	<P>
+	Provides a URL for obtaining information on the list.  This
+	URL may point to a Web page documenting the list, or it may
+	include a <QUOTE>(mailto:) for obtaining help on the list.
+<ENDLIST>
+
+<P>
+As of this writing, the headers are not an actual standard, hence the
+use of the <QUOTE>(X-) prefix on each.  If and when the standard is passed,
+the prefix will be removed.  However, clients that support these
+headers are supposed to handle both forms.  For more information about
+the proposal, see <QUOTE>(http://arpp.carleton.ca/listspec/).
+
+<P>
+Finally, the /XHEADERS qualifier can be used to add site-specified
+headers to mailing list posts.  There are a number of non-standard
+headers that you may wish to implement, including <QUOTE>(Precedence:
+Bulk), which instructs some versions of sendmail not to generate
+non-delivery warnings for posts.
+
+<NOTE>
+Any string can be supplied as the
+/XHEADERS value, but care must be taken to ensure that the
+site-specific headers are valid RFC822 headers and that they don't
+conflict with other headers.
+<ENDNOTE>
+
+<HEAD1>(Mailing List Filters\listfilters)
+<P>
+The mailing list processor has built-in filters that can be
+used to prevent undesirable messages from being posted to
+a mailing list.  These filters are configured through qualifiers
+on the MCP DEFINE LIST command.
+<HEAD2>(Message Size Filter\sizefilter)
+<P>
+You can set a maximum message size for list postings with the
+/MAXIMUM_MESSAGE_SIZE qualifier.  Messages exceeding this size
+are returned to sender with an error.  Note that the size limit
+is applied only to the contents of the message body; headers
+are ignored for size calculations.
+<P>
+This feature can be used
+to prevent users from inadvertantly posting messages with large
+attachments, which might be undesirable for mailing lists with
+a large number of subscribers.
+
+<HEAD2>(Content Type Filter\ctfilter)
+<P>
+You can configure a list to accept only plain-text messages
+with the /TEXT_ONLY qualifier.  Messages with a Content-Type:
+header that identifies the message content as other than
+<QUOTE>(text/plain) are returned to sender with an error.
+<P>
+This feature can be used to help reduce junk mail postings
+to mailing lists, which are often formatted in HTML.  It
+can also be used to prevent users from inadvertantly posting
+multi-part messages, which are often used when attaching files
+to e-mail messages.
+<P>
+If you configure a mailing list for text only, you may want
+to inform subscibers so they can configure their e-mail client
+programs to format list postings as text.
+
+<HEAD2>(Junk Mail Filter\junkfilter)
+<P>
+You can configure a list to filter out messages based on
+RFC822 headers with the /IGNORE qualifier.
+Two types of filters are supported: one based
+on the To:/CC: headers, and one based on the MX-specific
+X-Junk-Mail-Rating: header.  Messages matching a configured
+filter are silently dropped; the mailing list processor
+records the drop by writing a message to its log file.
+<P>
+The MISSING_LIST_ADDRESS filter drops messages if the
+mailing list's address does not appear in either the
+To: or CC: header of a list posting -- this is a frequent
+occurrence with junk e-mail.  Note, though, that when this filter
+is enabled, users must ensure that they address messages
+directly to the list, rather than through some other
+alias. 
+<P>
+The JUNK_MAIL filter drops messages in conjunction with
+the junk-mail detection heuristics provided by MX's SMTP
+server.  The heuristic filters will add an <QUOTE>(X-Junk-Mail-Rating:)
+header to messages that have some probability of being
+junk mail, along with a keyword indicating LOW, MEDIUM, or
+HIGH probability.  Only those messages with the probability
+rating you specify, or higher, are dropped.
+<P>
+For more information on heuristic junk e-mail filters,
+see the <REFERENCE>(mgmtguide).
+
+<CHAPTER>(File Servers\MLF_GUIDE_FS)
+<x>(File servers)
+<P>
+The MCP DEFINE FILE_SERVER command is used to set up a file server.
+Each file server can automatically service requests for single files
+or groups of files.  Large files can be delayed to non-prime-time
+hours, on a per-server basis.  You can specify a per-server, per-host,
+and/or per-user byte count limit, to prevent users from overtaxing the
+mail system with file server requests. In addition, you can link a
+file server to a mailing list, so that only those users who are
+subscribed to the list can gain access to the file server.
+
+<P>
+Access control entries in a mailing list can be used to allow any user
+at particular sites to access the file server.  See
+<REFERENCE>(addcmd) for more information on access control entries.
+
+<head1>(Packages\MLF_GUIDE_33)
+<x>(Packages)
+<p>The file server is designed to handle groups of files, called
+<newterm>(packages).  When you create a package, you create a directory
+with the name of that
+
+package; all files in that directory that are to be shipped when the
+package is requested must have file names that are the same as the
+package name.
+
+<P>
+In addition, you must place a description file either above the
+package directory or in the package directory itself. This description
+file is sent when a user requests a listing of available packages.
+
+<P>
+The description file must be named <EMPHASIS>(package).DESCRIPTION,
+where <EMPHASIS>(package) is again the package name.
+
+
+<P>
+This structure works best when you use a program such as VMS_SHARE to
+put together your packages.  VMS_SHARE is readily available around the
+Internet.  It is used to collect together text files,
+format them so as to improve the chances of their being transferable
+through most mail systems, and split them up into easily mailable
+chunks. When all the chunks are put together on the receiving end,
+they form a DCL command procedure that re-creates the original files.
+
+<subhead1>(Example\MLF_GUIDE_34)
+<x>(File server<xs>example)
+<p>To demonstrate the structure used by the file server, let us suppose
+you have created a package called STUFF.  You used VMS_SHARE to create
+the package, which split the package into three parts.
+
+<p>First, you would create a directory for the package:
+<interactive>
+<s>($ )<u>(CREATE/DIRECTORY disk:[FILESERV.STUFF])
+<endinteractive>
+
+<p>Next, you would copy the VMS_SHARE files into that directory.  They
+must have file names the same as the package name:
+<INTERACTIVE>
+<s>($ )<u>(COPY STUFF.* disk:[FILESERV.STUFF])
+<ENDINTERACTIVE>
+
+<P>Next, you would create a file containing a brief description of
+the package and place it above the STUFF directory:
+<INTERACTIVE>
+<S>($ )<U>(EDIT disk:[FILESERV]STUFF.DESCRIPTION)
+<ENDINTERACTIVE>
+
+
+<P>
+If you prefer, the .DESCRIPTION files for all packages under
+[FILESERV] can be placed in the package directories with the other
+files.  However, description files cannot be located in
+<EMPHASIS>(both) places.
+
+
+<P>
+Finally, you would need to set up the file server in MCP:
+<interactive>
+<s>(MCP> )<u>(DEFINE FILE_SERVER FILESERV/ROOT=disk:[FILESERV.])
+<endinteractive>
+<p>The file server FILESERV will now automatically handle distribution of the
+STUFF package.
+
+<head1>(Help File\MLF_GUIDE_35)
+<p>The file FILESERV_HELP.TXT, provided by the installation procedure in
+directory MX_ROOT:[MLF], contains a description
+of the file service commands.  You should update this file to include the
+address you have chosen for your file server and any other information
+specific to the file server that you wish to include.  Place the edited
+copy in the root directory of your file server to have it sent when a
+user sends a HELP command to your file server.
+
+
+<HEAD1>(Transaction Logs\MLF_GUIDE_TRANSLOGS)
+<P>
+For each mail message received by the file server, a transaction log
+is created that contains the results of each command in the message.
+When all commands have been processed, this transaction log is mailed
+back to the user.  The transaction log lets the user know the status
+of the files requested, for example, when they'll be mailed, if the
+file server has been defined to delay files to off-hours times.
+
+<P>
+If you have important information that you want all users accessing
+your file server to see, you can create a file called
+FILESERV_TRANSACTION.TXT that contains the text.  When this file is
+placed in the root directory for the file server, its contents will be
+included at the beginning of every transaction log mailed out.  This
+transaction header can be useful for letting users know of scheduled
+downtimes or a change in package availability, for example.
+
+<head1>(File Server Commands\MLF_GUIDE_36)
+<x>(File server<xs>commands)
+<p>
+The five commands accepted by the file server are SENDME, LIST (or
+DIRECTORY), HELP, QUIT, and ADDRESS. Each may be abbreviated to the
+smallest unique string.  One command is allowed per line of text in a
+request message, but several command lines may be sent in one request.
+
+<P>
+SENDME takes either a package name (to have all parts of a package
+sent) or a file name (to have just one part sent).  Large files are
+delayed until non-prime-time hours if enabled when file service is set
+up.
+
+<P>
+LIST takes a pattern which is used to match against package names. 
+The description file for each matching package is added to a message
+that is returned to the requesting user.  If no pattern is specified,
+<quote>(*) is used.
+
+<P>
+HELP causes the file FILESERV_HELP.TXT (located in the root directory
+of the file server) to be sent to the requesting user.
+
+<P>
+QUIT causes the file server to ignore any remaining lines in the mail
+message.  Because many people have mail signatures automatically
+included messages, the QUIT command can be used to prevent the
+unintentional parsing of those signatures as file server commands.
+
+<P>
+ADDRESS provides the user with the ability to specify a valid
+RFC822-compliant e-mail address to which any FileServ output is to be
+sent.  Normally, any files requested from FileServ are sent to the
+address in the <QUOTE>(Reply-To:) or <QUOTE>(From:) lines in the message
+headers.  However, addresses are sometimes corrupted by gateways
+through which the message passes, resulting in an invalid return
+address. File server users can use the ADDRESS command to provide a
+valid alternate to the <QUOTE>(From:) address.
+
+<NOTE>
+When an ADDRESS command is processed, the file server transaction log
+includes the original <QUOTE>(From:) address.   Any user receiving
+unasked-for files can use it to determine from whom the request came.
+<ENDNOTE>
+
+
+<APPENDIX>(Troubleshooting MLF Problems\troubleshoot)
+<P>
+MLF includes a debug mode that displays information about what it is
+doing when processing mailing list and file server requests.  If you are
+experiencing problems with either a mailing list or a file server, you
+can enable this debug mode with the command:
+<interactive>
+<s>($ )<u>(DEFINE/SYSTEM MX_MLF_DEBUG TRUE)
+<Endinteractive>
+
+<P>
+If you are in a VMScluster, this logical must be defined on the same
+node as the currently active MX MLF process to have any effect.
+
+<P>
+Debug log files created by MLF are called MX_MLF_DIR:MX_MLF_LOG.LOG.
+
+<HEAD1>(Case Sensitivity\casesens)
+<P>
+
+Unless the list was created with DEFINE LIST/NOCASE_SENSITIVE, the
+
+mailing list processor uses case-sensitive matching on the
+username part of addresses when looking up users on the subscriber
+list (except for subscribers with the NOCASE flag set), owner list,
+and SYSTEM_USERS list.  Be careful when adding and removing users from
+these lists that the case of the username part of the address exactly
+matches what will be in the From: header of the address.
+
+<P>
+Remember that MX automatically converts usernames to lower case, by
+default, when creating the From: header, so messages originating on
+the local system will have lower case usernames.
+<ENDAPPENDIX>
+
+<APPENDIX>(Example: Mailing List with Archive Server\MLF_GUIDE_37)
+<P>
+This example creates a mailing list whose archives are made available
+through a file server.
+<interactive>
+<s>($ )<U>(CREATE/DIRECTORY SOME_DISK:[ARCHIVES.MAILLIST])
+<S>($ )<U>(MCP)
+<s>(MCP> )<U>(DEFINE LIST "MailList" -)
+<s>(_MCP> )<u>(    /OWNER="me@myhost.mycompany.ORG"-)
+<s>(_MCP> )<u>(    /PROTECTION=(S:RWED,O:RWED,G:RWED,W:RWE)-)
+<S>(_MCP> )<U>(    /ARCHIVE=SOME_DISK:[ARCHIVES.MAILLIST])
+<ENDINTERACTIVE>
+
+<P>
+This would set up a public mailing list, with the list owner being
+user <quote>(me), who would also receive all the bounced mail from the
+mailing list (by default, since no /ERRORS_TO was specified).  The
+archive will be created in directory SOME_DISK:[ARCHIVES.MAILLIST] a
+file name of MAILLIST (defaulting from the list name) and a file type
+of <emphasis>(yyyy-mm) (the year and month).
+
+<P>
+You could then create a file server called Archives:
+<interactive>
+<s>(MCP> )<U>(DEFINE FILE_SERVER "Archives" -)
+<s>(_MCP> )<u>(    /MANAGER="me@myhost.mycompany.ORG"-)
+<s>(_MCP> )<u>(    /ROOT=SOME_DISK:[ARCHIVES.]-)
+<s>(_MCP> )<u>(    /MAILING_LIST=MailList)
+<endinteractive>
+
+<P>
+This file server could then respond to requests for sending some or
+all of the monthly archives for mailing list MailList.  The mailing
+list link prevents those users who are not subscribed to MailList from
+obtaining the archives. To complete the setup, you would also need to
+create the files FILESERV_HELP.TXT and MAILLIST.DESCRIPTION to be
+placed in directory SOME_DISK:[ARCHIVES], to describe the file server
+and the MailList archive <quote>(package).
+<ENDAPPENDIX>

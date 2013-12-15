@@ -1,0 +1,54 @@
+<FRONT_MATTER>(INSTALL_GUIDE_1)
+<INCLUDE>(SYMBOLS.SDML)
+
+<TITLE_PAGE>
+<TITLE>(<REFERENCE>(instguide))
+<ABSTRACT>(<REFERENCE>(RELMONTH))
+<p>This manual provides installation and setup instructions for
+Message Exchange, electronic mail software for VMS systems.
+<ENDABSTRACT>
+<REVISION_INFO>(This is a revised manual.)
+<REVISION_INFO>(Operating System and Version:\OpenVMS VAX V6.2 or later)
+<REVISION_INFO>(\OpenVMS Alpha V6.2 or later)
+<REVISION_INFO>(\OpenVMS Industry Standard 64 V8.2 or later)
+<REVISION_INFO>(Software Version:\Message Exchange <REFERENCE>(VER))
+<ENDTITLE_PAGE>(Endless Software Solutions<LINE>Perth, Western Australia)
+
+
+<INCLUDE>(COPYRIGHT.SDML)
+
+<CONTENTS_FILE>
+
+
+<PREFACE>(7\INSTALL_GUIDE_2)
+<P>This guide describes how to install Message Exchange (MX).
+<head1>(Intended Audience\INSTALL_GUIDE_3)
+<p>This manual is intended for use by the system manager or any individual
+responsible for installing and maintaining MX.
+<head1>(Document Structure\INSTALL_GUIDE_4)
+<p>This guide consists of three chapters and two appendices.
+<table>
+<table_setup>(2\10)
+<table_row>(Chapter 1\Contains pre-installation information.)
+<table_row>(Chapter 2\Describes the MX installation procedure.)
+<table_row>(Chapter 3\Contains post-installation information.)
+<table_row>(Appendix A\Describes the contents of the MX distribution kit.)
+<table_row>(Appendix B\Contains a list of the files created by an installation.)
+<endtable>
+<head1>(Related Documents\INSTALL_GUIDE_5)
+<p>You can find additional information in the following documents:
+<list>(unnumbered)
+<le><reference>(mgmtguide) describes the management of the MX software.
+<le><reference>(userguide) describes MX features available to general users.
+<le><reference>(progguide) describes the various programming interfaces for
+customizing MX.
+<le><reference>(mlfguide) describes the MX Mailing List and File Server.
+<le><reference>(relnotes) contain information and updates not included
+in this manual.  The release notes are part of the software distribution kit.
+Release notes are also included in the distribution kit for NETLIB,
+the TCP/IP interface library.
+<le><reference>(mailutil), part of the VMS documentation set, contains
+information about the VMS Mail utility.
+<endlist>
+<ENDPREFACE>
+<ENDFRONT_MATTER>

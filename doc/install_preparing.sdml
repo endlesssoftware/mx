@@ -1,0 +1,306 @@
+<CHAPTER>(Preparing to Install Message Exchange\INSTALL_GUIDE_7)
+<INCLUDE>(SYMBOLS.SDML)
+<define_symbol>(gblsects\50)
+<define_symbol>(gblpages_i64\4000)
+<define_symbol>(gblpages_axp\2000)
+<define_symbol>(gblpages_vax\1000)
+<define_symbol>(instblks\30,000)
+<define_symbol>(sysdisk\5)
+<define_symbol>(basedisk\5,000)
+<define_symbol>(xportdisk\1,000)
+<define_symbol>(mlfdisk\1,000)
+<define_symbol>(docdisk\8,500)
+<define_symbol>(exadisk\600)
+<define_symbol>(contdisk\2,700)
+<p>This chapter describes the steps that should be taken prior to installing
+the Message Exchange software.
+
+<head1>(Prerequisite Software\INSTALL_GUIDE_8)
+<P>
+MX requires OpenVMS VAX and/or OpenVMS Alpha V6.2 or later, and/or
+OpenVMS Industry Standard 64 V8.2 or later.  The
+SMTP support option requires a NETLIB-supported TCP/IP package (refer to the
+NETLIB release notes for further information).  SMTP-over-DECnet requires
+DECnet, but does not require either NETLIB or any TCP/IP package.
+
+<head1>(Upgrading from Previous Versions of MX\install_upgrading_req)
+<P>
+Starting with MX V6.0, upgrades from versions of MX prior to V6.0 are not
+supported.
+<P>
+To upgrade from pre-V6.0 releases it is recommended that the following MCP
+commands are used to generate a human readable script.
+<INTERACTIVE>
+<S>($ )<U>(MCP SHOW ALL/COMMAND/OUTPUT=ddcu:[dir]file.MCP)
+<ENDINTERACTIVE>
+<P>
+This script can then can be edited appropriately and loaded into the new
+MX installation by using the @ input-indirection function.
+
+<head1>(VMScluster Support and MX Clusters\mxclus)
+<p>MX fully supports VMScluster systems in both homogeneous and heterogeneous
+configurations.
+<p>An <quote>(MX cluster) consists of one or more VMScluster nodes that meet the
+following criteria:
+<list>(numbered)
+<le>All nodes in the MX cluster share one User Authorization File (SYSUAF.DAT)
+and one VMS Mail profile (VMSMAIL_PROFILE.DATA).
+<le>All nodes have mounted the disk that contains the MX images and
+directories.
+<le>All nodes have mounted the disk that contains the message queue.
+<le>If MX is to be used for network mail, at least one node in the MX cluster
+is running the networking software required for each type of network link
+desired.
+<le>The logical name MAIL$SYSTEM_FLAGS is defined to a value of at least 3.
+(Refer to <reference>(mailutil) for further information on MAIL$SYSTEM_FLAGS.)
+<endlist>
+<p>For homogeneous VMScluster systems, the MX cluster will usually
+include all nodes in the VMScluster.
+
+<head2>(Answering VMScluster-related Installation Questions\INSTALL_GUIDE_51)
+<p>The MX installation procedure automatically detects that you are
+in a VMScluster and will ask additional questions during installation
+about where in the cluster each installed MX processing agent should run.
+The processing agents are programs which are run as detached processes.
+They can be run on any or all nodes in the cluster (following the MX
+Cluster guidelines outlined above), and will automatically
+cooperate in providing their respective services.  
+<p>When asked to provide a cluster node name for running the processing
+agents, be sure to specify the SCSNODE name (or use an asterisk (<quote>(*))
+to have an agent run on all nodes in the cluster).
+
+<HEAD2>(Mixed-Architecture VMSclusters\INSTALL_GUIDE_MIXED_CLUSTER)
+<P>
+Mixed-architecture VMSclusters (those containing a combination of VAX, Alpha,
+and/or IA64 systems)
+are fully supported by MX.  The MX directory tree can be shared by all three
+systems if it resides on a common disk.  When systems share a
+common MX directory, agents may be run on any or all types of systems.
+
+<P>
+When MX is first installed, and the installation procedure determines
+that the node is part of a cluster, it will record
+installation information in the MX directory tree.  A subsequent installation
+of the same version of MX in the same directory tree, but
+on a system of a different architecture, will cause the installation
+procedure to ask whether or not just architecture-specific files should
+be installed.
+
+<NOTE>
+MX <EMPHASIS>(must) be installed <EMPHASIS>(multiple times) on a
+mixed-architecture VMScluster: once for each architecture. 
+Only the first installation needs to include all of the architecture-independent
+files.
+<ENDNOTE>
+
+<P>
+The MX_ROOT: directory tree contains architecture-specific
+directories for executables: MX_ROOT:[EXE] for VAX executables,
+MX_ROOT:[ALPHA_EXE] for Alpha  executables, and
+MX_ROOT:[IA64_EXE] for IA64 executables.  The logical MX_EXE:, which is used in all examples
+below, will automatically be defined appropriately on each system in
+the cluster.
+
+<head1>(Determining Your Node Name\detnode)
+<p>MX requires two node names for its operation.  The first,
+the <newterm>(MX cluster name), is used by MX to coordinate access to
+the message queue.
+<list>(unnumbered)
+<le>For a stand-alone (non-clustered) system, the MX cluster name usually
+corresponds to your DECnet node name.  If you are not running DECnet, you
+can use any 1-to-6 character name.
+<le>For a VMScluster system, the MX cluster name should correspond
+to your DECnet cluster alias node name.  If do not have a cluster alias,
+you should use the DECnet node name of one of the nodes in the MX cluster.
+<endlist>
+<p>The second node name is the <newterm>(MX network node name).
+This is the name that is used by the MX software to identify mail
+originating locally.
+You should decide on a node name for your system before installing the
+MX software.  If your host has a registered Internet domain name, you should
+use that name.  If you are on a UUCP network and do not have
+a registered Internet domain name, you should use your UUCP
+host name.  Otherwise, you should use a host name that fits with the
+naming conventions at your site.
+<p>In an MX cluster environment, MX will use a single network name to identify
+the entire cluster.  If you have several nodes with their own network node
+names, and your networking software does not support the use of a cluster-wide
+alias, you could either pick one node to be the <quote>(master)
+for E-mail purposes or use the MX_VMSMAIL_FROM_FORMAT logical name (described
+in <reference>(mgmtguide)) to have each node insert its own host name in
+return addresses on outgoing messages.  What you do will depend on your
+network software and setup.
+
+<head1>(Accessing the Online Release Notes\INSTALL_GUIDE_9)
+<p>MX provides online release notes, which you can display or print by using
+VMSINSTAL with the OPTIONS N parameter.  After the installation, you can read
+the release notes by printing the file SYS$HELP:MXvvn.RELEASE_NOTES, where
+<quote>(vvn) denotes the version number of the software.  For example,
+for version V5.2 of MX, the file name would be MX052.
+<p>The release notes for NETLIB are provided in the file
+SYS$HELP:NETLIBvvn.RELEASE_NOTES, where <quote>(vvn) identifies the
+version of NETLIB shipped with the MX distribution kit.  This file
+is created during NETLIB installation and is not accessible through VMSINSTAL
+OPTIONS N.
+
+<head1>(Mailer Accounts\mailacc)
+<p>You can run the detached processes MX uses under the SYSTEM account,
+or, if you prefer, under a separate <quote>(mailer) account.
+<p>Note, however, that using a mailer account may complicate the process for
+starting up MX on your system; see <reference>(adding) for further information on
+MX startup procedures.
+<p>If you intend to use an account other than SYSTEM for running the
+MX detached processes, you should create the account before installing
+MX.  The mailer account should have the following attributes:
+<list>(unnumbered)
+<le>a username of eight characters or less.
+<le>full batch access, no interactive access.
+<le>network access, <emphasis>(only if) SMTP-over-DECnet is used <emphasis>(and)
+you do not wish to create a dedicated account for the SMTP-over-DECnet object.
+<le>the INTERNET_ACCESS identifier, if needed for CMU-Tek TCP/IP access.
+<le>the ARPANET_ACCESS identifier, if needed for CMU-Tek TCP/IP access.
+<le>the following authorized and default privileges: CMKRNL, SYSNAM, DETACH,
+WORLD, PHY_IO, SYSPRV, SYSLCK, EXQUOTA, TMPMBX, and NETMBX.  (BYPASS may
+also be required if using DECUS UUCP.)
+<le>a subprocess limit (PRCLM) of at least 1.
+<le>no detached process limit (MAXDETACH of 0).
+<le>a login directory that is owned by the account.
+<endlist>
+<p><reference>(macct) shows the UAF entry for a typical Mailer account.
+<head2>(SMTP-over-DECnet Dedicated Account\dedacct)
+<p>If you intend to use the MX SMTP-over-DECnet support,
+you may want
+to establish a special server account to be used exclusively for the
+DECSMTP DECnet object.  If so, you should ensure that the
+accounts have NETWORK access and the privileges TMPMBX, NETMBX, SYSPRV, and
+SYSLCK
+(both authorized and default).  <reference>(objacct) shows the UAF entry
+for a typical SMTP-over-DECnet server account.
+See <reference>(install_guide_53a) for more information on setting up
+the MX SMTP-over-DECnet support.
+<figure>(Mailer Account attributes\macct)
+<FIGURE_ATTRIBUTES>(WIDE)
+<LINE_ART>(WIDE)
+Username: MAILER                           Owner:  MX Mailer account
+Account:  NETSTUF                          UIC:    [1076,76] ([MAILER])
+CLI:      DCL                              Tables: DCLTABLES
+Default:  USER_DISK:[MAILER]
+LGICMD:   NL:
+Login Flags:  Disctly Defcli
+Primary days:   Mon Tue Wed Thu Fri
+Secondary days:                     Sat Sun
+Primary   000000000011111111112222  Secondary 000000000011111111112222
+Day Hours 012345678901234567890123  Day Hours 012345678901234567890123
+Network:  -----  No access  ------            -----  No access  ------
+Batch:    ##### Full access ######            ##### Full access ######
+Local:    -----  No access  ------            -----  No access  ------
+Dialup:   -----  No access  ------            -----  No access  ------
+Remote:   -----  No access  ------            -----  No access  ------
+Expiration:            (none)    Pwdminimum:  3   Login Fails:     0
+Pwdlifetime:           (none)    Pwdchange:             (none)
+Last Login:            (none) (interactive), 19-JAN-1990 14:38 (non-interactive)
+Maxjobs:         0  Fillm:        60  Bytlm:        36000
+Maxacctjobs:     0  Shrfillm:      0  Pbytlm:           0
+Maxdetach:       0  BIOlm:        20  JTquota:       1024
+Prclm:           4  DIOlm:        18  WSdef:          512
+Prio:            4  ASTlm:       325  WSquo:          512
+Queprio:       100  TQElm:        10  WSextent:      2048
+CPU:        (none)  Enqlm:       600  Pgflquo:      25600
+Authorized Privileges:
+  CMKRNL SYSNAM DETACH TMPMBX WORLD EXQUOTA NETMBX PHY_IO SYSPRV SYSLCK
+Default Privileges:
+  CMKRNL SYSNAM DETACH TMPMBX WORLD EXQUOTA NETMBX PHY_IO SYSPRV SYSLCK
+Identifier                         Value           Attributes
+  ARPANET_ACCESS                   %X80010042      NORESOURCE NODYNAMIC
+  INTERNET_ACCESS                  %X80010043      NORESOURCE NODYNAMIC
+<ENDLINE_ART>
+<endfigure>
+<figure>(SMTP-over-DECnet server account attributes\objacct)
+<FIGURE_ATTRIBUTES>(WIDE)
+<LINE_ART>(WIDE)
+Username: DNSMTP_SRV                       Owner:  MX DECSMTP object account
+Account:  NETSTUF                          UIC:    [1076,77] ([DNSMTP_SRV])
+CLI:      DCL                              Tables: DCLTABLES
+Default:  USER_DISK:[DNSMTP_SRV]
+LGICMD:   NL:
+Login Flags:  Disctly Defcli
+Primary days:   Mon Tue Wed Thu Fri
+Secondary days:                     Sat Sun
+Primary   000000000011111111112222  Secondary 000000000011111111112222
+Day Hours 012345678901234567890123  Day Hours 012345678901234567890123
+Network:  ##### Full access ######            ##### Full access ######
+Batch:    -----  No access  ------            -----  No access  ------
+Local:    -----  No access  ------            -----  No access  ------
+Dialup:   -----  No access  ------            -----  No access  ------
+Remote:   -----  No access  ------            -----  No access  ------
+Expiration:            (none)    Pwdminimum:  3   Login Fails:     0
+Pwdlifetime:           (none)    Pwdchange:             (none)
+Last Login:            (none) (interactive), 19-JAN-1990 14:38 (non-interactive)
+Maxjobs:         0  Fillm:        60  Bytlm:        36000
+Maxacctjobs:     0  Shrfillm:      0  Pbytlm:           0
+Maxdetach:       0  BIOlm:        20  JTquota:       1024
+Prclm:           4  DIOlm:        18  WSdef:          512
+Prio:            4  ASTlm:       325  WSquo:          512
+Queprio:       100  TQElm:        10  WSextent:      2048
+CPU:        (none)  Enqlm:       600  Pgflquo:      25600
+Authorized Privileges:
+  TMPMBX NETMBX SYSPRV SYSLCK
+Default Privileges:
+  TMPMBX NETMBX SYSPRV SYSLCK
+<ENDLINE_ART>
+<endfigure>
+<head1>(Installation Procedure Requirements\INSTALL_GUIDE_10)
+<p>Before installing MX, ensure that the following privileges, resources,
+and requirements are met:
+<list>(unnumbered)
+<le>Operating System Version
+<p>MX <reference>(ver) runs on
+
+OpenVMS VAX V6.2 and higher,
+OpenVMS Alpha V6.2 and higher,
+and OpenVMS Industry Standard 64 V8.2 and higher.
+
+
+<le>Layered Product Versions
+<p>Refer to the NETLIB release notes for details on TCP/IP
+requirements.
+<le>all the normal privileges and quotas of the default SYSTEM account.
+
+<le>approximately 5 minutes to 1 hour, depending on your system configuration,
+distribution medium, and options selected.
+<le>On Alpha systems, <reference>(gblsects) free global sections and <reference>(gblpages_axp)
+free global pagelets.  On VAX systems, <reference>(gblsects) free global sections and
+<reference>(gblpages_vax) free global pages.  On Industry Standard 64 systems,
+<reference>(gblsects) free global sections and <reference>(gblpages_i64) free global pagelets.
+<le>approximately <reference>(instblks) free blocks on a disk for use
+during the installation procedure; this can be the system disk or a disk
+specified with the VMSINSTAL AWD option.
+<le>approximately <reference>(sysdisk) free blocks on the system disk for permanent files.
+<le>approximately <reference>(basedisk) free blocks on any disk for
+MX base software, and the following additional free disk blocks:
+<list>(unnumbered)
+<le>approximately <reference>(xportdisk) free blocks for each MX optional
+transport agent.
+<le>approximately <reference>(mlfdisk) free blocks for mailing list/file server support.
+<le>approximately <reference>(docdisk) free blocks for MX documentation.
+<le>approximately <reference>(exadisk) free blocks for the MX example files.
+<le>approximately <reference>(contdisk) free blocks for the MX contributed files and
+programs.
+
+<endlist>
+<le>a <emphasis>(minimum) of 5,000 free blocks on any disk for message queue
+space.
+<le>if you are running CMU-Tek TCP/IP, the value of the
+SYSGEN parameter MAXBUF must be at least 2300.
+<endlist>
+<head1>(Saving Current Configuration\savecfg)
+<p>If MX is already installed on your system, you should create an
+MCP command file from your current MX configuration database prior
+to installing a new version of MX.  To do this, use the following
+commands:
+<interactive>
+<s>($ )<u>(MCP :== $MX_EXE:MCP)
+<s>($ )<u>(MCP/FILE=MX_DIR:MX_CONFIG SHOW ALL/OUTPUT=MX_DIR:OLD_CONFIG.MCP/COMMAND)
+<endinteractive>
+<p>You can then use this MX command file to re-create your MX configuration
+database once the new version of MX is installed.

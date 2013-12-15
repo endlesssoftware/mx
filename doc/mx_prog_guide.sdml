@@ -1,0 +1,1459 @@
+<COMMENT>
+
+   File:        USER_GUIDE.SDML
+
+   Abstract:    VAX DOCUMENT source for _Message Exchange User's Guide_
+
+   Authors:     Matt Madison
+                Hunter Goatley
+
+Copyright (c) 2008, Matthew Madison.
+Copyright (c) 2011, Endless Software Solutions.
+
+All rights reserved.
+
+Redistribution and use in source and binary forms, with or without
+modification, are permitted provided that the following conditions
+are met:
+
+    * Redistributions of source code must retain the above
+      copyright notice, this list of conditions and the following
+      disclaimer.
+    * Redistributions in binary form must reproduce the above
+      copyright notice, this list of conditions and the following
+      disclaimer in the documentation and/or other materials provided
+      with the distribution.
+    * Neither the name of the copyright owner nor the names of any
+      other contributors may be used to endorse or promote products
+      derived from this software without specific prior written
+      permission.
+
+THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
+"AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
+LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
+A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
+OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
+SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
+LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
+DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
+THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
+(INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
+OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+
+   Modified by:
+
+        03-Aug-2011     Sneddon         Updated software revisions.
+
+<ENDCOMMENT>
+<INCLUDE>(SYMBOLS.SDML)
+
+<FRONT_MATTER>(PROG_GUIDE_1)
+<TITLE_PAGE>
+<TITLE>(Message Exchange Programmer's Guide)
+<ABSTRACT>(<REFERENCE>(RELMONTH))
+<p>This manual describes how to customize
+Message Exchange through programming.
+<ENDABSTRACT>
+<REVISION_INFO>(This is a revised manual.)
+<REVISION_INFO>(Operating System and Version:\OpenVMS VAX V6.2 or later)
+<REVISION_INFO>(\OpenVMS Alpha V6.2 or later)
+<REVISION_INFO>(\OpenVMS Industry Standard 64 V8.2 or later)
+<REVISION_INFO>(Software Version:\Message Exchange <REFERENCE>(VER))
+<ENDTITLE_PAGE>(Endless Software Solutions<LINE>Perth, Western Australia)
+
+<INCLUDE>(COPYRIGHT.SDML)
+<CONTENTS_FILE>
+
+
+<PREFACE>(\PROG_GUIDE_2)
+<P>Message Exchange (MX) provides two forms of customization: an interface
+for a site-specific transport, and interfaces for modifying addresses.
+This manual describes how to write routines or programs to use these
+interfaces for customizing MX.
+<p>
+<head1>(Intended Audience\PROG_GUIDE_3)
+<p>This manual is intended for systems programmers who will be writing
+code to customize MX.
+<head1>(Document Structure\PROG_GUIDE_4)
+<p>This guide consists of four chapters.
+<LIST>(UNNUMBERED)
+<LE>Chapter 1 describes the SITE transport interface.
+<LE>Chapter 2 describes the address modification interfaces.
+<LE>Chapter 3 describes the SMTP authentication callout interface. 
+<LE>Chapter 4 describes the character-conversion callout interface.
+<LE>Chapter 5 describes the SMTP client access callout interface.
+<ENDLIST>
+<CP>
+Example code for all of these interfaces is provided in the Examples
+subset of the installation kit.
+<head1>(Related Documents\PROG_GUIDE_5)
+<p>You can find additional information in the following documents:
+<list>(unnumbered)
+<le><reference>(instguide) describes the installation of MX.
+<le><reference>(mgmtguide) describes the management and operation of MX.
+<le><reference>(relnotes) contain information and updates not included
+in this manual.  The release notes are part of the software distribution kit.
+<endlist>
+<ENDPREFACE>
+<ENDFRONT_MATTER>
+
+
+<PART>
+<CHAPTER>(The SITE Transport Interface\PROG_GUIDE_6)
+<p>MX provides delivery agents and message entry agents for SMTP over
+TCP/IP and DECnet.
+If your site has some network transport
+that is not supported by MX, you can interface it with MX through the
+SITE transport interface.
+<head1>(The SITE Delivery Interface\PROG_GUIDE_7)
+<p>When you use the MCP DEFINE PATH command to route mail to the SITE path,
+the MX_SITE delivery agent takes messages routed to that path and feeds
+them into a subprocess that executes a command procedure you must provide.
+The command procedure must be called MX_EXE:SITE_DELIVER.COM and must
+accept four parameters.
+<p>The first parameter is the <quote>(route) parameter, which is either the
+host name part of the address or the value of the /ROUTE qualifier from
+the DEFINE PATH command that routed the message to the SITE delivery
+agent.  This parameter can be used to distinguish among several installed
+site-specific delivery agents, if needed.
+<p>The second parameter is the name of a temporary file that contains
+the message, including all of the RFC822 headers (corresponding to the
+DATA part of an SMTP transaction).  The third parameter
+is the name of another temporary file that contains the recipient's address,
+corresponding to the RCPT TO addresses of an
+SMTP transaction.  The fourth parameter is the RFC822 address of the
+originator of the message, corresponding to the MAIL FROM address of
+an SMTP transaction.
+<p>Your delivery procedure and the programs it invokes must not cause
+the subprocess to terminate, nor should they rely on specifics about
+the filenames provided.  The procedure MUST exit with a success status
+code to let MX know that the message was delivered successfully.
+If there was an error in the delivery and you wish MX to return an
+error message to the sender, you should exit with a non-success status
+code.  If the severity of the status is SEVERE (also called FATAL), the
+SITE delivery agent will return an error message to the sender.  Otherwise,
+the message will be queued for another attempt.  The MCP SET SITE command
+controls how many attempts will be made before the delivery agent gives up;
+the default is 96, with 30 minutes between each attempt.
+<example>(Sample SITE_DELIVER.COM\PROG_GUIDE_8)
+<code_example>
+$! Simple SITE_DELIVER.COM which invokes a real program to do all the work.
+$! This file must be placed in MX_EXE: for use with the MX SITE interface.
+$! It is invoked by MX_SITE with:
+$!
+$!  @MX_EXE:SITE_DELIVER  route msg-file-spec dest-file-spec origin-address
+$!
+$! The originator address is stuck in a file since it can contain
+$! characters that might confuse DCL when we invoke the delivery program.
+$!
+$! This is a simple procedure which ignores the "route" parameter.  If
+$! you have multiple SITE delivery paths available, use the "route" parameter
+$! to route the message to the appropriate delivery program.
+$!
+$ SET NOON
+$!
+$ DELIVER = "$my_mail_system:enter_message"
+$!
+$ CREATE my_temp_dir:SENDER.TMP
+$ OPEN/APPEND TMP my_temp_dir:SENDER.TMP
+$ WRITE TMP P4
+$ CLOSE TMP
+$!
+$ DELIVER 'P2 'P3 my_temp_dir:SENDER.TMP
+$ STAT = $STATUS
+$ DELETE my_temp_dir:SENDER.TMP;*
+$ EXIT 'STAT
+<endcode_example>
+<endexample>
+<head1>(SITE Message Entry\PROG_GUIDE_9)
+<p>The SITE message entry program should be used by your SITE transport
+agent to enter a message into the MX message queue.  The program
+is called MX_SITE_IN and resides in MX_EXE.  It should be invoked as
+a DCL foreign command:
+<code_example>
+$ MX_ENTER = "$MX_EXE:MX_SITE_IN"
+$ MX_ENTER  msg-file-spec  dest-file-spec  [origin-address]
+<endcode_example>
+<p>MX_SITE_IN takes up to three parameters, which correspond exactly to the
+last three
+parameters passed out by the MX_SITE delivery agent.  The first parameter
+should be the name of a file containing a properly-formatted RFC822 message.
+The second parameter should be the name of a file containing a list
+of RFC822 route addresses (they must have the surrounding angle brackets,
+just as in an SMTP transaction).  The third parameter, which is optional,
+should be the RFC822 route address of the sender (also including the
+surrounding angle brackets).  If the third parameter is omitted, the
+address of the user running the program will be used as the origin
+of the message.
+<P>
+MX_SITE_IN will automatically insert the following headers
+if they are not present in the message file:
+<LIST>(UNNUMBERED)
+<LE>Date:
+<LE>From:, based on the sender specified on the command line
+or the user's e-mail address
+<LE>To:, based on the list of recipients (up to 1,024
+characters maximum)
+<LE>Message-ID:
+<ENDLIST>
+
+<HEAD2>(Non-Privileged Use of MX_SITE_IN\siteinnonpriv)
+<P>
+By default, MX_SITE_IN is not protected against WORLD access and
+is not installed with any privileges; only
+a user holding SYSPRV, SYSLCK, and EXQUOTA privilege may use the
+program.  However, it is designed so that non-privileged users may
+use the program to enqueue messages that would be difficult to
+compose using VMS MAIL, such as MIME multipart messages.
+<P>To allow non-privileged users to invoke MX_SITE_IN, change
+its protection settings and use the INSTALL utility to install
+the image with privileges:
+<INTERACTIVE>
+<S>($ )<U>(SET PROTECTION=W:RE MX_EXE:MX_SITE_IN.EXE)
+<S>($ )<U>(INSTALL CREATE MX_EXE:MX_SITE_IN -)
+<S>(_$ )<U>(             /PRIV=(SYSPRV,SYSLCK,EXQUOTA))
+<ENDINTERACTIVE>
+<CP>
+For users without SYSPRV enabled as process privilege,
+MX_SITE_IN ignores the third (origin-address) parameter,
+and inserts a Sender: header containing the user's actual
+address if a From: header is included in the message file.
+
+<CHAPTER>(Address Modification Interface\PROG_GUIDE_10)
+<p>MX provides an interface for altering envelope addresses.  This
+interface allows you to add your own routines for performing two
+different types of address modifications.  For each type of modification,
+the routines must be part of a shareable library,
+which gets mapped into the appropriate parts of MX at run-time with
+LIB$FIND_IMAGE_SYMBOL.
+<p>The address modification routines are located through the use of
+logical names.
+<table>
+<table_setup>(2\25)
+<table_heads>(Logical name\Modification type)
+
+<TABLE_ROW>(MX_SITE_ADDRESS_REWRITER\Modifying headers and envelope
+addresses for outgoing and incoming mail)
+<table_row>(MX_SITE_DOM_EXPANSION\Modifying or expanding host names)
+<table_row>(MX_SITE_NAME_CONVERSION\Translating local aliases or performing
+directory lookups)
+<endtable>
+<p>In each case, the logical name must be defined /SYSTEM/EXEC and
+must translate to the name of an image that has been linked /SHARE/NOTRACE
+and INSTALLed on the system.  If you name the shareable images
+ADDRESS_REWRITER.EXE,
+DOMAIN_EXPANSION.EXE, and NAME_CONVERSION.EXE, respectively, and place them
+in the MX_ROOT:[EXE] directory, the MX startup procedure will automatically
+create the logical names and INSTALL the shareable images for you.
+
+<p>Examples of routines for performing address modifications are included in
+the directory MX_ROOT:[EXAMPLES] (if they have been installed).
+
+
+
+<HEAD1>(Address Rewriting\PROG_GUIDE_ADDREW)
+<P>
+The site address rewriter routines are called by the Router process to
+allow RFC822 header address rewrites on
+
+all outgoing mail, regardless of its origin,
+
+and on envelope addresses for incoming mail.  The main
+purpose for these routines is to allow site-specific user and host
+naming conventions.
+
+<P>
+The name conversion routines, described in <REFERENCE>(PROG_GUIDE_15),
+provide a means for implementing user aliases, but it does not affect
+domain names.  With the address rewriter routines, both usernames and
+host names can be modified.  To ease mail delivery, many sites prefer
+to hide the various machines used at that site by supplying a generic
+site name for the address.  For example, the generic domain
+MADGOAT.COM might be used for all addresses, even though the machines
+in use may be named HUNTER.MADGOAT.COM and MATT.MADGOAT.COM.
+
+<P>
+Sample address rewriter modules are provided in the Examples
+subset of the installation kit.
+
+<P>
+The routines that must be provided by an address rewriter are
+described on the following pages.
+
+<ROUTINE_SECTION>
+<SET_TEMPLATE_ROUTINE>(ROUTINE\DOUBLERUNNINGHEADS)
+
+<ROUTINE>(INIT\\\PROG_GUIDE_AR_INIT)
+<OVERVIEW>
+Initialization routine.
+<ENDOVERVIEW>
+<FORMAT>
+<FRTN>(INIT)
+<FARGS>(context)
+<ENDFORMAT>
+
+<RETURNS>(cond_value\longword (unsigned)\write only\by value)
+<RETTEXT>
+The INIT routine must return a success status value in order for the
+other address rewriting routines to be used.
+<endrettext>
+
+<ARGDEFLIST>
+<ARGITEM>(context\context\longword (unsigned)\modify\by reference)
+<ARGDEF>
+This is a longword passed by reference to your routine that you may
+use for any purpose, such as allocating a block of memory for keeping
+contextual information.
+<ENDARGDEFLIST>
+
+<DESCRIPTION>
+This routine is called by the Router before any calls to the
+REWRITE_HEADER and REWRITE_ENVELOPE routines.
+You may use this routine to set up any context or perform
+any housekeeping tasks needed to prepare for the subsequent calls to
+the REWRITE_* routines.
+
+<P>
+Since your routines must be reentrant, you should not use static
+storage for keeping track of state information or other contextual
+information.  Instead, you should allocate a block of dynamic memory
+and return its address in <keyword>(context).
+<ENDDESCRIPTION>
+
+<ROUTINE>(REWRITE_HEADER\\\PROG_GUIDE_AR_RWHDR)
+<OVERVIEW>
+Routine to rewrite an address in an RFC822 header.
+<ENDOVERVIEW>
+<FORMAT>
+<FRTN>(REWRITE_HEADER)
+<FARGS>(context, inaddr, outaddr, header_code)
+<ENDFORMAT>
+
+<RETURNS>(cond_value\longword (unsigned)\write only\by value)
+<RETTEXT>
+To indicate a successful rewrite, return SS$_NORMAL or some other
+success status code.  If you do not return a success status code,
+the caller will assume that the rewrite did not occur.
+<ENDRETTEXT>
+
+<ARGDEFLIST>
+<ARGITEM>(context\context\longword (unsigned)\modify\by reference)
+<ARGDEF>
+This is the same value that was passed to the INIT routine.
+<ARGITEM>(inaddr\char_string\character string\read only\
+by descriptor (fixed-length))
+<ARGDEF>
+The RFC822 header address to be rewritten.
+
+<ARGITEM>(outaddr\char_string\character string\write only\by descriptor)
+<ARGDEF>
+A string into which your routine should copy the rewritten address,
+if expansion was successful.  You must use the STR$ string routines
+(such as STR$COPY_DX) to copy the string into this argument.
+
+<ARGITEM>(header_code\\longword (unsigned)\read only\by value)
+<ARGDEF>
+A value representing one of the following RFC822 header types:
+
+<TABLE>
+<TABLE_SETUP>(3\15\25)
+<TABLE_HEADS>(Description\Symbolic name\Value)
+<TABLE_ROW>(From:\MX_K_HDR_FROM\1)
+<TABLE_ROW>(Sender:\MX_K_HDR_SENDER\2)
+<TABLE_ROW>(To:\MX_K_HDR_TO\3)
+<TABLE_ROW>(Resent-To:\MX_K_HDR_R_TO\4)
+<TABLE_ROW>(CC:\MX_K_HDR_CC\5)
+<TABLE_ROW>(Resent-CC:\MX_K_HDR_R_CC\6)
+<TABLE_ROW>(BCC:\MX_K_HDR_BCC\7)
+<TABLE_ROW>(Resent-BBC:\MX_K_HDR_R_BCC\8)
+<TABLE_ROW>(Reply-To:\MX_K_HDR_REPLY_TO\17)
+<TABLE_ROW>(Resent-Reply-To:\MX_K_HDR_R_REPLY_TO\19)
+<TABLE_ROW>(Resent-From:\MX_K_HDR_R_FROM\20)
+<TABLE_ROW>(Resent-Sender:\MX_K_HDR_R_SENDER\21)
+<ENDTABLE>
+
+<P>
+The symbolic names are defined in MX_HDR.H in MX_ROOT:[EXAMPLES], if
+you installed the examples.
+
+<ENDARGDEFLIST>
+
+<DESCRIPTION>
+This routine is called to rewrite an address appearing in an RFC822
+header on
+
+all outgoing mail, regardless of its origin.
+
+The address of the
+context block you allocated in the INIT routine is passed in here for
+any information you need to keep track of between calls.  This routine
+may be called more than once between one pair of INIT and CLEANUP
+calls.
+<ENDDESCRIPTION>
+
+<ROUTINE>(REWRITE_ENVELOPE\\\PROG_GUIDE_AR_RWENV)
+<OVERVIEW>
+Routine to rewrite an RFC821 envelope address.
+<ENDOVERVIEW>
+<FORMAT>
+<FRTN>(REWRITE_ENVELOPE)
+<FARGS>(context, inaddr, outaddr)
+<ENDFORMAT>
+
+<RETURNS>(cond_value\longword (unsigned)\write only\by value)
+<RETTEXT>
+To indicate a successful rewrite, return SS$_NORMAL or some other
+success status code.  If you do not return a success status code,
+the caller will assume that the rewrite did not occur.
+<ENDRETTEXT>
+
+<ARGDEFLIST>
+<ARGITEM>(context\context\longword (unsigned)\modify\by reference)
+<ARGDEF>
+This is the same value that was passed to the INIT routine.
+
+<ARGITEM>(inaddr\char_string\character string\read only\
+by descriptor (fixed-length))
+<ARGDEF>
+The RFC821 envelope address to be rewritten.  RFC821 addresses are
+enclosed in angle brackets (<>).  For example, <QUOTE>(<GENE@MADGOAT.COM>)
+is a valid RFC821 envelope address.
+
+<ARGITEM>(outaddr\char_string\character string\write only\by descriptor)
+<ARGDEF>
+A string into which your routine should copy the rewritten address,
+if expansion was successful.  You must use the STR$ string routines
+(such as STR$COPY_DX) to copy the string into this argument.
+
+<NOTE>
+The rewritten address <EMPHASIS>(must) be a valid RFC821 address,
+including the angle brackets.
+<ENDNOTE>
+
+<ENDARGDEFLIST>
+
+<DESCRIPTION>
+This routine is called to rewrite an RFC821 envelope address on
+incoming mail.  Envelope addresses are the addresses of the actual
+recipients of incoming mail and may or may not correspond directly to
+the RFC822 headers.
+
+<P>
+The address of the context block you allocated in the INIT routine is
+passed in here for any information you need to keep track of between
+calls.  This routine may be called more than once between one pair of
+INIT and CLEANUP calls.
+<ENDDESCRIPTION>
+
+
+<ROUTINE>(REWRITE_VIRTUAL_DOMAIN\\\PROG_GUIDE_AR_RWVD)
+<OVERVIEW>
+Routine for indicating whether a domain name is considered a <quote>(virtual)
+local domain.
+<ENDOVERVIEW>
+<FORMAT>
+<FRTN>(REWRITE_VIRTUAL_DOMAIN)
+<FARGS>(context, domname)
+<ENDFORMAT>
+
+<RETURNS>(longword_unsigned\longword (unsigned)\write only\by value)
+<RETTEXT>
+This routine should return 1 if the domain name is to be considered
+local, or 0 if it is to be considered remote for the purposes of
+SMTP anti-relay checking.
+<ENDRETTEXT>
+
+<ARGDEFLIST>
+<ARGITEM>(context\context\longword (unsigned)\modify\by reference)
+<ARGDEF>
+This is the same value that was passed to the INIT routine.
+
+<ARGITEM>(domname\char_string\character string\read only\
+by descriptor (fixed-length))
+<ARGDEF>
+A domain name to be checked for virtual local domain status.
+<ENDARGDEFLIST>
+
+<DESCRIPTION>
+This routine is called by the SMTP server to find out whether or
+not a domain name should be considered local for relay-checking
+purposes.  This callout routine can be used to extend the built-in
+LOCAL_DOMAIN list checking, normally done by the SMTP server, to
+include those domains managed by the ADDRESS_REWRITER callout.  Such
+domain names are called <quote>(virtual) local domains.
+<P>This routine is optional, and is called only if provided by
+the ADDRESS_REWRITER callout module.
+<ENDDESCRIPTION>
+
+<ROUTINE>(CLEANUP\\\PROG_GUIDE_AR_CLEANUP)
+<OVERVIEW>
+Context cleanup routine.
+<ENDOVERVIEW>
+<FORMAT>
+<FRTN>(CLEANUP)
+<FARGS>(context)
+<ENDFORMAT>
+
+<RETURNS>(cond_value\longword (unsigned)\write only\by value)
+<RETTEXT>
+This routine should return a status value indicating the success or
+failure of the cleanup operation.  The caller may or may not ignore
+the returned value.
+<ENDRETTEXT>
+
+<ARGDEFLIST>
+<ARGITEM>(context\context\longword (unsigned)\modify\by reference)
+<ARGDEF>
+The address of the context block you allocated in the INIT routine.
+<ENDARGDEFLIST>
+
+<DESCRIPTION>
+This routine is called to clean up after a series of REWRITE_* calls.
+You should clean up the context information and deallocate the
+context block allocated by the INIT routine.
+
+<P>
+If you did not allocate a context block in the INIT routine, you
+must still have a CLEANUP routine, even if it just returns to the caller.
+<ENDDESCRIPTION>
+
+<ENDROUTINE_SECTION>
+
+
+
+<head1>(Host Name Expansion\PROG_GUIDE_11)
+<p>The site host name routines are called by the Router process just before
+path identification.  The main purpose for these routines is to expand
+abbreviated host names into full host names that will properly match
+one of the paths defined in the MX configuration file.
+<p>When you install SMTP support with MX, host name expansion routines
+are automatically provided that call on the underlying TCP/IP package
+to catch abbreviated host names that might be recognized by the TCP/IP
+name resolver but are not defined in the MX configuration file.  The
+source for these routines is included in MX_ROOT:[EXAMPLES] for you
+to modify if needed.
+<p>The routines that must be provided by a host name expander are
+described on the following pages.
+<routine_section>
+<set_template_routine>(routine\doublerunningheads)
+
+<routine>(INIT\\\PROG_GUIDE_12)
+<overview>
+Initialization routine.
+<endoverview>
+<format>
+<frtn>(INIT)
+<fargs>(context)
+<endformat>
+
+<returns>(cond_value\longword (unsigned)\write only\by value)
+<rettext>
+The INIT routine must return a success status value in order for the
+other expansion routines to be used.
+<endrettext>
+
+<argdeflist>
+<argitem>(context\context\longword (unsigned)\modify\by reference)
+<argdef>
+This is a longword passed by reference to your routine that you may
+use for any purpose, such as allocating a block of memory for keeping
+contextual information.
+<endargdeflist>
+
+<description>
+This routine is called by the Router before any calls to the EXPAND
+routine.  You may use this routine to set up any context or perform
+any housekeeping tasks needed to prepare for the subsequent calls to
+EXPAND.
+<p>Since your routines must be reentrant, you should not use static
+storage for keeping track of state information or other contextual
+information.  Instead, you should allocate a block of dynamic memory
+and return its address in <keyword>(context).
+<enddescription>
+
+<routine>(EXPAND\\\PROG_GUIDE_13)
+<overview>
+Routine to expand a host name.
+<endoverview>
+<format>
+<frtn>(EXPAND)
+<fargs>(context, hostname, expname)
+<endformat>
+
+<returns>(cond_value\longword (unsigned)\write only\by value)
+<rettext>
+To indicate a successful expansion, return SS$_NORMAL or some other
+success status code.  If you do not return a success status code,
+the caller will assume that expansion did not occur.
+<endrettext>
+
+<argdeflist>
+<argitem>(context\context\longword (unsigned)\modify\by reference)
+<argdef>
+This is the same value that was passed to the INIT routine.
+<argitem>(hostname\char_string\character string\read only\
+by descriptor (fixed-length))
+<argdef>
+The host name to be expanded.
+
+<argitem>(expname\char_string\character string\write only\by descriptor)
+<argdef>
+A string into which your routine should copy the expanded host name,
+if expansion was successful.  You must use the STR$ string routines
+(such as STR$COPY_DX) to copy the string into this argument.
+<endargdeflist>
+
+<description>
+This routine is called to perform a host name expansion.  The address
+of the context block you allocated in the INIT routine is passed in
+here for any information you need to keep track of between calls.
+This routine may be called more than once between one pair of
+INIT and CLEANUP calls.
+<enddescription>
+
+
+<routine>(CLEANUP\\\PROG_GUIDE_14)
+<overview>
+Context cleanup routine.
+<endoverview>
+<format>
+<frtn>(CLEANUP)
+<fargs>(context)
+<endformat>
+
+<returns>(cond_value\longword (unsigned)\write only\by value)
+<rettext>
+This routine should return a status value indicating the success or
+failure of the cleanup operation.  The caller may or may not ignore
+the returned value.
+<endrettext>
+
+<argdeflist>
+<argitem>(context\context\longword (unsigned)\modify\by reference)
+<argdef>
+The address of the context block you allocated in the INIT routine.
+<endargdeflist>
+
+<description>
+This routine is called to clean up after a series of EXPAND calls.
+You should clean up the context information and deallocate the
+context block allocated by the INIT routine.
+<p>If you did not allocate a context block in the INIT routine, you
+must still have a CLEANUP routine, even if it just returns to the caller.
+<enddescription>
+
+<endroutine_section>
+
+
+<head1>(Name Conversion\PROG_GUIDE_15)
+<p>The local name conversion routines are used by the MX_MAILSHR VMS Mail
+interface to translate a username into an alias and by the Router to
+translate aliases back into real usernames.  This can be used, for
+example, to map usernames into <quote>(real) names and vice-versa.
+<p>The following pages describe the routines that must be provided for
+the name conversion interface.
+<p>In addition to the required CONVERT routine, an optional FULL_CONVERT
+routine may be provided to allow for conversion of a username to a full
+RFC822 address, as opposed to just username substitution.
+
+<routine_section>
+<set_template_routine>(routine\doublerunningheads)
+
+<routine>(INIT\\\PROG_GUIDE_16)
+<overview>
+Initialization routine.
+<endoverview>
+<format>
+<frtn>(INIT)
+<fargs>(context)
+<endformat>
+
+<returns>(cond_value\longword (unsigned)\write only\by value)
+<rettext>
+The INIT routine must return a success status value in order for the
+other expansion routines to be used.
+<endrettext>
+
+<argdeflist>
+<argitem>(context\context\longword (unsigned)\modify\by reference)
+<argdef>
+This is a longword passed by reference to your routine that you may
+use for any purpose, such as allocating a block of memory for keeping
+contextual information.
+<endargdeflist>
+
+<description>
+This routine is called by the Router before any calls to the CONVERT
+routine.  You may use this routine to set up any context or perform
+any housekeeping tasks needed to prepare for the subsequent calls to
+CONVERT.
+<p>Since your routines must be reentrant, you should not use static
+storage for keeping track of state information or other contextual
+information.  Instead, you should allocate a block of dynamic memory
+and return its address in <keyword>(context).
+<enddescription>
+
+<routine>(CONVERT\\\PROG_GUIDE_17)
+<overview>
+Routine to convert a username to an alias or an alias to a username.
+<endoverview>
+<format>
+<frtn>(CONVERT)
+<fargs>(context, code, inname, outname)
+<endformat>
+
+<returns>(cond_value\longword (unsigned)\write only\by value)
+<rettext>
+
+On successful conversion, return SS$_NORMAL or some other
+success status code.  If you do not return a success status code,
+the caller will assume that expansion did not occur.
+<endrettext>
+
+<argdeflist>
+<argitem>(context\context\longword (unsigned)\modify\by reference)
+<argdef>
+This is the same value that was passed to the INIT routine.
+
+<argitem>(code\longword_unsigned\longword (unsigned)\read only\by reference)
+<argdef>
+This argument indicates what type of name conversion should occur.
+It will have one of the following values:
+<table>
+<table_setup>(2\10)
+<table_heads>(Value\Meaning)
+<table_row>(1\Perform alias-to-username conversion.)
+<table_row>(2\Perform username-to-alias conversion.)
+<endtable>
+
+<argitem>(inname\char_string\character string\read only\
+by descriptor (fixed-length))
+<argdef>
+The name to be converted.
+
+<argitem>(outname\char_string\character string\write only\by descriptor)
+<argdef>
+A string into which your routine should copy the result.
+This is only used if you return
+a success status code.
+<endargdeflist>
+
+<description>
+This routine is called to perform a name conversion.  For alias-to-username
+translation, a string containing the potential alias is passed in
+<keyword>(inname).  If the conversion succeeds, the address returned
+in <keyword>(outname) <emphasis>(must\bold) be in RFC821 format:
+<syntax>
+              <username@hostname>
+<endsyntax>
+<p>This format must be used even if the address is intended for the local
+host.
+
+<p>For username-to-alias conversion, the username to be converted is
+passed in <keyword>(inname).
+If no conversion is performed, return a non-success status code;
+otherwise, provide a result in <keyword>(outname).
+The result should be only the local part of an address; no host name
+should be appended nor any punctuation added.
+<p>This routine may be called more than once between one pair of INIT
+and CLEANUP calls.
+<enddescription>
+
+
+<routine>(CLEANUP\\\PROG_GUIDE_18)
+<overview>
+Context cleanup routine.
+<endoverview>
+<format>
+<frtn>(CLEANUP)
+<fargs>(context)
+<endformat>
+
+<returns>(cond_value\longword (unsigned)\write only\by value)
+<rettext>
+This routine should return a status value indicating the success or
+failure of the cleanup operation.  The caller may or may not ignore
+the returned value.
+<endrettext>
+
+<argdeflist>
+<argitem>(context\context\longword (unsigned)\modify\by reference)
+<argdef>
+The address of the context block you allocated in the INIT routine.
+<endargdeflist>
+
+<description>
+This routine is called to clean up after a series of CONVERT calls.
+You should clean up the context information and deallocate the
+context block allocated by the INIT routine.
+<p>If you did not allocate a context block in the INIT routine, you
+must still have a CLEANUP routine, even if it just returns to the caller.
+<enddescription>
+
+<routine>(FULL_CONVERT\\\PROG_GUIDE_17A)
+<overview>
+Routine to convert a username to an alias (as a full RFC822 address).
+<endoverview>
+<format>
+<frtn>(FULL_CONVERT)
+<fargs>(context, code, inname, outname)
+<endformat>
+
+<returns>(cond_value\longword (unsigned)\write only\by value)
+<rettext>
+On successful conversion, return SS$_NORMAL or some other
+success status code.  If you do not return a success status code,
+the caller will assume that conversion did not occur.
+<endrettext>
+
+<argdeflist>
+<argitem>(context\context\longword (unsigned)\modify\by reference)
+<argdef>
+This is the same value that was passed to the INIT routine.
+
+<argitem>(code\longword_unsigned\longword (unsigned)\read only\by reference)
+<argdef>
+This argument indicates what type of name conversion should occur.
+Only the following value should be accepted:
+<table>
+<table_setup>(2\10)
+<table_heads>(Value\Meaning)
+<table_row>(2\Perform username-to-alias conversion.)
+<endtable>
+<p>All other values for this argument are reserved for future use.
+
+<argitem>(inname\char_string\character string\read only\
+by descriptor (fixed-length))
+<argdef>
+The name to be converted.
+
+<argitem>(outname\char_string\character string\write only\by descriptor)
+<argdef>
+A string into which your routine should copy the result.
+This is only used if you return a success status code.
+<endargdeflist>
+
+<description>
+This routine is called to perform a username-to-full-address conversion. 
+The username to be converted is
+passed in <keyword>(inname).  If no conversion is performed, return a
+non-success status code.  Unlike the CONVERT routine, the result you provide
+in <keyword>(outname) on a successful conversion
+<emphasis>(must\bold) be a full RFC822-type address (user@host
+format).
+<p>This routine may be called more than once between one pair of INIT
+and CLEANUP calls, and may be intermixed with CONVERT calls.
+<enddescription>
+
+
+<endroutine_section>
+
+<CHAPTER>(SMTP Authentication Callout\authcallout_chap)
+<P>The MX SMTP server supports the SMTP extension for authentication
+of clients, with built-in support for a private authentication database
+(when using the CRAM-MD5 authentication mechanism)
+as well as authentication using the VMS user authorization file (when
+using the PLAIN and LOGIN authentication mechanisms).
+<P>The authentication callout provides a way to replace the built-in
+PLAIN/LOGIN authentication mechanism, so that usernames and passwords
+may be validated against an alternative source besides the SYSUAF, or
+to extend the authentication system to include additional features
+(such as customized intrusion detection and evasion or per-message
+accounting).
+<p>The authentication callout routines are located through the use of
+the logical name MX_SITE_SMTP_AUTHENTICATION, which should be defined
+in executive mode in the system logical name table to point to the
+shareable image containing the callout module.
+
+<p>An example of an authentication callout module is provided
+in the Examples saveset of the installation kit.
+
+<ROUTINE_SECTION>
+<SET_TEMPLATE_ROUTINE>(ROUTINE\DOUBLERUNNINGHEADS)
+
+<ROUTINE>(INIT\\\PROG_GUIDE_AU_INIT)
+<OVERVIEW>
+Initialization routine.
+<ENDOVERVIEW>
+<FORMAT>
+<FRTN>(INIT)
+<FARGS>(context)
+<ENDFORMAT>
+
+<RETURNS>(cond_value\longword (unsigned)\write only\by value)
+<RETTEXT>
+The INIT routine must return a success status value in order for the
+other authentication routines to be used.
+<endrettext>
+
+<ARGDEFLIST>
+<ARGITEM>(context\context\longword (unsigned)\modify\by reference)
+<ARGDEF>
+This is a longword passed by reference to your routine that you may
+use for any purpose, such as allocating a block of memory for keeping
+contextual information.
+<ENDARGDEFLIST>
+
+<DESCRIPTION>
+This routine is called by the SMTP server before any calls to the
+AUTHENTICATE or ACCOUNTING routines.
+You may use this routine to set up any context or perform
+any housekeeping tasks.  
+
+<P>
+Note that the SMTP server is multi-threaded,
+so while this routine is called no more than once per SMTP session,
+there may be multiple simultaneous sessions active in the SMTP server
+at one time.  Since your routines must be reentrant, you should not use static
+storage for keeping track of state information or other contextual
+information.  Instead, you should allocate a block of dynamic memory
+and return its address in <keyword>(context).
+<ENDDESCRIPTION>
+
+<ROUTINE>(AUTHENTICATE\\\PROG_GUIDE_AU_AUTHENTICATE)
+<OVERVIEW>
+Routine to authenticate a client.
+<ENDOVERVIEW>
+<FORMAT>
+<FRTN>(AUTHENTICATE)
+<FARGS>(context, usrnam, pass, cliaddr, cliaddrlen, sessid, authstat, astadr, astprm)
+<ENDFORMAT>
+
+<RETURNS>(cond_value\longword (unsigned)\write only\by value)
+<RETTEXT>
+The return status is used only to determine whether this routine has completed
+synchronously (non-success status) or asynchronously (success status).
+<ENDRETTEXT>
+
+<ARGDEFLIST>
+<ARGITEM>(context\context\longword (unsigned)\modify\by reference)
+<ARGDEF>
+The context longword, as set by the INIT routine.
+<ARGITEM>(usrnam\char_string\character string\read only\ by descriptor (fixed-length))
+<ARGDEF>
+The username provided by the client.
+
+<ARGITEM>(pass\char_string\character string\read only\ by descriptor (fixed-length))
+<ARGDEF>
+The password provided by the client.
+
+<ARGITEM>(cliaddr\sockaddr\socket address\read only\by reference)
+<ARGDEF>
+A socket address structure containing the address of the client.
+
+<ARGITEM>(cliaddrlen\longword_unsigned\longword (unsigned)\read only\by value)
+<ARGDEF>
+The size, in bytes, of the <EMPHASIS>(cliaddr) socket address structure.
+
+
+<ARGITEM>(sessid\longword_unsigned\longword (unsigned)\write only\by reference)
+<ARGDEF>
+A <quote>(session identifier) to be returned for this authenticated SMTP session,
+if authentication is successful.  If set to a non-zero value, the SMTP server
+will include this value in the Received: header of any message sent by the
+client during this session.
+
+<ARGITEM>(authstatus\cond_value\longword (unsigned)\write only\by reference)
+<ARGDEF>
+A VMS status code indicating the success or failure of the authentication sequence.
+If this routine completes synchronously, this value should be set before returning
+to the caller.  Typical values for <EMPHASIS>(authstatus) are SS$_NORMAL for success,
+and SS$_INVLOGIN for failure.
+
+<ARGITEM>(astadr\ast_procedure\procedure entry mask\call without stack unwinding\by reference)
+<ARGDEF>
+The address of the caller's AST completion routine.  If the AUTHENTICATE routine needs
+to perform asynchronous I/O, its own AST completion routine should call this routine to
+indicate to the caller that it is finished.
+
+<ARGITEM>(astprm\user_arg\longword (unsigned)\read only\by value)
+<ARGDEF>
+Argument to be passed to the caller's AST completion routine.
+
+<ENDARGDEFLIST>
+
+<DESCRIPTION>
+  	This routine performs authentication for a username/password combination.  If this routine requires
+  	any I/O operation that may not complete immediately, it should use asynchronous I/O
+  	and its AST completion routine should call the AST routine that is passed in by the
+  	caller.
+
+<P>  	Only one authentication request will ever be outstanding for a single authentication
+  	context, so the context block can be used to store the caller's AST routine address, AST parameter, 
+  	and authentication status address for later use by its AST completion routine.
+
+<P>  	Note that the SMTP server provides the username and password <EMPHASIS>(exactly) as sent by
+  	the client.  No case conversion, blank stripping, or other editing is done by the
+  	server.
+<ENDDESCRIPTION>
+
+<ROUTINE>(ACCOUNTING\\\PROG_GUIDE_AU_ACCTG)
+<OVERVIEW>
+Routine to record the acceptance of a message in an accounting log.
+<ENDOVERVIEW>
+<FORMAT>
+<FRTN>(ACCOUNTING)
+<FARGS>(context, sessid, msgsize, fromadr, toadr)
+<ENDFORMAT>
+
+<RETURNS>(cond_value\longword (unsigned)\write only\by value)
+<RETTEXT>
+The SMTP server currently ignores the returned status.  For future compatibility,
+however, you should return a status code indicating the success or failure of
+the accounting request.
+<ENDRETTEXT>
+
+<ARGDEFLIST>
+<ARGITEM>(context\context\longword (unsigned)\modify\by reference)
+<ARGDEF>
+This is the same value that was passed to the INIT routine.
+
+<ARGITEM>(sessid\longword_unsigned\longword (unsigned)\read only\by reference)
+<ARGDEF>
+This argument contains the session ID value that was returned by the AUTHENTICATE
+routine.
+
+<ARGITEM>(msgsize\longword_unsigned\longword (unsigned)\read only\by reference)
+<ARGDEF>
+The size, in bytes, of the body of the message sent by the client.
+
+<ARGITEM>(fromadr\char_string\character string\read only\by descriptor)
+<ARGDEF>
+The SMTP MAIL FROM: address provided by the client for this message.
+
+<ARGITEM>(toadr\char_string\character string\read only\by descriptor)
+<ARGDEF>
+The SMTP RCPT TO: address provided by the client for this message.  Note that
+this routine is called once for each recipient named by the client.
+
+<ENDARGDEFLIST>
+
+<DESCRIPTION>
+  	This routine is called by the SMTP server after a message is accepted from
+  	the authenticated client.  Note that this routine may be called multiple times
+  	for each message -- once per recipient address.
+
+<P>  	Note that this routine is optional; it is only called by the SMTP server
+  	if it is provided by the installed authentication callout module.
+
+<ENDDESCRIPTION>
+
+
+<ROUTINE>(CLEANUP\\\PROG_GUIDE_AU_CLEANUP)
+<OVERVIEW>
+Context cleanup routine.
+<ENDOVERVIEW>
+<FORMAT>
+<FRTN>(CLEANUP)
+<FARGS>(context)
+<ENDFORMAT>
+
+<RETURNS>(cond_value\longword (unsigned)\write only\by value)
+<RETTEXT>
+This routine should return a status value indicating the success or
+failure of the cleanup operation.  The caller may or may not ignore
+the returned value.
+<ENDRETTEXT>
+
+<ARGDEFLIST>
+<ARGITEM>(context\context\longword (unsigned)\modify\by reference)
+<ARGDEF>
+The address of the context block you allocated in the INIT routine.
+<ENDARGDEFLIST>
+
+<DESCRIPTION>
+This routine is called to clean up at the end of an authentication
+sequence or session.
+You should clean up the context information and deallocate the
+context block allocated by the INIT routine.
+
+<P>
+If you did not allocate a context block in the INIT routine, you
+must still have a CLEANUP routine, even if it just returns to the caller.
+<ENDDESCRIPTION>
+
+<ENDROUTINE_SECTION>
+
+<CHAPTER>(Character-Conversion Callout\charconv_chap)
+<P>The MX VMS MAIL interface supports conversion between the local
+native character set and a character set used in e-mail messages.
+MX has built-in support for using the ISO-Latin-1 character
+set for network messages, with either ISO-Latin-1 or the DEC
+Multinational Character Set as the local, native character set.
+
+<P>If you need to use any other character sets for either local
+or network messages, you should install a character conversion
+callout module.  Example code for this module is provided in
+the Examples saveset of the installation kit.
+
+<NOTE>
+The routines in this module must be reentrant, as a single
+process may have multiple conversion sequences active simultaneously.
+<ENDNOTE>
+
+<ROUTINE_SECTION>
+<SET_TEMPLATE_ROUTINE>(ROUTINE\DOUBLERUNNINGHEADS)
+
+<ROUTINE>(INIT\\\PROG_GUIDE_CC_INIT)
+<OVERVIEW>
+Initialization routine.
+<ENDOVERVIEW>
+<FORMAT>
+<FRTN>(INIT)
+<FARGS>(code, context, [lcslen], lcsname, [ncsname] [,usrnam])
+<ENDFORMAT>
+
+<RETURNS>(cond_value\longword (unsigned)\write only\by value)
+<RETTEXT>
+If a success status is returned, the CONVERT routine will be
+called to perform the conversion.
+<endrettext>
+
+<ARGDEFLIST>
+<ARGITEM>(code\longword_unsigned\longword (unsigned)\read only\by reference)
+<ARGDEF>
+A coded value indicating the direction of the conversion.  Possible values
+are:
+<TABLE>
+<TABLE_SETUP>(2\5)
+<TABLE_HEADS>(Value\Description)
+<TABLE_ROW>(1\Conversion from local character set to network character set.)
+<TABLE_ROW>(2\Conversion from network character set to local character set.)
+<ENDTABLE>
+<CP>Note that this value is passed by reference.
+
+<ARGDEFLIST>
+<ARGITEM>(context\context\longword (unsigned)\modify\by reference)
+<ARGDEF>
+This is a longword passed by reference to your routine that you may
+use for any purpose, such as allocating a block of memory for keeping
+contextual information.
+<ENDARGDEFLIST>
+
+<ARGITEM>(lcslen\word_unsigned\word (unsigned)\write only\by reference)
+<ARGDEF>
+If provided by the caller, the INIT routine should write the length of
+the local character set name in this parameter.  If this parameter is
+null, the caller does not need the length returned.
+
+<ARGITEM>(lcsname\char_string\character string\write only\by descriptor)
+<ARGDEF>
+The name of the local character set.  This should be one of the character
+set names registered with the Internet Assigned Numbers Authority, preferably
+the <quote>(MIME preferred) charset name.
+<NOTE>This argument and
+<EMPHASIS>(lcslen) should be filled in even if this routine returns
+a non-success status value.
+<ENDNOTE>
+
+<ARGITEM>(ncsname\char_string\character string\read only\by descriptor)
+<ARGDEF>
+The name of the network character set to be used for the conversion.
+If this parameter is null, the callout module's default network character
+set should be used.  Otherwise, this routine should make sure that
+it can support conversion between the specified character set and the
+local character set.
+
+<ARGITEM>(usrnam\char_string\character string\read only\by descriptor)
+<ARGDEF>
+The username of the user for whom the character-set conversion is being
+performed, provided for per-user customization of character set usage.
+This argument is provided only during conversion of message
+contents; VMS MAIL header conversions always use the system-wide defaults.
+Check the argument count and test for the pointer to the descriptor being
+NULL before attempting to access this argument.
+<P>For users that use POP or IMAP clients to read their e-mail, you may
+want to defeat the character set conversion on local message delivery,
+especially if the POP/IMAP clients cannot handle the character set used
+on the VMS system.
+<ENDARGDEFLIST>
+
+<DESCRIPTION>
+This routine is called by the MX VMS MAIL interface (in MX_MAILSHR, 
+the MX Router agent, and the MX Local agent) to initialize a character
+conversion sequence.
+<P>This routine should validate the parameters provided and return
+success status only if the callout will handle the requested conversion.
+If the network and local character sets are identical, this routine
+should return a non-success status.
+<P>
+Any context required for the conversion should be allocated by this
+routine.  The context should store information about the direction of
+the conversion, provided in the <EMPHASIS>(code) argument.
+<ENDDESCRIPTION>
+
+<ROUTINE>(CONVERT\\\PROG_GUIDE_CC_CONVERT)
+<OVERVIEW>
+Perform character-set conversion on a string.
+<ENDOVERVIEW>
+<FORMAT>
+<FRTN>(CONVERT)
+<FARGS>(context, instr, [outlen], outstr, [converted], [remaining])
+<ENDFORMAT>
+
+<RETURNS>(cond_value\longword (unsigned)\write only\by value)
+<RETTEXT>
+A success value indicates that characters have been converted and/or
+copied between the input and output strings.
+<ENDRETTEXT>
+
+<ARGDEFLIST>
+<ARGITEM>(context\context\longword (unsigned)\modify\by reference)
+<ARGDEF>
+The context longword, as set by the INIT routine.
+<ARGITEM>(instr\char_string\character string\read only\ by descriptor (fixed-length))
+<ARGDEF>
+The string containing characters to be converted.
+
+<ARGITEM>(outlen\word_unsigned\word (unsigned)\write only\by reference)
+<ARGDEF>
+If non-null, the actual length of the converted output string should be returned
+in this argument.
+
+<ARGITEM>(outstr\char_string\character string\write only\ by descriptor (fixed-length))
+<ARGDEF>
+The output string.  The descriptor for this string will always point to a fixed-length
+string, either static (DSC$K_CLASS_S) or dynamic (DSC$K_CLASS_D).
+
+<ARGITEM>(converted\longword_unsigned\longword (unsigned)\write only\by reference)
+<ARGDEF>
+If non-null, this argument should be set to 1 if there any characters in the input
+string were translated before being written to the output string.  If the conversion
+resulted in a simply copy of identical characters, this argument should be set to zero.
+
+<ARGITEM>(remaining\word_unsigned\word (unsigned)\write only\by reference)
+<ARGDEF>
+If non-null, this argument should be set to the number of characters in the input
+string that were not processed by this call.  This should only happen if the output
+string is not large enough to hold the entire converted input string.
+<ENDARGDEFLIST>
+
+<DESCRIPTION>
+This routine is called to perform character set conversion on a string.
+<ENDDESCRIPTION>
+
+<ROUTINE>(GETCSNAME\\\PROG_GUIDE_CC_GETCSNAME)
+<OVERVIEW>
+Returns a character set name.
+<ENDOVERVIEW>
+<FORMAT>
+<FRTN>(GETCSNAME)
+<FARGS>(context, code, [len], name)
+<ENDFORMAT>
+
+<RETURNS>(cond_value\longword (unsigned)\write only\by value)
+
+<ARGDEFLIST>
+<ARGITEM>(context\context\longword (unsigned)\modify\by reference)
+<ARGDEF>
+The context that was returned by the INIT routine.
+
+<ARGITEM>(code\longword_unsigned\longword (unsigned)\read only\by reference)
+<ARGDEF>
+This argument indicates which character set name should be returned:
+<TABLE>
+<TABLE_SETUP>(2\5)
+<TABLE_HEADS>(Value\Description)
+<TABLE_ROW>(1\The local character set.)
+<TABLE_ROW>(2\The network character set.)
+<ENDTABLE>
+<CP>
+Note that the returned name should be fore the actual character set involved
+in the current conversion sequence, not the default character set supported
+by the callout.
+
+<ARGITEM>(len\word_unsigned\word (unsigned)\write only\by reference)
+<ARGDEF>
+If non-null, this argument should be set to the length, in bytes, of the returned name.  
+
+<ARGITEM>(name\char_string\character string\write only\by descriptor (fixed-length))
+<ARGDEF>
+This argument should be set to the name of the requested character set.
+<ENDARGDEFLIST>
+
+<DESCRIPTION>
+This routine is called during a conversion sequence to retrieve the name of
+either the local or network character set being used. 
+<ENDDESCRIPTION>
+
+
+<ROUTINE>(FINISH\\\PROG_GUIDE_CC_FINISH)
+<OVERVIEW>
+Context cleanup routine.
+<ENDOVERVIEW>
+<FORMAT>
+<FRTN>(FINISH)
+<FARGS>(context)
+<ENDFORMAT>
+
+<RETURNS>(cond_value\longword (unsigned)\write only\by value)
+
+<ARGDEFLIST>
+<ARGITEM>(context\context\longword (unsigned)\modify\by reference)
+<ARGDEF>
+The address of the context block allocated in the INIT routine.
+<ENDARGDEFLIST>
+
+<DESCRIPTION>
+This routine is called to clean up at the end of a conversion sequence.
+You should clean up the context information and deallocate the
+context block allocated by the INIT routine.
+
+<P>
+If you did not allocate a context block in the INIT routine, you
+must still have a FINISH routine, even if it just returns to the caller.
+<ENDDESCRIPTION>
+
+<ENDROUTINE_SECTION>
+
+<CHAPTER>(SMTP Client Access Callout\accchk_callout_chap)
+<P>The MX SMTP server normally accepts all incoming connections from
+any client, regardless of the client's source address.  The client
+access SITE callout provides a way to modify this behavior and
+exercise administrative control over which clients have access
+to the server.
+<p>The client access callout routines are located through the use of
+the logical name MX_SITE_CLIENT_ACCESS_CHECK, which should be defined
+in executive mode in the system logical name table to point to the
+shareable image containing the callout module.
+
+<p>An example of a client access callout module is provided
+in the Examples saveset of the installation kit.
+
+<ROUTINE_SECTION>
+<SET_TEMPLATE_ROUTINE>(ROUTINE\DOUBLERUNNINGHEADS)
+
+<ROUTINE>(INIT\\\PROG_GUIDE_ACCCHK_INIT)
+<OVERVIEW>
+Initialization routine.
+<ENDOVERVIEW>
+<FORMAT>
+<FRTN>(INIT)
+<FARGS>(context)
+<ENDFORMAT>
+
+<RETURNS>(cond_value\longword (unsigned)\write only\by value)
+<RETTEXT>
+The INIT routine must return a success status value in order for the
+other client access check routines to be used; otherwise, the server
+assumes that access is granted.
+<endrettext>
+
+<ARGDEFLIST>
+<ARGITEM>(context\context\longword (unsigned)\modify\by reference)
+<ARGDEF>
+This is a longword passed by reference to your routine that you may
+use for any purpose, such as allocating a block of memory for keeping
+contextual information.
+<ENDARGDEFLIST>
+
+<DESCRIPTION>
+This routine is called by the SMTP server before any calls to the
+CHECK routine.
+You may use this routine to set up any context or perform
+any housekeeping tasks. 
+
+<P>
+Note that the SMTP server is multi-threaded,
+so while this routine is called no more than once per SMTP session,
+there may be multiple simultaneous sessions active in the SMTP server
+at one time.  Since your routines must be reentrant, you should not use static
+storage for keeping track of state information or other contextual
+information.  Instead, you should allocate a block of dynamic memory
+and return its address in <keyword>(context).
+<ENDDESCRIPTION>
+
+<ROUTINE>(CHECK\\\PROG_GUIDE_ACCCHK_CHECK)
+<OVERVIEW>
+Routine to check access for a client.
+<ENDOVERVIEW>
+<FORMAT>
+<FRTN>(CHECK)
+<FARGS>(context, cliaddr, cliaddrlen, accstat, astadr, astprm)
+<ENDFORMAT>
+
+<RETURNS>(cond_value\longword (unsigned)\write only\by value)
+<RETTEXT>
+The return status is used only to determine whether this routine has completed
+synchronously (non-success status) or asynchronously (success status).
+<ENDRETTEXT>
+
+<ARGDEFLIST>
+<ARGITEM>(context\context\longword (unsigned)\modify\by reference)
+<ARGDEF>
+The context longword, as set by the INIT routine.
+
+<ARGITEM>(cliaddr\sockaddr\socket address\read only\by reference)
+<ARGDEF>
+A socket address structure containing the address of the client.
+
+<ARGITEM>(cliaddrlen\longword_unsigned\longword (unsigned)\read only\by value)
+<ARGDEF>
+The size, in bytes, of the <EMPHASIS>(cliaddr) socket address structure.
+
+<ARGITEM>(accstatus\cond_value\longword (unsigned)\write only\by reference)
+<ARGDEF>
+A VMS status code indicating the success or failure of the access check.
+If this routine completes synchronously, this value should be set before returning
+to the caller.  Typical values for <EMPHASIS>(accstatus) are SS$_NORMAL for success,
+and SS$_INVLOGIN (or any other non-success status) for failure.
+
+<ARGITEM>(astadr\ast_procedure\procedure entry mask\call without stack unwinding\by reference)
+<ARGDEF>
+The address of the caller's AST completion routine.  If the CHECK routine needs
+to perform asynchronous I/O, its own AST completion routine should call this routine to
+indicate to the caller that it is finished.
+
+<ARGITEM>(astprm\user_arg\longword (unsigned)\read only\by value)
+<ARGDEF>
+Argument to be passed to the caller's AST completion routine.
+
+<ENDARGDEFLIST>
+
+<DESCRIPTION>
+  	This routine checks whether the SMTP client at the specified address should be granted
+        access to the SMTP server.  If this routine requires
+  	any I/O operation that may not complete immediately, it should use asynchronous I/O
+  	and its AST completion routine should call the AST routine that is passed in by the
+  	caller.
+
+<P>  	Only one access check request will ever be outstanding for a single access check
+  	context, so the context block can be used to store the caller's AST routine address, AST parameter, 
+  	and authentication status address for later use by its AST completion routine.
+
+<ENDDESCRIPTION>
+
+<ROUTINE>(CLEANUP\\\PROG_GUIDE_ACCCHK_CLEANUP)
+<OVERVIEW>
+Context cleanup routine.
+<ENDOVERVIEW>
+<FORMAT>
+<FRTN>(CLEANUP)
+<FARGS>(context)
+<ENDFORMAT>
+
+<RETURNS>(cond_value\longword (unsigned)\write only\by value)
+<RETTEXT>
+This routine should return a status value indicating the success or
+failure of the cleanup operation.  The caller may or may not ignore
+the returned value.
+<ENDRETTEXT>
+
+<ARGDEFLIST>
+<ARGITEM>(context\context\longword (unsigned)\modify\by reference)
+<ARGDEF>
+The address of the context block you allocated in the INIT routine.
+<ENDARGDEFLIST>
+
+<DESCRIPTION>
+This routine is called to clean up after an access check.
+You should clean up the context information and deallocate the
+context block allocated by the INIT routine.
+
+<P>
+If you did not allocate a context block in the INIT routine, you
+must still have a CLEANUP routine, even if it just returns to the caller.
+<ENDDESCRIPTION>
+
+<ENDROUTINE_SECTION>
+

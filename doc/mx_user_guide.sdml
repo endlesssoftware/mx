@@ -1,0 +1,1033 @@
+<COMMENT>
+
+   File:	USER_GUIDE.SDML
+
+   Abstract:	VAX DOCUMENT source for _Message Exchange User's Guide_
+
+   Authors:	Matt Madison
+		Hunter Goatley
+
+Copyright (c) 2008, Matthew Madison.
+Copyright (c) 2011, Endless Software Solutions.
+
+All rights reserved.
+
+Redistribution and use in source and binary forms, with or without
+modification, are permitted provided that the following conditions
+are met:
+
+    * Redistributions of source code must retain the above
+      copyright notice, this list of conditions and the following
+      disclaimer.
+    * Redistributions in binary form must reproduce the above
+      copyright notice, this list of conditions and the following
+      disclaimer in the documentation and/or other materials provided
+      with the distribution.
+    * Neither the name of the copyright owner nor the names of any
+      other contributors may be used to endorse or promote products
+      derived from this software without specific prior written
+      permission.
+
+THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
+"AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
+LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
+A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
+OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
+SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
+LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
+DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
+THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
+(INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
+OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+
+   Modified by:
+
+	10-JAN-1994	Goatley		Updated for MX V4.0.
+	14-APR-1993	Goatley		Updated for MX V3.3.
+	15-FEB-1993	Goatley		Updated for MX v3.2.
+    	26-APR-1998 	Madison	    	Updated for MX V5.1.
+    	11-OCT-1998 	Madison	    	Further revisions for V5.1.
+        03-Feb-2008     Madison         Updated for open source release.
+	03-Aug-2011	Sneddon		Updated software revisions.
+
+<ENDCOMMENT>
+<INCLUDE>(SYMBOLS.SDML)
+<FRONT_MATTER>(USER_GUIDE_1)
+
+<TITLE_PAGE>
+<TITLE>(Message Exchange User's Guide)
+<ABSTRACT>(<REFERENCE>(RELMONTH))
+<p>This manual provides information for users of
+Message Exchange, electronic mail software for VMS systems.
+<ENDABSTRACT>
+<REVISION_INFO>(This is a revised manual.)
+<REVISION_INFO>(Operating System and Version:\OpenVMS VAX V6.2 or later)
+<REVISION_INFO>(\OpenVMS Alpha V6.2 or later)
+<REVISION_INFO>(\OpenVMS Industry Standard 64 V8.2 or later)
+<REVISION_INFO>(Software Version:\Message Exchange <REFERENCE>(VER))
+<ENDTITLE_PAGE>(Endless Software Solutions<LINE>Perth, Western Australia)
+
+<INCLUDE>(COPYRIGHT.SDML)
+<CONTENTS_FILE>
+
+
+<PREFACE>(\USER_GUIDE_2)
+
+<P>
+Message Exchange (MX) is software that provides store-and-forward
+routing and delivery of electronic mail messages. It can also provide
+mailing list and file distribution services.  MX can be used to
+enhance local electronic mail (E-mail) support, and it can be used
+with several kinds of network protocols to provide a unified E-mail
+interface to different networks.
+
+<head1>(Intended Audience\USER_GUIDE_3)
+<p>
+This manual is intended for any VMS MAIL user who uses MX, and users
+of MX's mailing list and file distribution services.  The reader
+should already know the basics of using VMS and the VMS MAIL utility.
+
+<head1>(Document Structure\USER_GUIDE_4)
+<p>This guide consists of four chapters and one appendix.
+<table>
+<table_setup>(2\10)
+<table_row>(Chapter 1\Describes the MX/VMS MAIL interface.)
+<table_row>(Chapter 2\Describes the MXALIAS utility.)
+<table_row>(Chapter 3\Describes the mailing list handler.)
+<table_row>(Chapter 4\Describes the file server.)
+
+<table_row>(Appendix A\Describes MX message formats in detail.)
+<endtable>
+<head1>(Related Documents\USER_GUIDE_5)
+<p>You can find additional information in the following documents:
+<list>(unnumbered)
+<le><reference>(instguide) describes the installation of MX.
+<le><reference>(mgmtguide) describes the management and operation of MX.
+<le><reference>(mlfguide) describes the management and operation of the
+MX mailing list and file server.
+<le><reference>(relnotes) contain information and updates not included
+in this manual.  The release notes are part of the software distribution kit.
+<le><reference>(mailutil) describes the VMS MAIL utility in detail.
+<endlist>
+<ENDPREFACE>
+<ENDFRONT_MATTER>
+<PART>
+
+
+<CHAPTER>(Using Message Exchange with VMS MAIL\USER_GUIDE_6)
+<p>Message Exchange (MX) interfaces with VMS MAIL to provide the means for
+addressing outgoing mail through MX.  It also ensures that mail that is
+delivered via MX has an appropriate source address for replies, and provides
+support for signature files and user-specified reply-to addresses.
+
+<HEAD1>(Specifying an Address\USER_GUIDE_7)
+<P>
+MX interfaces with VMS MAIL as a <quote>(foreign protocol).  When using
+VMS MAIL, you address mail to be sent through MX by specifying an address
+of the form:
+<interactive>
+<s>()<u>(MX%"user@host")
+<endinteractive>
+
+<P>
+The leading MX% tells VMS MAIL to invoke the MX protocol handler; the
+address, which should be surrounded by quotation marks to prevent the
+address from being converted to upper case and prevent the @-sign from
+being interpreted by VMS MAIL, is the network mail address of the user
+you wish to send mail to.
+
+<P>
+If the user is on the local host, you can omit the <emphasis>(@host)
+part of the address, and the quotation marks, just specifying
+<interactive>
+<s>()<u>(MX%username)
+<endinteractive>
+
+<P>
+for an address.
+
+<P>
+The MXALIAS utility can be used to define MX aliases for e-mail
+addresses; see <REFERENCE>(USER_GUIDE_MXALIAS\FULL), for information
+about using MXALIAS.  MX aliases are used just as if sending mail
+through MX to a local user:
+
+<INTERACTIVE>
+<S>()<U>(MX%alias)
+<ENDINTERACTIVE>
+
+<P>
+Any MX% address given without the <EMPHASIS>(@host) part of the
+address is checked to see if it is an MX alias.  If it is, the equated
+address is used; if not, the specified address is assumed to be that
+of a local user.
+
+
+<HEAD2>(Displaying MX Address Translations\USER_GUIDE_SHOW_ADDR)
+<P>
+If you want to see all address translations made by MX for MX%
+addresses passed from VMS Mail, you can define the logical
+MX_VMSMAIL_SHOW_ADDR as shown in the following command:
+
+<INTERACTIVE>
+<S>($ )<U>(DEFINE MX_VMSMAIL_SHOW_ADDR TRUE)
+<ENDINTERACTIVE>
+
+<P>
+If the logical is defined, MX displays the final address used for a
+given address:
+
+<INTERACTIVE>
+MAIL> SEND
+To:     MX%JOE, MX%"MX-List@WKUVX1.WKU.EDU", SYSTEM
+  MX rewrote alias JOE as <SYSTEM@WKUVX1.WKU.EDU>
+  MX rewrote MX-List@WKUVX1.WKU.EDU as <MX-List@WKUVX1.WKU.EDU>
+Subj:   ....
+<ENDINTERACTIVE>
+
+<P>
+Note that <QUOTE>(SYSTEM) was not passed to MX because it was not specified
+with the MX% prefix.  Also note that JOE had been defined as an alias
+equal to SYSTEM@WKUVX1.WKU.EDU using the MXALIAS utility (described in
+<REFERENCE>(USER_GUIDE_MXALIAS)).
+
+<P>
+Placing the MX_VMSMAIL_SHOW_ADDR logical definition in your LOGIN.COM
+will cause MX to always show you all address translations.
+
+<HEAD2>(Multiple Recipients\USER_GUIDE_8)
+<p>When sending messages to more than one recipient through MX, each
+recipient's address requires the MX% prefix (and quotation marks, if
+needed).  For examples:
+<interactive>
+<s>(MAIL> )<U>(SEND)
+<S>(To: )<u>(SMITH, MX%"jones@otherhost.edu",BROWN,MX%NAMES-L)
+<endinteractive>
+<p>Note that you can mix plain, local usernames with MX-directed addresses
+in the same message.
+<head2>(Quotation Marks\USER_GUIDE_9)
+<p>VMS MAIL cannot handle quotation marks within an address.  MX works
+around this problem by substituting apostrophes instead.  For example,
+if the destination address is
+<interactive>
+<s>()<u>("node::user"@remote.host)
+<endinteractive>
+<p>you can specify this address in VMS MAIL as
+<interactive>
+<s>()<u>(MX%"'node::user'@remote.host")
+<endinteractive>
+<P>To enter an apostrophe in an address, quote the apostrophe with
+a backslash.  For example, if the destination address is
+<interactive>
+<S>()<U>(o'reilly@remote.host)
+<Endinteractive>
+<CP>you would enter
+<interactive>
+<S>()<U>(MX%"o<BACKSLASH>'reilly@remote.host")
+<endinteractive>
+<head1>(Using SET FORWARD with MX\USER_GUIDE_10)
+<p>You can use the SET FORWARD command in VMS MAIL to set a forwarding
+address for your mail through MX.
+To do this, however, requires that you add extra quotes to the address.
+The forwarding address should be quoted, and, since MX addresses must be
+quoted, the inner quotes must be doubled to comply with the command parsing.
+For example:
+<interactive>
+<s>(MAIL> )<u>(SET FORWARD "MX%""user@host""")
+<endinteractive>
+<p>You should be sure to check the forwarding address with SHOW FORWARD
+and to send yourself a test message to ensure that you specified the
+address correctly.
+<head1>(Personal Name\USER_GUIDE_11)
+<p>The SET PERSONAL_NAME command in VMS MAIL lets you enter your real
+name, to be appended to your VMS username on outgoing mail.  Messages
+sent via MX will also include your personal name if you have one set.
+<head1>(Signature Files\USER_GUIDE_12)
+<p>The MX/VMS MAIL interface provides support for <quote>(signature) files.
+A signature file is a file that contains your name, E-mail address,
+and any other information that you would like to have included in
+your outgoing mail messages. It should be no more than a few lines long
+and should probably contain lines that do not exceed 80 characters in
+length.  For example:
+<interactive>
+Peter Shandy, Ph.D.
+Horticulture Department
+Balaclava Agricultural College
+shandy@buster.balaclava.edu
+<endinteractive>
+<p>Once you create a signature file, you inform MX of its existence by
+defining the logical name MX_SIGNATURE:
+<interactive>
+<s>($ )<u>(DEFINE MX_SIGNATURE device:[directory]name.type)
+<endinteractive>
+<p>You can then have the signature included in your message by entering
+the line
+<interactive>
+<u>(/SIGNATURE)
+<endinteractive>
+<p>in your message.  To be recognized, there can be no other text on the line
+and no leading blanks.  Case is not important, and you can abbreviate
+SIGNATURE to SIG.  Your signature file will be inserted in the message
+at the point where you place the /SIGNATURE line.
+<p>Note that the signature is included only in copies of the message that
+are sent via MX; if you also send your message to users not using the MX%
+prefix, they will just see the /SIGNATURE line and not your signature file.
+<p>To enable your signature file every time you login, include the DEFINE
+command in your login command procedure. 
+<head2>(Automatic Signature Inclusion\USER_GUIDE_13)
+<p>Your signature file can be included automatically
+at the end of your message by defining the logical name MX_AUTO_SIGNATURE:
+<interactive>
+<s>($ )<u>(DEFINE MX_AUTO_SIGNATURE text)
+<endinteractive>
+<p>The <emphasis>(text) is not important; as long as the logical name
+is defined, the signature file you specify with MX_SIGNATURE will
+will automatically be appended to the end of all subsequent MX messages.  A
+/SIGNATURE line can be used to place the signature anywhere in the
+message (overriding the automatic appending).
+<p>If you wish to prevent the automatic inclusion of your signature file,
+enter a line
+<interactive>
+<u>(/NOSIGNATURE)
+<endinteractive>
+<cp>in your message.  The same formatting rules apply as for /SIGNATURE.
+<head1>(Redirecting Replies\USER_GUIDE_14)
+<p>Normally when you send a message via MX from your VMS account, the
+message will include information that will direct any replies to the
+message back to your VMS account.  If you would rather have replies go
+to a different account, or to an account on a different system, you can
+define the logical name MX_REPLY_TO to include this information in
+the message:
+<interactive>
+<s>($ )<u>(DEFINE MX_REPLY_TO "user@host")
+<endinteractive>
+<p>Note that you should not include the MX% prefix on the address, and
+you should not change quotation marks to apostrophes when you specify the
+address.
+<p>To have this reply address included in your messages every time you
+login, include the DEFINE command in your LOGIN.COM file.
+
+<P>
+Some mailers, including MX, allow multiple addresses on the <QUOTE>(From:)
+line for messages.  You can include multiple addresses in the
+MX_REPLY_TO definition to allow replies to be returned to multiple
+addresses (assuming the remote mailer allows it).  For example, if you
+want replies to your messages to go to two different accounts, you
+could define the logical as follows:
+
+<INTERACTIVE>
+<S>($ )<U>(DEFINE MX_REPLY_TO "user@host,user2@host2")
+<ENDINTERACTIVE>
+
+<HEAD1>(Directing Delivery to VMS MAIL Folders\folder_delivery)
+<p>MX normally delivers incoming messages to your NEWMAIL folder,
+just as VMS MAIL does for local messages.  If you receive a large
+amount of e-mail, particularly from different mailing lists, MX's
+<emphasis>(folder delivery) option may help you to keep your e-mail
+better organized.
+<HEAD2>(Folder Delivery Address Format\fdel_fmt)
+<P>MX accepts local e-mail addresses of the form
+<EMPHASIS>(username)<EMPHASIS>(+\BOLD)<EMPHASIS>(foldername), and treats
+the characters appearing after the plus sign (<EMPHASIS>(+)) as either the
+name of a folder or an alias for a folder name.  You control the folder
+names into which MX can deliver messages by creating a file called
+MX_FOLDERS.DAT in your login directory.
+<P>When MX receives a message for you that contains a plus sign, it reads
+the contents of your MX_FOLDERS.DAT file. If it finds the folder name in
+the file, it delivers the message into that folder.  Otherwise, it simply
+delivers the message to your NEWMAIL folder.
+<HEAD2>(Format of MX_FOLDERS.DAT\fdel_controlfile)
+<P>The file MX_FOLDERS DAT <emphasis>(must) reside in your login directory
+(SYS$LOGIN:) and should be an ordinary VMS text file.  Blank lines in the
+file are ignored.  Other lines should contain one of the following:
+<LIST>(UNNUMBERED)
+<LE>A folder name (may be specified with or without the leading plus sign).
+<LE>A folder alias specification of the form (the leading plus sign is
+<emphasis>(required)):
+<INTERACTIVE>
+<S>(+)<U>(alias  actual-folder-name)
+<ENDINTERACTIVE>
+<LE>A comment, which is a line beginning with an exclamation point (<EMPHASIS>(!)).
+<ENDLIST>
+<P>Leading and trailing blanks (and tabs) are ignored.  Blanks and/or tabs separate
+alias names from actual folder names.
+<P>Since the folder specifications allowed in addresses are limited to only ASCII
+alphanumeric (A through Z, 0 through 9) characters, underscores (_), and hyphens (-),
+you can use folder aliases to allow delivery to folders that contain other characters
+that are allowed by VMS MAIL (such as dots and international 8-bit characters).
+<head2>(Example MX_FOLDERS.DAT\fdel_example)
+<P>The following is an example of an MX_FOLDERS.DAT file for the user SAMPLE.
+It resides in SAMPLE's login directory.
+<INTERACTIVE>
+<U>(!  MX-LIST for the MX-List mailing list)
+<U>(+mx-list)
+<U>(!  INFO-VAX for the Info-VAX mailing list)
+<U>(+info-vax)
+<ENDINTERACTIVE>
+<HEAD2>(Specifying Folders in From Addresses\folder_from)
+<P>You can specify a folder name to be added to your e-mail address
+in outgoing messages by using the following directive on the
+<emphasis>(first line) of the text of the message:
+<INTERACTIVE>
+<S>(/FROM=+)<U>(foldername)
+<ENDINTERACTIVE>
+<P>This only applies to ordinary (non-/FOREIGN) text messages sent by
+VMS MAIL or DECwindows Mail.  If present, MX's VMS MAIL interface will
+automatically remove the line from the text of the message and
+the address in the From: header to be <emphasis>(username)<emphasis>(+\bold)<emphasis>(foldername).
+Note that this folder name must contain only 7-bit ASCII alphanumeric characters,
+underscores, and hyphens.
+<P>If you use this directive when subscribing to a mailing list, and specify the
+folder name in your MX_FOLDERS.DAT file, then all messages from that mailing list
+will be delivered to the folder, rather to your default NEWMAIL folder.
+
+<head1>(Delivery Status Notifications\USER_GUIDE_15)
+<p>MX supports the Internet standard form of delivery status notifications
+(DSNs), which can provide information on the status of a message that you
+send.  When a system supporting the DSN standards delivers a message, it
+examines the DSN control information you defined for the message and determines
+whether it should notify you about the status of the delivery.
+<P>
+To enable these notices, you must define the logical name MX_VMSMAIL_DSN_CONTROL.
+This logical name can be defined with up to two separate settings:
+<LIST>(UNNUMBERED)
+<LE>a setting to specify when you want to be notified about the status of
+    message deliveries, and
+<LE>a setting to specify how much of the message should be returned along
+    with the delivery notice.
+<ENDLIST>
+<HEAD2>(Notification Settings\notify_settings)
+<P>
+The notification setting is specified as follows:
+<INTERACTIVE>
+<S>($ )<U>(DEFINE MX_VMSMAIL_DSN_CONTROL "NOTIFY=<EMPHASIS>(type)[,...]")
+<ENDINTERACTIVE>
+<CP>where <emphasis>(type) can be one of these notification types:
+<TABLE>
+<table_setup>(2\20)
+<table_row>(NEVER\Specifies that you do not want to be notified about the delivery
+                  of the message, even if it fails.)
+<table_row>(SUCCESS\Specifies that you want to be notified about successful delivery
+                  of the message, or if it has been successfully relayed to another
+                  system that does not support DSNs.)
+<table_row>(FAILURE\Specifies that you want to be notified if delivery of the message
+    	    	  fails.)
+<table_row>(DELAY\Specifies that you want to be notified if delivery of the message
+                 is delayed for some reason.)
+<Endtable>
+<CP>If you specify NOTIFY=NEVER, you cannot specify any other notification type.
+Other types may be combined by separating the type keywords with commas.
+<P>Note that for SUCCESS notifications, notification of the successful delivery of
+the message may only be notification of a <quote>(relay) to another system.  This
+happens if a remote system does not support DSNs, or the message is sent to a
+remote system using a protcol that is not capable of transmitting DSN requests.
+
+<head2>(Returned-Information Settings\ret_settings)
+<P>
+The setting for returned information is either:
+<INTERACTIVE>
+<S>($ )<U>(DEFINE MX_VMSMAIL_DSN_CONTROL "RETURN=HEADERS")
+<ENDINTERACTIVE>
+<CP>which specifies that you only want the RFC822 message headers
+included in the returned notification message, or:
+<INTERACTIVE>
+<S>($ )<U>(DEFINE MX_VMSMAIL_DSN_CONTROL "RETURN=FULL")
+<ENDINTERACTIVE>
+<CP>which specifies that you want the entire message included
+in the returned notification message.
+<P>If you do not specify a RETURN setting, the system that issues the
+delivery status notification is allowed to choose whether it should
+return the entire message or just the headers.
+<HEAD2>(Combining the Settings\combined_settings)
+<P>
+You may specify both notification and returned-information settings
+by separating the two settings with one or more blanks.  For example:
+<INTERACTIVE>
+<S>($ )<U>(DEFINE MX_VMSMAIL_DSN_CONTROL "NOTIFY=SUCCESS,FAILURE RETURN=HEADERS")
+<ENDINTERACTIVE>
+<CP>
+This DSN control string specifies that you want to be notified if the
+message is delivered successfully or if it fails, and you want only the
+message headers included with the notification.
+<HEAD2>(Limitations\dsn_limitations)
+<P>
+Because DSN settings are controlled by a logical name, they apply
+to all recipients of all messages you send while the logical name
+is defined.  You cannot specify per-message or per-recipient settings
+while using MX through VMS MAIL or DECwindows Mail.
+
+<head1>(Network Delivery Delays\USER_GUIDE_16)
+<p>Messages sent over any network can be delayed due to network outages,
+system loading, or other reasons.  Once a message leaves the local system,
+there is no way to determine where the message may be held up.  However,
+messages still on the local system awaiting network transfer can be
+displayed with the MAILQUEUE utility:
+<interactive>
+<s>($ )<u>(RUN MX_EXE:MAILQUEUE)
+<endinteractive>
+<p>MAILQUEUE lists any messages you
+have sent that are waiting for network transfer.  All messages that cannot
+be sent are tried periodically, based on settings established by your
+system manager.  If the number of attempts exceeds the established limit,
+the message is returned to sender with a
+message explaining why the transfer did not occur.
+
+<HEAD2>(Displaying MX Informational Messages\USER_GUIDE_SHOW_INFO)
+<P>
+If you want MX to display information messages indicating that your
+VMS Mail message has been successfully delivered to MX, 
+you can define the logical
+MX_VMSMAIL_SHOW_INFO as shown in the following command:
+
+<INTERACTIVE>
+<S>($ )<U>(DEFINE MX_VMSMAIL_SHOW_INFO TRUE)
+<ENDINTERACTIVE>
+
+<P>
+If the logical is defined, MX displays a line like the following when
+the message has been queued to MX:
+
+<INTERACTIVE>
+%MX-I-MAIDLVR, message (entry number 22643) successfully delivered to MX
+<ENDINTERACTIVE>
+
+<P>
+An informational message will also be displayed when a message is sent
+with SEND/FOREIGN:
+
+<INTERACTIVE>
+%MX-I-BASE64, encoding MX foreign message using BASE64
+<ENDINTERACTIVE>
+
+<P>
+Placing the MX_VMSMAIL_SHOW_INFO logical definition in your LOGIN.COM
+will cause MX to always display the informational messages.
+
+
+<HEAD1>(Sending binary files to other VMS users\UG_BINFILE)
+<P>
+The VMS Mail command SEND accepts an undocumented qualifier, /FOREIGN.
+SEND/FOREIGN allows you to mail any VMS file to another user on the
+same system or over DECnet.  The file retains all of the VMS file
+attributes.  When the recipient tries to read the mail message
+containing the file, the following information is displayed:
+
+<INTERACTIVE>(WIDE)
+    #2          14-APR-1993 15:28:02.11             NEWMAIL
+From:   GOATHUNTER
+To:     GOATHUNTER
+CC:
+Subj:   RESET.EXE
+
+You cannot read this foreign format message
+        Use the EXTRACT command to copy the message to an external file
+
+MAIL>
+<ENDINTERACTIVE>
+
+<P>
+The EXTRACT command copies the message to the named external file with
+all VMS file attributes intact.
+
+<P>
+The SEND/FOREIGN command can also be used to send VMS binary files
+through MX, if the target user is on a system running MX V3.3 or
+higher, MultiNet V3.3 or higher, or PMDF V4.1 or higher.  When
+SEND/FOREIGN is used, MX encodes the message using an algorithm called
+BASE64, which is defined in RFC 1341, a document describing MIME
+(Multipurpose Internet Mail Extensions).  The BASE64-encoded file is
+wrapped in a MIME-compliant message and mailed to the recipients. 
+When the message is received on a system running the appropriate
+versions of either MX, MultiNet, or PMDF, the encoded binary file is
+automatically decoded and mailed to the local user as a foreign file.
+The recipient will receive two messages---one containing the headers
+for the message, and the other containing the foreign file as shown
+above.
+
+<P>
+The MIME <QUOTE>(Content-Type:) for the file is <QUOTE>(APPLICATION/VMS-RMS).
+MX will automatically recognize and decode incoming <QUOTE>(VMS-RMS) files
+that are encoded using BASE64,
+
+as well as QUOTED-PRINTABLE files.
+
+
+
+<NOTE>
+The encoding done by MX is only compatible with the VMS mailers
+specified above.  SEND/FOREIGN cannot be used to send binary files to
+non-VMS MIME-compliant mailers.
+<ENDNOTE>
+
+
+<P>
+The following example demonstrates sending a binary file through MX:
+
+<INTERACTIVE>
+<S>($ )<U>(mail)
+<S>()
+<S>(MAIL> )<U>(send/noedit/foreign program.exe)
+<S>(To:     )<U>(MX%"gene@KISS.COM")
+<S>(Subj:   )<U>(Here is that program I promised to send)
+<S>()
+<S>(Encoding MX foreign message using BASE64)
+<S>(Message (entry number 22244) successfully delivered to MX)
+<S>()
+<S>(MAIL>)
+<ENDINTERACTIVE>
+
+<NOTE>
+Non-VMS recipients or VMS recipients on systems <EMPHASIS>(not)
+running the appropriate software will receive a single message
+containing the BASE64-encoded file.  This message will most likely be
+meaningless for those recipients.
+<ENDNOTE>
+
+<P>
+From the DCL prompt, the command MAIL/FOREIGN can be used to send a
+binary file to one or more recipients:
+
+<INTERACTIVE>
+<S>($ )<U>(mail/foreign/subj="My LOGIN.COM" login.com "mx%""user@node.edu""")
+<ENDINTERACTIVE>
+
+
+<CHAPTER>(The MXALIAS Utility\USER_GUIDE_MXALIAS)
+<P>
+MXALIAS is a simple database manager for user-defined MX aliases.  An
+alias is a name that is equated with a mail address that can be used
+to address electronic mail. For example, the address <QUOTE>(BOB) can be
+equated with <QUOTE>(smithjb@node1.school.edu); it can then be used in VMS
+Mail by specifying MX%BOB at the <QUOTE>(To:) prompt:
+
+<INTERACTIVE>
+<S>(MAIL> )<U>(SEND)
+<S>(To:     )<U>(MX%BOB)
+<S>(Subj:   )<U>(....)
+<ENDINTERACTIVE>
+
+<P>
+MX aliases are stored, by default, in a file called
+MX_ALIAS_DATABASE.DAT in your login directory (SYS$LOGIN:).  You can
+define the MX_ALIAS_DATABASE logical in your LOGIN.COM to relocate the
+database file:
+
+<INTERACTIVE>
+<S>($ )<U>(DEFINE MX_ALIAS_DATABASE dev:[user.MAIL]ALIASES.DAT)
+<ENDINTERACTIVE>
+
+<P>
+MXALIAS will automatically create the MX alias database the first time
+you add an alias definition.
+
+<P>
+MXALIAS can be executed by setting up a foreign symbol in your
+LOGIN.COM:
+
+<INTERACTIVE>
+<S>($ )<U>(mxalias :== $mx_exe:mxalias.exe)
+<ENDINTERACTIVE>
+
+<P>
+Your system manager may have already defined it for you in the system
+login procedure.  You can also just use RUN MX_EXE:MXALIAS to run
+MXALIAS.
+
+<P>
+When MXALIAS is invoked without any parameters on the DCL command,
+your are put into an interactive mode.  The prompt is <QUOTE>(MXalias>):
+
+<INTERACTIVE>
+<S>($ )<U>(mxalias)
+<S>(MXalias> )
+<ENDINTERACTIVE>
+
+<P>
+At the MXALIAS prompt, you can ADD aliases, MODIFY them, REMOVE them,
+and list them using the DIRECTORY command.  There is on-line help
+available by typing HELP at the MXalias> prompt.
+
+<HEAD1>(Adding an MX Alias\USER_GUIDE_ALIAS_ADD)
+<P>
+The MXALIAS command ADD is used to add an alias to the database.  ADD
+takes three parameters: the alias to define, the equivalent address,
+and an optional description for the alias.  The following example
+shows a typical definition:
+
+<INTERACTIVE>
+<S>(MXalias> )<U>(add joe "smith@somewhere.com" "Joe Smith, Somewhere, Inc.")
+<S>(Added alias JOE to MX alias database)
+<S>(MXalias>)
+<ENDINTERACTIVE>
+
+<P>
+The alias, JOE in the example above, can be a string of up to 20
+alphanumeric characters (plus $, -, _, and .) that is equated with the
+given e-mail address.  The alias is the address given to MX from the
+VMS Mail <QUOTE>(To:) line using a format like MX%alias.  All aliases are
+converted to uppercase.
+
+<P>
+The given address must be a valid address in the form <QUOTE>(user@host).
+If the domain is omitted, it defaults to the local host (as defined by
+the MX_VMSMAIL_LOCALHOST logical).  The maximum length of the address
+is 255 characters.  If you want to preserve the case of an address, or
+if the address contains the <QUOTE>(!) character, you must enclose the
+address in double-quotes.
+
+If the address includes quotes, the address should be quoted, with the inside
+quotes doubled ("""node::user""@domain").
+
+<P>
+The description is any quoted string of up to 255 characters.  The
+description is displayed by the DIRECTORY command; it is not included
+in the mail headers of the outgoing message.
+
+<HEAD1>(Using an MX Alias\USER_GUIDE_ALIAS_USE)
+<P>
+Once an MX alias has been added to the MX alias database, it can be
+used  on the VMS Mail <QUOTE>(To:) line by simply prefixing the alias name
+with MX%.  MX will check every address that does  not  include  the
+<QUOTE>(@)  character to see if it is an MX alias.  For example, if JOE is
+defined as an alias, the following <QUOTE>(To:) line would be specified:
+
+<INTERACTIVE>
+<S>(MAIL> )<U>(SEND)
+<S>(To:     )<U>(MX%JOE)
+<S>(Subj:   )<U>(....)
+<ENDINTERACTIVE>
+
+<P>
+Sending to MX%<QUOTE>(JOE@localhost) will prevent MX from  performing  the
+alias translation, in case you want to send mail to a local user name
+JOE.
+
+<HEAD2>(Disabling System-Wide MX Alias Lookups\USER_GUIDE_ALIAS_DISGLOB)
+<P>
+MX supports both a personal MX alias database and a system-wide
+(global) alias database created by your system manager.  If an alias
+is not found in your personal database, MX will see if it's defined in
+the global database and, if so, it will use that definition.  If your
+system manager has defined a global database and you wish to prevent
+MX from accessing it, you can do so by using the following command:
+
+<INTERACTIVE>
+<S>($ )<U>(define mx_global_alias_database _nl:)
+<ENDINTERACTIVE>
+
+<P>
+That command causes MX to attempt to open the null device as the
+global database, which effectively disables a system-wide alias
+database.
+
+
+<HEAD2>(Displaying MX Address Translations\USER_GUIDE_ALIAS_SHOW)
+<P>
+To see the resulting addresses used by MX for  all  MX%  addresses,
+define the logical MX_VMSMAIL_SHOW_ADDR as TRUE:
+
+<INTERACTIVE>
+<S>($ )<U>(define mx_vmsmail_show_addr true)
+<S>($ )<U>(mail)
+
+<S>(MAIL> )<U>(SEND)
+<S>(To:     )<U>(MX%JOE, MX%"MX-List@WKUVX1.WKU.EDU", SYSTEM)
+<S>(  MX rewrote alias JOE as <SYSTEM@WKUVX1.WKU.EDU>)
+<S>(  MX rewrote MX-List@WKUVX1.WKU.EDU as <MX-List@WKUVX1.WKU.EDU>)
+<S>(Subj:   )<U>(....)
+<ENDINTERACTIVE>
+
+<P>
+The MX_VMSMAIL_SHOW_ADDR works regardless  of  whether  or  not  MX
+aliases are specified.  If you always want to see MX address
+translations, you can put the DEFINE command in your LOGIN.COM.
+
+<HEAD1>(Displaying Aliases\USER_GUIDE_ALIAS_DIR)
+<P>
+The MXALIAS command DIRECTORY is used to display your defined
+aliases.  By default, the brief directory listing shows only the alias
+and the comment, if there is one:
+
+<INTERACTIVE>
+<S>(MXalias> )<U>(dir)
+<S>()
+<S>(MX Alias              Description)
+<S>(------------          -----------)
+<S>(JOE                   Joe Smith, Somewhere, Inc.)
+<S>()
+<S>(MXalias>)
+<ENDINTERACTIVE>
+
+<P>
+Wildcards can be given to limit the display to aliases matching the
+given pattern. The DIRECTORY/FULL command can be used to show the
+equivalent e-mail addresses.
+
+<P>
+The /OUTPUT=file qualifier can be used to write the directory listing
+to a text file.
+
+<HEAD1>(Modifying Aliases\USER_GUIDE_ALIAS_MOD)
+<P>
+The MODIFY command is used to modify an existing alias definition.  It
+accepts the alias name as a parameter and the qualifiers /ADDRESS and
+/DESCRIPTION.  For example:
+
+<INTERACTIVE>
+<S>(MXalias> )<U>(MODIFY JOE/DESCRIPTION="Local system manager")
+<S>(Modified alias JOE)
+<S>(MXalias>)
+<ENDINTERACTIVE>
+
+<HEAD1>(Removing Aliases\USER_GUIDE_ALIAS_REMOVE)
+<P>
+The REMOVE command is used to remove an alias definition from the MX
+alias database.  By default, it prompts the user for confirmation
+before removing the specified alias:
+
+<INTERACTIVE>
+<S>(MXalias> )<U>(remove joe)
+<S>(Remove JOE <SYSTEM@WKUVX1.WKU.EDU> [N]? )<U>(y)
+<S>(Removed alias JOE)
+<S>(MXalias>)
+<ENDINTERACTIVE>
+
+<P>
+You can supply the qualifier /NOCONFIRM to override the confirmation
+prompt.
+
+
+
+
+<chapter>(Electronic Mailing Lists\USER_GUIDE_17)
+<p>When talking about electronic mail, the term <emphasis>(mailing list)
+is generally used to describe an E-mail address that forwards  messages
+to more than one user.  Mailing lists abound on the Internet,
+on a wide variety of technical and non-technical topics.
+<p>Unfortunately, there are no widely-enforced standards on the implementation of mailing
+lists, so their use will vary depending on the systems on which the
+mailing lists are set up.  
+<head1>(Typical Internet Mailing Lists\USER_GUIDE_18)
+<p>For most Internet mailing lists, there are generally two addresses:
+one for the mailing list itself, and one for <quote>(administrivia)
+(subscription requests, etc.).  The administrative address is usually
+the mailing list name with <quote>(-request) added.
+For example, the mailing list for discussing Message Exchange is
+<emphasis>(MX-List@WKUVX1.WKU.EDU\bold).
+
+Subscription requests, removals,
+or comments about the list are sent to
+<emphasis>(MX-List-request@WKUVX1.WKU.EDU\bold).
+
+<p>Many Internet mailing lists are managed manually, so mail sent
+to -request addresses can usually be free-form.  However, some systems,
+MX included, have mailing list handlers which process some
+types of requests automatically, without human intervention.  The syntax
+of the commands you send to these automated handlers will vary from
+system to system.  For example, the MX mailing list processor accepts the
+following commands:
+<table>
+<table_setup>(2\20)
+<table_row>(SUBSCRIBE\for getting added to the list)
+<table_row>(SIGNOFF\for getting removed from the list)
+<table_row>(REVIEW\for getting a list of the subscribers)
+<table_row>(HELP\for getting a help message)
+<table_row>(QUERY\for getting the status of your subscriber entry)
+<table_row>(SET [NO]CONCEAL\for concealing or revealing your e-mail address in REVIEW lists)
+<table_row>(SET [NO]DIGEST\for switching between reception of regular list traffic and periodic digests (only applies
+to lists that have corresponding digests))
+<table_row>(SET [NO]MAIL\for enabling/disabling receipt of list messages while remaining subscribed to the list)
+<table_row>(SET [NO]REPRO\for enabling/disabling receipt of your own list postings)
+<TABLE_ROW>(QUIT\for preventing the parsing of a mail signature)
+
+<endtable>
+<p>Commands must generally be placed in the body of a mail message, rather
+than on the Subject line.
+
+
+<chapter>(Mail-Based File Servers\USER_GUIDE_20)
+<p>The term <newterm>(file server), for the purposes of this document,
+refers to a network entity that maintains a library of files and delivers them
+to users on demand.  While most files are served via FTP or HTTP, some
+older systems may still use e-mail for file delivery.
+<p>There are no standards for mail-based file servers.  There
+are several file server implementations in existence: LISTSERV, VMSSERV,
+MAILSERV, and several others.  MX also includes a file server module,
+generally referred to as FileServ.  
+<head1>(Get HELP\USER_GUIDE_21)
+<p>If you want to obtain files from a file server, and you are unsure
+of the commands you need to use, you should begin by requesting help
+information from the server.  The best way to do this is to send
+an E-mail message to the file server's address with the word HELP
+on the subject line <emphasis>(and) on the first and only line of
+the body of the message.  Most servers will mail you back a message
+listing the commands they accept and the format the commands should
+take, along with other helpful information.
+
+<p>If you cannot get assistance from the file server itself, you may
+be able to get some from the postmaster on the file server's system.
+
+<head1>(MX FileServ Commands\USER_GUIDE_22)
+<p>The MX file server, usually called FileServ, accepts commands, one
+command per line, in the body of an E-mail message.  The commands it
+accepts are:
+<table>
+<table_setup>(2\20)
+<table_row>(ADDRESS valid-address\provides a valid e-mail address)
+
+<table_row>(LIST [pattern]\lists all packages matching <quote>(pattern))
+<table_row>(DIRECTORY [pattern]\same as LIST)
+<table_row>(SENDME package[.part]\sends an entire package or the specified part)
+<table_row>(HELP\sends a help message)
+<TABLE_ROW>(QUIT\causes any lines following this command to be ignored)
+
+<endtable>
+
+<p>FileServ commands may be abbreviated to their shortest unique string.
+
+<P>
+ADDRESS provides the user with the ability to specify a valid
+RFC822-compliant e-mail address to which any FileServ output is to be
+sent.  Normally, any files requested from FileServ are sent to the
+address in the <QUOTE>(Reply-To:) or <QUOTE>(From:) lines in the message
+headers.  However, addresses are sometimes corrupted by gateways
+through which the message passes, resulting in an invalid return
+address. File server users can use the ADDRESS command to provide a
+valid alternate to the <QUOTE>(From:) address.
+
+<NOTE>
+When an ADDRESS command is processed, the file server transaction log
+includes the original <QUOTE>(From:) address.   Any user receiving
+unasked-for files can use it to determine from whom the request came.
+<ENDNOTE>
+
+
+<head2>(Packages\USER_GUIDE_23)
+<p>A <newterm>(package) is a collection of related files that are grouped
+together for distribution.  FileServ, along with other file servers,
+distributes files in packages.  These packages are usually in a special
+format for distribution over the network via E-mail; once you collect
+all of the parts in a package, the parts are combined together and
+fed through an unpacking program (sometimes contained within the package
+itself) to recreate the original collection of files.
+
+<head2>(Binary Files\USER_GUIDE_24)
+<p>Because E-mail systems generally do not properly handle binary data,
+binary files (such as executable images or compressed files) are generally
+<newterm>(encoded) before being packaged and distributed by a file server.
+Once unloaded from the package, the encoded file must then be decoded to
+recreate the binary file.  The type of encoding will vary from system
+to system.
+<p>In addition, large files may be <newterm>(compressed) before being encoded
+and  packaged, to cut down on the network bandwidth required when transmitting
+the package.  Restoring the original files then requires an additional
+decompression program.
+
+<appendix>(Message Header Format\USER_GUIDE_25)
+<p>Most network mail systems require or include more information about
+messages than VMS MAIL can handle.  MX, for example, follows the Internet
+message format standard, usually called <emphasis>(RFC 822) after the
+number of the document that describes the format.
+<p>When you receive a message via MX, the FROM address identified in
+the VMS MAIL headers will begin with the MX% prefix, which allows you
+to REPLY to the message.  In addition to the VMS MAIL headers, you will
+also see the RFC 822 header information, which is usually displayed as the
+first part of the message text (this is under the control of the
+system manager).  For example:
+<interactive>
+    #1          29-FEB-1992 10:36:22.11                       NEWMAIL
+From:   MX%"naive@myhost.mycompany.com"
+To:     MANAGER
+CC:
+Subj:   Question
+
+Return-Path: <naive@myhost.mycompany.com>
+Received: from myhost.mycompany.com by mgrsta.mycompany.com (MX V3.0);
+          Thu, 29 Feb 1992 10:35:10 EST
+Received: by myhost.mycompany.com (MX V3.0) id 31437; Thu, 29 Feb 1992
+          10:35:05 EST
+Resent-Date: Thu, 29 Feb 1992 10:35:01 EST
+Resent-From: system@myhost.mycompany.com
+Resent-To: manager@mgrsta.mycompany.com
+Sender: <naive@myhost.mycompany.com>
+Date: Thu, 29 Feb 1992 10:34:55 EST
+From: Naive User <naive@myhost.mycompany.com>
+Reply-To: naive@myhost.mycompany.com
+Message-ID: <00933068.08a17f00.31437@myhost.mycompany.com>
+To: system@myhost.mycompany.com
+Subject: Question
+
+How do I send E-mail?
+<endinteractive>
+<p>The first five lines of this message are the VMS MAIL headers.  The
+message text starts with the RFC 822 headers, followed by the message itself.
+The following sections explain the meaning of the RFC 822 headers.
+<p><emphasis>(Return-Path\bold).  The return address as appears on the
+envelope of the message.  This usually identifies the route the message took
+in getting to you, and can be used to identify forged messages in some cases.
+The return path is used as the VMS MAIL From address if no other address is
+available.
+<p><emphasis>(Received\bold).  There may be several of these lines for
+a message.  They usually indicate how and when the message was transferred
+from one system to another.  They are provided for informational purposes
+only.
+<p><emphasis>(Resent-\bold) lines.  If the message is forwarded (usually
+by an automatic mechanism such as SET FORWARD in VMS MAIL), some messaging
+systems (MX included) will include information about when it was forwarded
+and who it was forwarded to.  One set of Resent lines usually appears for
+each forwarding hop.
+<p><emphasis>(Sender\bold).  This line indicates the sender of the message,
+which could be different from the address in the From line.
+<p><emphasis>(Date\bold).  This line indicates the date and time
+the message was entered into the mail system by the sender.  It will
+usually include the local time for the sender, which may be in a different
+time zone.
+<p><emphasis>(From\bold).  This line indicates who the message is from.
+If the message was sent by someone on behalf of another person or group,
+the message will also include a <emphasis>(Sender) line to identify the
+person or agent who actually sent the message.
+<p><emphasis>(Reply-To\bold).  If the sender wants to receive replies
+at an address different from the From address, a Reply-To line will be
+included to redirect the replies.
+<p><emphasis>(Message-ID\bold).  The message identifier uniquely identifies
+a message.  Message-ID's are used by some mail systems for tracking messages
+and replies.
+<p><emphasis>(To\bold).  Identifies the target user or users for the
+message.  Also included can be <emphasis>(CC\bold) and <emphasis>(BCC\bold)
+lines that identify users to whom a carbon copy and <quote>(blind) carbon
+copy of the message is sent.
+<p><emphasis>(Subject\bold).  A brief description of the subject of the
+message.
+<p>Other headers are also possible, some of which are
+extensions to the RFC 822 message standard.  Also, the order in which
+the headers appear may vary from system to system.
+
+<head1>(VMS MAIL Headers\USER_GUIDE_26)
+<p>MX automatically translates some of the RFC 822 header information
+into VMS MAIL headers.
+<head2>(From Header\USER_GUIDE_27)
+<p>There are several RFC 822 headers used for identifying the originator
+of a message.  VMS MAIL, however, allows only one.  To allow the REPLY
+command to work properly, therefore, MX fills in the VMS MAIL From line
+with the address that should be used in generating a reply.  This reply
+address is selected from one of the following header lines, listed here
+in order of preference:
+<list>(numbered)
+<le>Reply-To
+<le>From
+<le>Sender
+<le>Return-Path
+<endlist>
+<p>MX will only use the address from one of these headers if it is
+syntactically valid.   Since most mail systems provide a valid address
+in the Reply-To and/or From headers, this should not be a problem.
+
+<head2>(To and CC Headers\USER_GUIDE_28)
+<p>The VMS MAIL To and CC headers will list only the users on the
+local system receiving the message.  To see the actual list of
+recipients, examine the To, CC, and BCC lines in the RFC 822 headers.
+
+<head2>(Subject Header\USER_GUIDE_29)
+<p>The VMS MAIL Subject header should be identical to the RFC 822
+Subject header, if one exists.
+<endappendix>
