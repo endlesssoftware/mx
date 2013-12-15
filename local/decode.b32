@@ -1,0 +1,656 @@
+%TITLE 'DECODE'
+MODULE DECODE (IDENT='V2.3', ADDRESSING_MODE(NONEXTERNAL=LONG_RELATIVE, EXTERNAL=LONG_RELATIVE)) =
+BEGIN
+!++
+! FACILITY: 	    MX Local delivery agent
+!
+! ABSTRACT: 	    Decodes incoming binaries for local delivery.
+!
+! MODULE DESCRIPTION:
+!
+!   This module contains the routines that decode encoded messages
+!   (BASE64, etc.) destined for local deliveries.
+!
+! AUTHOR:   	    Hunter Goatley
+!
+! Copyright (c) 2008, Matthew Madison and Hunter Goatley.
+! 
+! All rights reserved.
+! 
+! Redistribution and use in source and binary forms, with or without
+! modification, are permitted provided that the following conditions
+! are met:
+! 
+!     * Redistributions of source code must retain the above
+!       copyright notice, this list of conditions and the following
+!       disclaimer.
+!     * Redistributions in binary form must reproduce the above
+!       copyright notice, this list of conditions and the following
+!       disclaimer in the documentation and/or other materials provided
+!       with the distribution.
+!     * Neither the name of the copyright owner nor the names of any
+!       other contributors may be used to endorse or promote products
+!       derived from this software without specific prior written
+!       permission.
+! 
+! THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
+! "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
+! LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
+! A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
+! OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
+! SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
+! LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
+! DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
+! THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
+! (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
+! OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+!
+! CREATION DATE:    10-APR-1993
+!
+! MODIFICATION HISTORY:
+!
+!   	V2.3	    	Madison	    	    	26-APR-1997
+!   	    	Allow decode_qp_file to be called by a user program.
+!
+!	V2.2		Hunter Goatley		14-JAN-1994 06:43
+!		Fix incorrect length of valid char string in decode_qp_file.
+!
+!	V2.1		Hunter Goatley		 7-JAN-1994 15:10
+!		Fix stupid bug in clean_up_fdl_string that was leaving the
+!		string too long.
+!
+!	V2.0		Hunter Goatley		17-DEC-1993 10:33
+!		Added decode_qp_file to decode quoted-printable MIME
+!		messages.
+!
+!	V1.0		Hunter Goatley		10-APR-1993 19:05
+!		Initial version.
+!--
+    LIBRARY 'SYS$LIBRARY:STARLET';
+    LIBRARY 'MX_SRC_COMMON:MX';
+    LIBRARY 'MX_SRC_COMMON:MX_LCLDEFS';
+
+    FORWARD ROUTINE
+	decode_base64_file,
+	clean_up_fdl_string,
+	decode_qp_file;
+
+    EXTERNAL ROUTINE
+	G_HAT(FDL$CREATE, STR$COPY_DX, STR$FREE1_DX, STR$COPY_R,
+	    LIB$GET_VM, LIB$FREE_VM, LIB$SYS_FAO, LIB$GETJPI, LIB$DELETE_FILE);
+
+    TRACE_DECLARATIONS (EXTERNAL);
+
+
+%SBTTL 'DECODE_BASE64_FILE'
+GLOBAL ROUTINE decode_base64_file (fdlstr_a, rab_a, file_a, fdl_sts_a) =
+BEGIN
+!+
+!
+!  Routine:	DECODE_BASE64_FILE
+!
+!  Functional description:
+!
+!	This routine decodes a file encoded using BASE64.
+!
+!  Formal parameters:
+!
+!	fdlstr_a	- Address of descriptor for the FDL string to pass
+!			  to FDL$GENERATE
+!	rab_a		- Address of a connected RAB for the input file
+!	file_a		- Address of descriptor to receive the created filename
+!
+!-
+    BIND
+	fdlstr	= .fdlstr_a	: $BBLOCK,
+	rab	= .rab_a	: $BBLOCK,
+	file	= .file_a	: $BBLOCK,
+	fdl_sts	= .fdl_sts_a;
+
+    LITERAL
+	block_size = 512;
+
+    LOCAL
+	outfile		: $BBLOCK[NAM$C_MAXRSS],	!Buffer for filename
+	out_nam		: $NAM (RSA = outfile,
+				RSS = %ALLOCATION(outfile)),
+	out_fab 	: $FAB (FAC = (PUT,BIO),
+				NAM = out_nam),
+	out_rab		: $RAB (FAB = out_fab,
+				RAC = SEQ),
+    	time		: VECTOR [2,LONG],
+	tmpfile		: $BBLOCK[DSC$K_S_BLN],
+	sptr		: REF VECTOR[,BYTE],
+	dptr		: REF $BBLOCK,
+	big_buffer	: REF $BBLOCK,
+	pid, len, cnt, status, fdl_stv,
+	c		: $BBLOCK[1],
+	z		: $BBLOCK[1],
+	x;
+
+    INIT_DYNDESC (tmpfile);
+
+    IF (.file [DSC$W_LENGTH] EQLU 0)
+    THEN
+	BEGIN
+	!
+	!  Construct a name for the temporary file.
+	!
+	$GETTIM (TIMADR=time);
+	LIB$GETJPI (%REF (JPI$_PID), 0, 0, pid);
+	LIB$SYS_FAO (%ASCID'MX_LOCAL_DIR:LCL_!XL_!XL_!XL.TMP', 0, tmpfile,
+		.time [1], .time [0], .pid);
+	END
+    ELSE
+	STR$COPY_DX (tmpfile, file);
+
+    TRACE ('  DELIVER: Attempting decode on base64 file.');
+
+    clean_up_fdl_string (fdlstr, fdlstr);
+
+    status = FDL$CREATE (fdlstr, tmpfile, 0, 0, 0, %REF(FDL$M_FDL_STRING),
+			0, 0, fdl_sts, fdl_stv);
+
+    TRACE ('  DELIVER: FDL$CREATE status = !XL, STS = !XL, STV = !XL.',
+		.status, .fdl_sts, .fdl_stv);
+
+    IF NOT(.status)
+    THEN
+	BEGIN
+	LOCAL	errmsg_buff	: $BBLOCK[255],
+		errmsg		: $BBLOCK[DSC$K_S_BLN];
+	INIT_SDESC (errmsg, 256, errmsg_buff);
+	$GETMSG (MSGID = .status, MSGLEN = errmsg, BUFADR = errmsg);
+	TRACE ('  DELIVER: FDL$CREATE status: !AS', errmsg);
+	errmsg [DSC$W_LENGTH] = 255;
+	$GETMSG (MSGID = .fdl_sts, MSGLEN = errmsg, BUFADR = errmsg);
+	TRACE ('  DELIVER: FDL$CREATE RMS status: !AS', errmsg);
+	END;
+
+    IF (.status)
+    THEN
+	BEGIN
+	out_fab [FAB$B_FNS] = .tmpfile[DSC$W_LENGTH];
+	out_fab [FAB$L_FNA] = .tmpfile[DSC$A_POINTER];
+
+	status = $OPEN (FAB = out_fab);		!Open the file
+	IF (.status)
+	THEN
+	    BEGIN
+	    !
+	    !  Use the resultant file name from here on.
+	    !
+	    STR$COPY_R (tmpfile, %REF (.out_nam [NAM$B_RSL]), outfile);
+	    status = $CONNECT (RAB = out_rab);	!Connect the RAB
+	    END;
+	END;
+
+    IF NOT(.status)
+    THEN
+	BEGIN
+	TRACE ('  DELIVER: Error opening base64 temp file: !XL.', .STATUS);
+	IF (.out_fab[FAB$W_IFI] NEQU 0) THEN $CLOSE (FAB=out_fab);
+	LIB$DELETE_FILE (tmpfile);		!Delete the file
+	FREE_STRINGS (tmpfile);			!Deallocate string memory
+	RETURN (.status);
+	END;
+
+    LIB$GET_VM (%REF(block_size), big_buffer);	!Allocate a block of memory
+    CH$FILL (0, block_size, .big_buffer);	!Clear out buffer
+
+    out_rab [RAB$W_RSZ] = block_size;		!Make the RAB use the buffer
+    out_rab [RAB$L_RBF] = .big_buffer;		!....
+
+    dptr = .big_buffer;				!Set destination pointer
+    cnt = 0;					!Current byte count
+    status = SS$_NORMAL;			!Assume success status
+
+    WHILE ($GET (RAB = rab)) DO			!Read a record in
+	BEGIN
+	len = .rab [RAB$W_RSZ];			!Get the length
+	sptr = .rab [RAB$L_RBF];		!And a pointer to the data
+
+	DECR i FROM .len TO 1 DO		!For each character read....
+	    BEGIN
+	    c = CH$RCHAR_A (sptr);		!Read first character
+	    x = 0;
+	    SELECTONE .c OF			!Process it
+		SET
+		[%C'A' TO %C'Z'] :	c = .c - %C'A';
+		[%C'a' TO %C'z'] :	c = .c - (%C'a' - 26);
+		[%C'0' TO %C'9'] :	c = .c - (%C'0' - 52);
+		[%C'+']		:	c = 62;
+		[%C'/']		:	c = 63;
+		[%C'=']		:	!Padding byte
+			BEGIN
+			cnt = .cnt + 1;			!Bump quantum
+			x = -1;				!Ignore character
+			SELECTONE .cnt OF
+			    SET
+			    [3] :	IF (CH$RCHAR(.sptr) NEQU %C'=')
+					THEN
+					    status = SS$_ABORT;
+			    [4] :	cnt = 0;	!Reset quantum
+			    [OTHERWISE] :		!Nothing else possible
+					status = SS$_ABORT;	!Return error
+			    TES;
+			END;
+		[OTHERWISE]	:	x = -1;		!Ignore junk characters
+		TES;
+
+	    IF (.x GEQ 0)		!Valid base64 character
+	    THEN
+		BEGIN
+		SELECTONE (cnt = .cnt + 1) OF
+		    SET
+		    [1] : z = (.c ^ 2);			!Byte 1: high 6 bits
+		    [2] :
+			BEGIN
+			CH$WCHAR_A ((.z OR (.c^-4)), dptr); !Byte 1: low 2 bits
+			z = (.c ^ 4);			!Byte 2: high 4 bits
+			END;
+		    [3] :
+			BEGIN
+			CH$WCHAR_A ((.z OR (.c^-2)), dptr); !Byte 2: low 4 bits
+			z = (.c ^ 6);			!Byte 3: high 2 bits
+			END;
+		    [4] :
+			BEGIN
+			CH$WCHAR_A (.z OR .c, dptr);	!Byte 3: low 6 bits
+			cnt = 0;
+			END;
+		    TES;
+		END;
+	    !
+	    !  See if output block is full
+	    !
+	    IF .status AND (CH$DIFF(.dptr, .big_buffer) EQLU block_size)
+	    THEN
+		BEGIN
+		status = $WRITE (RAB = out_rab);
+		CH$FILL (0, block_size, .big_buffer);	!Clear out buffer
+		dptr = .big_buffer;		!Reset destination pointer
+		END;
+
+	    IF NOT(.status)
+	    THEN
+		BEGIN
+		TRACE ('  DELIVER: BASE64 error (invalid char) !XL.', .STATUS);
+		FREE_STRINGS (tmpfile);
+		LIB$FREE_VM (%REF(block_size), big_buffer);
+		RETURN (.status);		!Need to deallocate memory
+		END;
+
+	END;	!DECR i FROM .len TO 0
+
+    END;	!WHILE ($GET....
+
+    IF (.dptr NEQA .big_buffer)
+    THEN
+	BEGIN
+	IF (.out_fab [FAB$B_RFM] NEQU FAB$C_FIX)
+	THEN
+	    out_rab [RAB$W_RSZ] = CH$DIFF(.dptr, .big_buffer);
+	!Set RSZ?  Or just let it be 512?
+	status = $WRITE (RAB = out_rab);
+	END;
+
+    $CLOSE (FAB = out_fab);
+    IF NOT(.status)				!If an error occurred,
+    THEN					!... delete the temporary file
+	LIB$DELETE_FILE (tmpfile);
+
+    STR$COPY_DX (file, tmpfile);		!Return filename to caller
+
+    FREE_STRINGS (tmpfile);
+    LIB$FREE_VM (%REF(block_size), big_buffer);	!Deallocate memory
+
+    .status				!Return condition
+
+END;
+
+
+%SBTTL 'CLEAN_UP_FDL_STRING'
+ROUTINE clean_up_fdl_string (instr_a, outstr_a) =
+BEGIN
+    BIND
+	instr	= .instr_a	: $BBLOCK,
+	outstr	= .outstr_a	: $BBLOCK;
+
+    LOCAL ptr, len, sptr : REF $BBLOCK, dptr : REF $BBLOCK, c;
+
+    len = .instr[DSC$W_LENGTH];			!Get FDL string length
+    LIB$GET_VM (len, ptr);			!Allocate some memory
+
+    sptr = .instr[DSC$A_POINTER];
+    dptr = .ptr;
+    DECR i FROM .len TO 1 DO
+	BEGIN
+	c = CH$RCHAR_A (sptr);			!Read a character
+	IF (.c EQLU %C'\')			!If character is a "\", then
+	THEN					!... it's quoting something.
+	    BEGIN
+	    c = CH$RCHAR_A (sptr);		!... Just skip it and go on
+	    i = .i - 1;
+	    END;
+	CH$WCHAR_A (.c, dptr);			!Write the character out
+	END;
+
+    STR$COPY_R (outstr, %REF(CH$DIFF(.dptr, .ptr)), .ptr);
+
+    LIB$FREE_VM (len, ptr);
+
+    SS$_NORMAL
+
+END;
+
+
+%SBTTL 'DECODE_QP_FILE'
+GLOBAL ROUTINE decode_qp_file (rab_a, outfile_a) =
+BEGIN
+!+
+!
+!  Routine:	DECODE_QP_FILE
+!
+!  Functional description:
+!
+!	This routine decodes a file encoded using QUOTED-PRINTABLE.
+!
+!  Formal parameters:
+!
+!	rab_a		- Address of a connected RAB for the input file
+!   	outfile_a   	- Address of a descriptor with output file name (modify)
+!
+!  Side effects:
+!
+!	If the message is successfully decoded, the file described by
+!	the RAB passed in is closed and the the old RAB and FAB modified
+!	to point to the newly-created decoded file.
+!
+!-
+    BIND
+	rab	= .rab_a	: $BBLOCK;
+
+    BUILTIN
+    	ACTUALCOUNT;
+
+    LITERAL
+	block_size = 512;
+
+    LOCAL
+	outfile		: $BBLOCK[NAM$C_MAXRSS],	!Buffer for filename
+	out_nam		: $NAM (RSA = outfile,
+				RSS = %ALLOCATION(outfile)),
+	out_fab 	: $FAB (FAC = (PUT,GET),
+				FOP = (SQO,MXV),
+				RFM = VAR,
+				MRS = 512,
+				RAT = CR,
+				ORG = SEQ,
+				NAM = out_nam),
+	out_rab		: $RAB (FAB = out_fab,
+				RAC = SEQ),
+    	time		: VECTOR [2,LONG],
+	tmpfile		: $BBLOCK[DSC$K_S_BLN],
+	sptr		: REF VECTOR[,BYTE],
+	dptr		: REF $BBLOCK,
+	big_buffer	: REF $BBLOCK,
+    	user_called,
+	pid, len, status, soft_break, c, z, x;
+
+    user_called = 0;
+    IF ACTUALCOUNT () GTR 1 THEN
+    	IF .outfile_a NEQA 0 THEN user_called = 1;
+
+    INIT_DYNDESC (tmpfile);
+    !
+    !  Construct a name for the temporary file.
+    !
+    IF .user_called THEN
+    	STR$COPY_DX (tmpfile, .outfile_a)
+    ELSE
+    BEGIN
+    	$GETTIM (TIMADR=time);
+    	LIB$GETJPI (%REF (JPI$_PID), 0, 0, pid);
+    	LIB$SYS_FAO (%ASCID'MX_LOCAL_DIR:LCL_!XL_!XL_!XL.TMP', 0, tmpfile,
+    	    .time [1], .time [0], .pid);
+
+    	TRACE ('  DELIVER: Attempting decode on quoted-printable file.');
+    END;
+
+    out_fab [FAB$B_FNS] = .tmpfile [DSC$W_LENGTH];
+    out_fab [FAB$L_FNA] = .tmpfile [DSC$A_POINTER];
+
+    status = $CREATE (FAB = out_fab);		!Create the output file
+
+    IF NOT .user_called
+    THEN
+    	TRACE ('  DELIVER: $CREATE status = !XL, STS = !XL, STV = !XL.',
+			.status, .out_rab[RAB$L_STS], .out_rab[RAB$L_STV]);
+
+    IF (.status)
+    THEN
+	BEGIN
+	!
+	!  Use the resultant file name from here on.
+	!
+	STR$COPY_R (tmpfile, %REF (.out_nam [NAM$B_RSL]), outfile);
+    	IF .user_called THEN STR$COPY_DX (.outfile_a, tmpfile);
+	status = $CONNECT (RAB = out_rab);	!Connect the RAB
+	END;
+
+    IF NOT(.status)
+    THEN
+	BEGIN
+	IF NOT .user_called THEN TRACE ('  DELIVER: Error opening qp temp file: !XL.', .STATUS);
+    	out_fab [FAB$V_DLT] = 1;
+	IF (.out_fab[FAB$W_IFI] NEQU 0) THEN $CLOSE (FAB=out_fab);
+	FREE_STRINGS (tmpfile);			!Deallocate string memory
+	RETURN (.status);
+	END;
+
+    LIB$GET_VM (%REF(block_size), big_buffer);	!Allocate a block of memory
+    CH$FILL (0, block_size, .big_buffer);	!Clear out buffer
+
+    out_rab [RAB$W_RSZ] = block_size;		!Make the RAB use the buffer
+    out_rab [RAB$L_RBF] = .big_buffer;		!....
+
+    dptr = .big_buffer;				!Set destination pointer
+    status = SS$_NORMAL;			!Assume success status
+
+    WHILE ($GET (RAB = rab)) DO			!Read a record in
+	BEGIN
+
+	len = .rab [RAB$W_RSZ];			!Get the length
+	sptr = .rab [RAB$L_RBF];
+
+	IF (.len GTRU 0)			!If any characters were read
+	THEN
+	    BEGIN
+	    !
+	    !  According to RFC1341, any trailing blanks in the file
+	    !  were incorrectly added by a gateway, so remove any
+	    !  trailing blanks.
+	    !
+	    sptr = CH$PLUS(.sptr, .len - 1);	!Point to last character
+	    DECR i FROM .len TO 1 DO		!Work backwards until no
+		BEGIN				!... more chars or a non-blank
+		IF (CH$RCHAR(.sptr) NEQU %C' ')	!... is found
+		THEN EXITLOOP;
+		sptr = .sptr - 1;
+		END;
+
+	    !
+	    !  Calculate new length and reset pointer.
+	    !
+	    len = CH$DIFF(.sptr, .rab [RAB$L_RBF]) + 1;
+	    sptr = .rab [RAB$L_RBF];
+	    END;
+
+	soft_break = 0;
+	DECR i FROM .len TO 1 DO		!For each character read....
+	    BEGIN
+	    c = CH$RCHAR_A (sptr);		!Read first character
+	    x = 0;
+	    IF (.c EQLU %C'=')
+	    THEN
+		SELECTONE .i OF
+		    SET
+		    !
+		    !  If "=" is last character on line, then we have
+		    !  a "soft break" (or continued line).
+		    !
+		    [1]	:
+			soft_break = 1;
+		    !
+		    !  If there is only one character left after the
+		    !  "=", make sure it's another "=", otherwise we
+		    !  have an invalidly encoded message.  If it is,
+		    !  then go ahead and finish up the processing now.
+		    !
+		    [2] :
+			BEGIN
+			IF CH$RCHAR (.sptr) NEQU %C'='
+			THEN
+			    status = SS$_ABORT		!Not enough digits!
+			ELSE
+			    BEGIN			!Last one is "=", so
+			    c = %C'=';			!... fake the end of
+			    i = .i - 1;			!... loop
+			    END;
+			END;
+		    !
+		    !  Found a "=xx" representation of a character, where
+		    !  "xx" is a two-digit hexadecimal number.  Convert
+		    !  the sequence to the character specified by "xx".
+		    !
+		    [OTHERWISE] :
+			BEGIN
+			c = 0;				!Start with no character
+			INCR j FROM 1 TO 2 DO
+			    BEGIN
+			    z = CH$RCHAR_A (sptr);	!Read first hex digit
+			    i = .i - 1;
+			    IF (.z EQLU %C'=')
+			    THEN
+				BEGIN
+				c = %C'=';
+				EXITLOOP;
+				END;
+			    IF (.z GEQU %C'a')		!Lowercase?
+			    THEN
+				z = .z - %C'a' + %C'A';
+			    IF NOT(CH$FAIL(CH$FIND_CH (16,
+					UPLIT('0123456789ABCDEF'), .z)))
+			    THEN
+				BEGIN
+				IF (.z GEQU %C'A')
+				THEN
+				    z = .z - 55		!Make it 10, 11, etc.
+				ELSE
+				    z = .z - %C'0';	!Make it 0, 1, etc.
+				IF (.j EQLU 1)		!First iteration is
+				THEN			!... "sixteens" digit
+				    c = .z * 16		!...
+				ELSE			!Second is "ones" digit
+				    c = .c + .z;	!...
+				END
+			    ELSE
+				status = SS$_ABORT;	!Invalid hex char
+			    END;
+			END;
+		    TES;
+
+	    IF (.status) AND NOT(.soft_break)
+	    THEN
+		BEGIN
+		CH$WCHAR_A (.c, dptr);
+		!
+		!  See if output block is full
+		!
+		IF .status AND (CH$DIFF(.dptr, .big_buffer) EQLU block_size)
+		THEN
+		    BEGIN
+		    out_rab [RAB$W_RSZ] = block_size;
+		    status = $PUT (RAB = out_rab);
+		    CH$FILL (0, block_size, .big_buffer);	!Clear buffer
+		    dptr = .big_buffer;		!Reset destination pointer
+		    END;
+		END;
+
+	    END;	!DECR i FROM .len TO 1
+
+	IF (.status AND NOT(.soft_break))	!Check for big_buffer overflow
+	THEN
+	    BEGIN
+	    out_rab [RAB$W_RSZ] = MIN (CH$DIFF(.dptr, .big_buffer), block_size);
+	    status = $PUT (RAB = out_rab);
+	    CH$FILL (0, block_size, .big_buffer);	!Clear out buffer
+	    dptr = .big_buffer;		!Reset destination pointer
+	    END
+	ELSE
+	    soft_break = 0;
+
+	IF NOT(.status)
+	THEN
+	    BEGIN
+	    IF NOT .user_called THEN TRACE ('  DELIVER: QP error (invalid char) !XL.', .STATUS);
+	    EXITLOOP;
+	    END;
+
+    END;	!WHILE ($GET....
+
+  IF .user_called THEN
+    BEGIN
+    LIB$FREE_VM (%REF (block_size), big_buffer);
+    IF NOT .status THEN out_fab [FAB$V_DLT] = 1;
+    $DISCONNECT (RAB=out_rab);
+    $CLOSE (FAB=out_fab);
+    END
+  ELSE
+    IF (.status)
+    THEN
+	BEGIN
+	LOCAL	old_fab : REF $FAB_DECL;
+	!
+	!  Since the message was successfully decoded, it should be
+	!  included as the message text instead of the .MSG_TEXT file
+	!  (the RAB that was passed in).  To avoid ugly code in the
+	!  caller and the overhead of closing and re-opening the new
+	!  file, just close the .MSG_TEXT file and copy the decoded
+	!  file FAB and RAB to the caller.
+	!
+	LIB$FREE_VM (rab [RAB$W_USZ], rab [RAB$L_UBF]);	!Deallocate old buffer
+	out_rab [RAB$L_UBF] = .big_buffer;		!Make it use ours
+	out_rab [RAB$W_USZ] = block_size;
+
+	$DISCONNECT (RAB = rab);
+
+	old_fab = .rab [RAB$L_FAB];
+	$CLOSE (FAB = .old_fab);
+
+	$REWIND (RAB = out_rab);		!Point to beginning of file!
+    	out_fab [FAB$V_DLT] = 1;    	    	!Set to delete-on-close
+	CH$MOVE (FAB$C_BLN, out_fab, .old_fab);	!Caller now has the new FAB
+	CH$MOVE (RAB$C_BLN, out_rab, rab);	!... and RAB, already open
+	rab [RAB$L_FAB] = .old_fab;
+
+	END
+    ELSE
+	BEGIN
+	LIB$FREE_VM (%REF(block_size), big_buffer);	!Deallocate memory
+	$REWIND (RAB = rab);
+    	out_fab [FAB$V_DLT] = 1;
+    	$DISCONNECT (RAB=out_rab);
+    	$CLOSE (FAB=out_fab);
+	END;
+
+
+    FREE_STRINGS (tmpfile);
+
+    .status				!Return condition
+
+END;
+
+END
+ELUDOM

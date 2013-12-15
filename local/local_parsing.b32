@@ -1,0 +1,196 @@
+%TITLE 'LOCAL_PARSING'
+MODULE LOCAL_PARSING (IDENT='V1.5', ADDRESSING_MODE (EXTERNAL=LONG_RELATIVE,NONEXTERNAL=LONG_RELATIVE)) =
+BEGIN
+!++
+! FACILITY: 	    MX_LOCAL
+!
+! ABSTRACT: 	    Parsing routines for the local delivery agent.
+!
+! MODULE DESCRIPTION:
+!
+!   This module contains routines that parse things.  All of these routines
+!   use LIB$TPARSE to do the major parsing work.  All of the routines also
+!   use extended TPARSE argument blocks for storing things to keep things
+!   modular.  When a token needs to be saved, an action routine is named
+!   in the transition and the user argument is a constant which indicates
+!   to the action routine which argument in the extended argument block
+!   should be modified.  Some of the argument blocks and numbering schemes
+!   are set up so as to allow direct offsetting from the argument pointer
+!   in the action routine (so be careful when modifying).
+!
+! AUTHOR:   	    M. Madison
+!		    Copyright © 1993,1994,1997,1998  MadGoat Software.
+!   	    	    All Rights Reserved.
+!
+! CREATION DATE:    03-OCT-1990
+!
+! MODIFICATION HISTORY:
+!
+!   03-OCT-1990 V1.0    Madison	    Initial coding.
+!   10-DEC-1990	V1.1	Madison	    Hold off on .->$ conversion.
+!   22-OCT-1991	V1.2	Madison	    Using RCPTDEF structure now.
+!   15-NOV-1991	V1.2-1	Madison	    New MEM RCPT rtns.
+!   10-MAR-1993 V1.3	Goatley     Converted to AXP.
+!   29-AUG-1997	V1.4	Madison	    RCPT change.
+!   11-JUL-1998	V1.5	Madison	    More RCPT changes for DSNs.
+!--
+
+    LIBRARY 'SYS$LIBRARY:STARLET';
+    LIBRARY 'SYS$LIBRARY:TPAMAC';
+    LIBRARY 'MX_SRC_COMMON:MX';
+
+    FORWARD ROUTINE
+    	RFC_TO_LOCAL,
+    	RTL_STORE;
+
+    EXTERNAL ROUTINE
+    	G_HAT (LIB$TPARSE, MEM_GETRCPT, MEM_GETTXT);
+
+    MACRO
+    	TPA_A_P1    	=   TPA$C_LENGTH0+00,0,32,0%,
+    	TPA_A_P2    	=   TPA$C_LENGTH0+04,0,32,0%,
+    	TPA_A_P3    	=   TPA$C_LENGTH0+08,0,32,0%,
+    	TPA_A_P4    	=   TPA$C_LENGTH0+12,0,32,0%,
+    	TPA_A_P5    	=   TPA$C_LENGTH0+16,0,32,0%,
+    	TPA_A_P6    	=   TPA$C_LENGTH0+20,0,32,0%,
+    	TPA_A_P7    	=   TPA$C_LENGTH0+24,0,32,0%;
+
+%SBTTL 'State table for RFC_TO_LOCAL'
+
+    $INIT_STATE (RTL_STATE, RTL_KEY);
+
+    $STATE (RTL1,
+    	(TPA$_EOS, TPA$_EXIT),
+    	('"', RTLQ),
+    	('\', RTLLITNXT),
+    	(TPA$_ANY, RTL1, RTL_STORE,,, 1));
+
+    $STATE (RTLLITNXT,
+    	(TPA$_ANY, RTL1, RTL_STORE,,, 2));
+
+    $STATE (RTLQ,
+    	('"', RTL1),
+    	('\', RTLQLITNXT),
+    	(TPA$_ANY, RTLQ, RTL_STORE,,, 2));
+    $STATE (RTLQLITNXT,
+    	(TPA$_ANY, RTLQ, RTL_STORE,,, 2));
+
+%SBTTL 'RFC_TO_LOCAL'
+GLOBAL ROUTINE RFC_TO_LOCAL (RFC_A, LCL_A_A) =
+BEGIN
+!++
+! FUNCTIONAL DESCRIPTION:
+!
+!   Converts an RFC822 "local-part" to a VMS MAIL-compatible address.
+!
+! RETURNS:  	cond_value, longword (unsigned), write only, by value
+!
+! PROTOTYPE:
+!
+!   RFC_TO_LOCAL  rfctxt, vmstxtptr
+!
+! IMPLICIT INPUTS:  None.
+!
+! IMPLICIT OUTPUTS: None.
+!
+! COMPLETION CODES:
+!
+!   SS$_NORMAL:	    	normal successful completion.
+!
+! SIDE EFFECTS:
+!
+!   None.
+!--
+    BUILTIN
+    	ACTUALCOUNT;
+
+    BIND
+    	RFC 	= .RFC_A    	    	: RCPTDEF,
+    	ra  	= .rfc [RCPT_A_ADDR]	: TXTDEF,
+    	LCL 	= .LCL_A_A  	    	: REF RCPTDEF;
+    BIND_RCPT_FIELDS (rfc);
+
+    LITERAL
+    	TPA_C_LENGTH	= TPA$C_LENGTH0 + 8,
+    	TPA_K_COUNT 	= TPA$K_COUNT0 + 2;
+
+    LOCAL
+    	BUF	: VOLATILE BLOCK [1024,BYTE],
+    	LEN	: VOLATILE,
+    	TPABLK	: BLOCK [TPA_C_LENGTH,BYTE],
+    	STATUS;
+
+    LEN = 0;
+    TPABLK [TPA$L_COUNT] = TPA_K_COUNT;
+    TPABLK [TPA$L_OPTIONS] = 0;
+    TPABLK [TPA$V_BLANKS] = 1;
+    TPABLK [TPA$L_STRINGCNT] = .ra [TXT_W_LEN];
+    TPABLK [TPA$L_STRINGPTR] = ra [TXT_T_TEXT];
+    TPABLK [TPA_A_P1] = LEN;
+    TPABLK [TPA_A_P2] = BUF;
+
+    STATUS = LIB$TPARSE (TPABLK, RTL_STATE, RTL_KEY);
+    IF NOT .STATUS THEN RETURN .STATUS;
+
+    MEM_GETRCPT (LCL);
+    CH$MOVE (RCPT_S_RCPTDEF, RFC, .LCL);
+    lcl [RCPT_A_ADDR] = MEM_GETTXT (.len, buf);
+    lcl [RCPT_A_ROUTE] = lcl [RCPT_A_REMOTEMTA] = 0;
+    IF .oraddr NEQA 0 THEN lcl [RCPT_A_ORADDR] = MEM_GETTXT (.oraddr [TXT_W_LEN], oraddr [TXT_T_TEXT]);
+    IF .ortype NEQA 0 THEN lcl [RCPT_A_ORTYPE] = MEM_GETTXT (.ortype [TXT_W_LEN], ortype [TXT_T_TEXT]);
+    INIT_QUEUE (lcl [RCPT_Q_DIAGTXTQUE]);
+
+    SS$_NORMAL
+
+END; ! RFC_TO_LOCAL;
+
+%SBTTL 'RTL_STORE'
+TPA_ROUTINE (RTL_STORE, (OPTIONS, STRLEN, STRPTR, TOKLEN, TOKPTR, CH,
+    	    NUMBER, PARAM, LEN_A, BUF_A))
+!++
+! FUNCTIONAL DESCRIPTION:
+!
+!   Stores values for RFC_TO_LOCAL.
+!
+! RETURNS:  	cond_value, longword (unsigned), write only, by value
+!
+! PROTOTYPE:
+!
+!   RTL_STORE blah
+!
+! IMPLICIT INPUTS:  None.
+!
+! IMPLICIT OUTPUTS: None.
+!
+! COMPLETION CODES:
+!
+!   SS$_NORMAL:	    	normal successful completion.
+!
+! SIDE EFFECTS:
+!
+!   None.
+!--
+    BIND
+	CHAR	    = CH	: BYTE,
+    	LEN	    = .LEN_A,
+    	BUF	    = .BUF_A   : VECTOR [,BYTE];
+
+    CASE .PARAM FROM 1 TO 2 OF
+    SET
+    	[1] :
+    	    	IF .len LSS 1024 THEN
+    	    	    buf [(len = .len+1)-1] = (IF .char GEQ 'a' AND
+    	    	    	    .char LEQ 'z' THEN .char-32 ELSE .char);
+
+    	[2] :
+    	    	IF .LEN LSS 1024 THEN
+    	    	    BUF [(LEN = .LEN+1)-1] = .CHAR;   ! literal
+
+    TES;
+
+    SS$_NORMAL
+
+END; ! RTL_STORE
+
+END
+ELUDOM

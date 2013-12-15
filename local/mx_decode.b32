@@ -1,0 +1,416 @@
+%TITLE	'MX_DECODE'
+MODULE MX_DECODE (MAIN = main, IDENT = '01-005') = 
+BEGIN
+!++
+!
+!  Facility:	MX_DECODE
+!
+!  Author:	Hunter Goatley
+!   	    	COPYRIGHT © 1997, 2002 MadGoat Software, Inc.
+!   	    	ALL RIGHTS RESERVED.
+!
+!  Date:	January 17, 1994
+!
+!  Abstract:
+!
+!	Decode BASE64 and QUOTED-PRINTABLE files.
+!
+!  Modified by:
+!
+!       01-005          Madison                 23-NOV-2002
+!               Define SYS$PRINT and SYS$BATCH to fix
+!               FDL bug.
+!
+!   	01-004	    	Madison	    	    	31-MAY-1997
+!   	    	Check "text" as main type for text, instead
+!   	    	of "text/plain".
+!
+!   	01-003	    	Madison	    	    	26-APR-1997
+!   	    	Eliminate references to internal
+!   	    	FBK structure used by FILEIO routines.
+!   	    	Allow for generic binary & text decoding.
+!
+!   	01-002	    	Madison	    	    	12-JAN-1997
+!   	    	Eliminate MDMLIB references.
+!
+!	01-001		Hunter Goatley		11-OCT-1996 08:10
+!		Added support for /NOHEADERS and /TEXT.
+!
+!	01-000		Hunter Goatley		17-JAN-1994 10:22
+!		Original version.
+!
+!--
+LIBRARY 'SYS$LIBRARY:STARLET';			!Pull stuff from STARLET
+LIBRARY 'MX_SRC_COMMON:MX';
+
+SWITCHES ADDRESSING_MODE (EXTERNAL = GENERAL, NONEXTERNAL = WORD_RELATIVE);
+
+FORWARD ROUTINE
+	main					!Main entry point
+	,check_headers
+	;
+
+    EXTERNAL ROUTINE
+	parse_hdrs,
+	decode_base64_file,
+    	decode_qp_file,
+	G_HAT (LIB$GET_FOREIGN, LIB$GET_INPUT, LIB$GET_VM, LIB$FREE_VM),
+	G_HAT (STR$APPEND, STR$CONCAT, STR$COPY_DX, STR$POSITION),
+	G_HAT (STR$CASE_BLIND_COMPARE, STR$UPCASE, STR$COPY_R),
+	G_HAT (CLI$DCL_PARSE, CLI$GET_VALUE, CLI$PRESENT);
+
+    EXTERNAL LITERAL
+	CLI$_NEGATED, CLI$_PRESENT, MXD__NOHEADERS, MXD__GENERR, MXD__BEGIN,
+    	MXD__END, MXD__UNRECHDRS, MXD$_FACILITY;
+
+    EXTERNAL
+	mx_decode_cld;
+
+    LITERAL
+	mime_c_version	= 1,
+	mime_c_applvms	= 2,
+	mime_c_base64	= 4,
+	mime_c_text	= 8,
+	mime_c_quotedp	= 16,
+	mime_c_uuencode	= 32,
+	mime_c_octet	= 64;
+
+    MACRO
+	mime_c_all_vms_rms = mime_c_version + mime_c_applvms + mime_c_base64%,
+	mime_c_all_qp	= mime_c_version + mime_c_quotedp + mime_c_text%,
+	mime_c_all_uue	= mime_c_version + mime_c_uuencode + mime_c_text%;
+
+    TRACE_DECLARATIONS (GLOBAL);
+
+    BIND
+	image_fdlstr	= %ASCID %STRING(
+		'SYSTEM; SOURCE VAX/VMS;;FILE;',
+		'ALLOCATION 0; BEST_TRY_CONTIGUOUS yes; BUCKET_SIZE 0; CONTIGUOUS',
+		' no; DEFERRED_WRITE no; EXTENSION 0; GLOBAL_BUFFER_COUNT 0;',
+		'MT_BLOCK_SIZE 512; MAX_RECORD_NUMBER 0; MAXIMIZE_VERSION no;',
+		'ORGANIZATION sequential; READ_CHECK no; SUPERSEDE no; WRITE_CHECK',
+		' no;;RECORD; BLOCK_SPAN yes; CARRIAGE_CONTROL none;',
+		'CONTROL_FIELD_SIZE 0; FORMAT fixed; SIZE 512;;AREA 0; ALLOCATION',
+		' 0; BEST_TRY_CONTIGUOUS yes; BUCKET_SIZE 0; CONTIGUOUS no;',
+		'EXACT_POSITIONING no; EXTENSION 0; POSITION none; VOLUME 0;'),
+	text_fdlstr	= %ASCID %STRING(
+		'SYSTEM; SOURCE VAX/VMS;;FILE;',
+		'ALLOCATION 0; BEST_TRY_CONTIGUOUS no; BUCKET_SIZE 0; CONTIGUOUS',
+		' no; DEFERRED_WRITE no; EXTENSION 0; GLOBAL_BUFFER_COUNT 0;',
+		'MT_BLOCK_SIZE 512; MAX_RECORD_NUMBER 0; MAXIMIZE_VERSION no;',
+		'ORGANIZATION sequential; READ_CHECK no; SUPERSEDE no; WRITE_CHECK',
+		' no;;RECORD; BLOCK_SPAN yes; CARRIAGE_CONTROL carriage_return;',
+		'CONTROL_FIELD_SIZE 0; FORMAT variable; SIZE 0;;AREA 0; ALLOCATION',
+		' 0; BEST_TRY_CONTIGUOUS no; BUCKET_SIZE 0; CONTIGUOUS no;',
+		'EXACT_POSITIONING no; EXTENSION 0; POSITION none; VOLUME 0;'),
+        sys_batch   = %ASCID'SYS$BATCH'     : BLOCK [,BYTE],
+        sys_print   = %ASCID'SYS$PRINT'     : BLOCK [,BYTE],
+        lnm_process = %ASCID'LNM$PROCESS'   : BLOCK [,BYTE],
+        nla0        = %ASCID'_NLA0:'        : BLOCK [,BYTE];
+
+
+
+ROUTINE main =
+BEGIN
+
+LOCAL
+	fdlstr	: $BBLOCK [DSC$K_S_BLN],
+	outfile : $BBLOCK [DSC$K_S_BLN],
+	infile	: $BBLOCK[DSC$K_S_BLN],
+	cmdline	: $BBLOCK[DSC$K_S_BLN],
+    	rdsc	: BLOCK [DSC$K_S_BLN,BYTE],
+    	fab 	: $FAB_DECL,
+    	rab 	: $RAB_DECL,
+    	nam 	: $NAM_DECL,
+    	fhc 	: $XABFHC_DECL,
+    	espec	: BLOCK [255,BYTE],
+    	rspec	: BLOCK [255,BYTE],
+        lnmlst  : $ITMLST_DECL (ITEMS=1),
+	noheaders,
+	mime_headers,
+	fdl_sts,
+	unit,
+	status;
+
+
+    $ITMLST_INIT (ITMLST=lnmlst,
+                  (ITMCOD=LNM$_STRING, BUFADR=.nla0 [DSC$A_POINTER],
+                  BUFSIZ=.nla0 [DSC$W_LENGTH]));
+    status = $CRELNM (TABNAM=lnm_process, LOGNAM=sys_batch, ITMLST=lnmlst);
+    IF NOT .status THEN
+        RETURN .status;
+    status = $CRELNM (TABNAM=lnm_process, LOGNAM=sys_print, ITMLST=lnmlst);
+    IF NOT .status THEN
+        RETURN .status;
+
+    INIT_DYNDESC (infile, outfile, cmdline, fdlstr);
+
+    status = LIB$GET_FOREIGN (cmdline);
+
+    STR$CONCAT (cmdline, %ASCID'DECODE ', cmdline);
+
+    status = CLI$DCL_PARSE (cmdline, mx_decode_cld, LIB$GET_INPUT,
+		LIB$GET_INPUT);
+
+    IF (.status) EQLU RMS$_EOF THEN RETURN (SS$_NORMAL);
+    IF NOT(.status) THEN RETURN (.status OR STS$M_INHIB_MSG);
+
+    CLI$GET_VALUE (%ASCID'INPUT', infile);
+    CLI$GET_VALUE (%ASCID'OUTPUT', outfile);
+
+    noheaders = CLI$PRESENT (%ASCID'HEADERS') EQLU CLI$_NEGATED;
+
+    $FAB_INIT (FAB=fab, FAC=GET, SHR=GET,
+    	FNA=.infile [DSC$A_POINTER], FNS=.infile [DSC$W_LENGTH],
+    	NAM=nam, XAB=fhc);
+    $NAM_INIT(NAM=nam,
+    	ESA=espec, ESS=%ALLOCATION(espec), RSA=rspec, RSS=%ALLOCATION(rspec));
+    $XABFHC_INIT(XAB=fhc);
+
+    status = $OPEN (FAB=fab);
+    IF NOT(.status)
+    THEN
+    	SIGNAL_STOP (.status, .fab [FAB$L_STV]);
+
+    $RAB_INIT (RAB=rab, FAB=fab, ROP=RAH);
+    rab [RAB$W_USZ] = (IF .fab [FAB$W_MRS] EQL 0 THEN
+    	    	    	IF .fhc [XAB$W_LRL] EQL 0 THEN 32767
+    	    	    	ELSE .fhc [XAB$W_LRL]
+    	    	       ELSE .fab [FAB$W_MRS]);
+    status = LIB$GET_VM (%REF (.rab [RAB$W_USZ]), rab [RAB$L_UBF]);
+    IF NOT .status THEN SIGNAL_STOP (.status);
+
+    status = $CONNECT (RAB=rab);
+    IF NOT .status THEN
+    BEGIN
+    	$CLOSE (FAB=fab);
+    	SIGNAL_STOP (.status, .rab [RAB$L_STV]);
+    END;
+
+    INIT_SDESC(rdsc, .nam [NAM$B_RSL], .nam [NAM$L_RSA]);
+
+    IF NOT(.noheaders)
+    THEN
+	BEGIN
+
+	status = check_headers (rab, fdlstr, mime_headers);
+
+	IF (.fdlstr[DSC$W_LENGTH] NEQU 0) AND	!If there's an FDL string and
+	   (.mime_headers EQLU mime_c_all_vms_rms) !... all 3 headers were found
+	THEN
+	    BEGIN
+
+	    SIGNAL (MXD__BEGIN, 2, %ASCID'VMS-RMS/base64', rdsc);
+	    !
+	    !  Decode the file.
+	    !
+	    status = decode_base64_file (fdlstr, rab, outfile, fdl_sts);
+
+	    END
+    	    ELSE IF (.mime_headers AND mime_c_base64) EQL mime_c_base64
+    	    THEN
+    	    	BEGIN
+    	    	    IF (.mime_headers AND mime_c_text) EQL mime_c_text
+    	    	    THEN
+    	    	    BEGIN
+    	    	    	STR$COPY_DX (fdlstr, text_fdlstr);
+    	    	    	SIGNAL (MXD__BEGIN, 2, %ASCID'text/base64', rdsc);
+    	    	    END
+    	    	    ELSE
+    	    	    BEGIN
+    	    	    	STR$COPY_DX (fdlstr, image_fdlstr);
+    	    	    	SIGNAL (MXD__BEGIN, 2, %ASCID'binary/base64', rdsc);
+    	    	    END;
+    	    	    status = decode_base64_file (fdlstr, rab, outfile, fdl_sts);
+    	    	END
+    	    ELSE IF (.mime_headers AND mime_c_all_qp) EQL mime_c_all_qp
+    	    THEN
+    	    BEGIN
+    	    	SIGNAL (MXD__BEGIN, 2, %ASCID'text/quoted-printable', rdsc);
+    	    	status = decode_qp_file (rab, outfile);
+    	    END
+    	    ELSE
+    	    	status = MXD__UNRECHDRS;
+        END	!IF NOT(.noheaders)
+    ELSE
+	BEGIN
+    	LOCAL is_text, is_qp;
+    	is_text = CLI$PRESENT (%ASCID'TEXT') EQL CLI$_PRESENT;
+    	is_qp = CLI$PRESENT (%ASCID'QUOTED_PRINTABLE') EQL CLI$_PRESENT;
+
+    	IF .is_qp
+    	THEN
+    	    BEGIN
+    	    	SIGNAL (MXD__BEGIN, 2, %ASCID'text/quoted-printable', rdsc);
+    	    	status = decode_qp_file (rab, outfile);
+    	    END
+    	ELSE
+    	    BEGIN
+	    	SIGNAL (MXD__BEGIN, 2, (IF .is_text THEN %ASCID'text/base64' ELSE %ASCID'binary/base64'), rdsc);
+	    !
+	    !  Have to copy the read-only string to a dynamic string because
+	    !  decode_base64_file will replace it.
+	    !
+	    STR$COPY_DX (fdlstr, (IF .is_text
+				THEN text_fdlstr
+				ELSE image_fdlstr));
+	    status = decode_base64_file (fdlstr, rab, outfile, fdl_sts);
+    	    END;
+	END;
+
+    $DISCONNECT (RAB=rab);
+    $CLOSE (FAB=fab);
+    LIB$FREE_VM (%REF (.rab [RAB$W_USZ]), rab [RAB$L_UBF]);
+
+    IF (.status EQLU RMS$_EOF)
+    THEN
+	SIGNAL (MXD__NOHEADERS)
+    ELSE
+	IF (.status)
+	THEN
+	    SIGNAL (MXD__END, 1, outfile)
+	ELSE
+    	    BEGIN
+    	    	BIND s = status : BLOCK [,BYTE];
+    	    IF .s [STS$V_FAC_NO] EQLU MXD$_FACILITY
+    	    THEN
+    	    	SIGNAL (.status, 0)
+    	    ELSE
+	    	SIGNAL (MXD__GENERR, 0, .status);
+    	    END;
+
+  RETURN (.status);				!Set success status
+
+END;						!End of routine
+
+
+ROUTINE check_headers (rab_a, fdlstr_a, mime_headers_a) =
+BEGIN
+    BIND
+	rab 	    	= .rab_a	: $RAB_DECL,
+	fdlstr		= .fdlstr_a	: $BBLOCK,
+	mime_headers	= .mime_headers_a;
+
+    LOCAL
+	str	: $BBLOCK [DSC$K_S_BLN],
+	str2	: $BBLOCK [DSC$K_S_BLN],
+	curhdr	: $BBLOCK [DSC$K_S_BLN],
+	HDRQ	: QUEDEF,
+	HDRQ2	: QUEDEF,
+	hdr	: REF TXTDEF,
+	status;
+
+    INIT_DYNDESC (curhdr);
+    INIT_QUEUE (hdrq, hdrq2);
+
+    WHILE (status = $GET (RAB=rab)) DO
+	BEGIN
+    	LOCAL len, ptr;
+    	ptr = .rab [RAB$L_RBF];
+    	len = .rab [RAB$W_RSZ];
+    	WHILE .len GTR 0 AND (CH$RCHAR (CH$PLUS (.ptr, .len-1)) EQL %C' ' OR
+                             CH$RCHAR (CH$PLUS (.ptr, .len-1)) EQL %CHAR (9))
+    	DO len = .len - 1;
+    	IF .len EQL 0 THEN EXITLOOP;
+
+	IF CH$RCHAR (.ptr) EQLU %C' ' OR
+	   CH$RCHAR (.ptr) EQLU %CHAR(9)
+	THEN
+	    BEGIN
+    	    WHILE CH$RCHAR (.ptr) EQL %C' ' OR CH$RCHAR (.ptr) EQL %CHAR(9) DO
+    	    	BEGIN
+    	    	ptr = CH$PLUS (.ptr, 1);
+    	    	len = .len - 1;
+    	    	END;
+    	    INIT_SDESC(str, .len, .ptr);
+	    STR$APPEND (curhdr, %ASCID' ');
+	    STR$APPEND (curhdr, str);
+	    END
+	ELSE
+	    BEGIN
+	    IF (.curhdr [DSC$W_LENGTH] GTRU 0)
+	    THEN
+		INSTXT (curhdr, .hdrq2 [que_l_tail]);
+	    STR$COPY_R (curhdr, len, .ptr);
+	    END;
+	END;
+
+    IF (.curhdr [DSC$W_LENGTH] GTRU 0)
+    THEN
+	INSTXT (curhdr, .hdrq2 [QUE_L_TAIL]);
+
+    PARSE_HDRS (hdrq2, hdrq);
+    WHILE NOT REMQUE (.hdrq2 [QUE_L_HEAD], hdr) DO FREETXT (hdr);
+    !
+    !  Loop through the headers looking for the "From:", "Subject:", etc.
+    !
+    mime_headers = 0;			!Assume it's not a MIME message
+    WHILE NOT REMQUE (.hdrq [QUE_L_HEAD], hdr) DO
+	BEGIN
+    	CASE .HDR [TXT_W_CODE] FROM MX_K_HDR_FIRSTCODE TO MX_K_HDR_LASTCODE OF
+    	SET
+	    [MX_K_HDR_MIME_VERSION] :
+		mime_headers = .mime_headers OR mime_c_version;
+	    [MX_K_HDR_MIME_C_T_E] :
+		BEGIN
+		INIT_SDESC (str, .hdr [TXT_W_LEN], hdr [TXT_T_TEXT]);
+		IF (STR$CASE_BLIND_COMPARE (str, %ASCID'BASE64') EQLU 0)
+		THEN
+		    mime_headers = .mime_headers OR mime_c_base64
+		ELSE IF (STR$CASE_BLIND_COMPARE (str, %ASCID'QUOTED-PRINTABLE')
+			EQLU 0)
+		THEN
+		    mime_headers = .mime_headers OR mime_c_quotedp;
+		END;
+	    [MX_K_HDR_MIME_C_TYPE] :
+		BEGIN
+    	    	    BIND vms_rms = %ASCID'APPLICATION/VMS-RMS; VMS-FDL="' : BLOCK [,BYTE],
+    	    	    	 text_type = %ASCID'TEXT'   	    	    	  : BLOCK [,BYTE];
+		INIT_SDESC (str, .hdr [TXT_W_LEN], hdr [TXT_T_TEXT]);
+		IF .hdr [TXT_W_LEN] GTR .vms_rms [DSC$W_LENGTH] THEN
+    	    	    str [DSC$W_LENGTH] = .vms_rms [DSC$W_LENGTH];
+    	    	IF STR$CASE_BLIND_COMPARE (str, vms_rms) EQL 0
+		THEN
+		    BEGIN
+			LOCAL x : REF $BBLOCK, y : REF $BBLOCK, z;
+    	    	    	str [DSC$W_LENGTH] = .hdr [TXT_W_LEN]; ! set it back to full length
+			x = CH$FIND_CH (.str[DSC$W_LENGTH], .str[DSC$A_POINTER],
+						%C'"') + 1;
+			y = CH$PLUS (.str[DSC$A_POINTER], .str[DSC$W_LENGTH]-1);
+			IF (CH$RCHAR(.y) EQLU %C'"')
+			THEN
+			    BEGIN
+			    z = CH$DIFF(.y, .x);
+			    STR$COPY_R (fdlstr, z, .x);
+			    END;
+			IF (.fdlstr[DSC$W_LENGTH] NEQU 0)
+			THEN
+			    mime_headers = .mime_headers OR mime_c_applvms;
+		    END
+		ELSE
+    	    	    BEGIN
+    	    	    str [DSC$W_LENGTH] = STR$POSITION (str, %ASCID'/');
+    	    	    IF .str [DSC$W_LENGTH] EQL 0
+    	    	    THEN
+    	    	    	str [DSC$W_LENGTH] = STR$POSITION (str, %ASCID';');
+    	    	    IF .str [DSC$W_LENGTH] EQL 0
+    	    	    THEN
+    	    	    	str [DSC$W_LENGTH] = MIN (.hdr [TXT_W_LEN], .text_type [DSC$W_LENGTH])
+    	    	    ELSE
+    	    	    	str [DSC$W_LENGTH] = .str [DSC$W_LENGTH] - 1;
+		    IF STR$CASE_BLIND_COMPARE (str, text_type) EQL 0
+		    THEN
+			mime_headers = .mime_headers OR mime_c_text;
+    	    	    END;
+		END;
+    	    [INRANGE,OUTRANGE] :;
+    	TES;
+    	FREETXT (hdr);
+	END;
+
+   RETURN (.status);
+
+END;
+
+END
+ELUDOM

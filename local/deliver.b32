@@ -1,0 +1,2174 @@
+%TITLE 'DELIVER'
+MODULE DELIVER (IDENT='V4.3-2') =
+BEGIN
+!++
+! FACILITY: 	    MX Local delivery agent
+!
+! ABSTRACT: 	    Delivers MX messages via VMS MAIL.
+!
+! MODULE DESCRIPTION:
+!
+!   This module contains the routines that deliver messages to local users
+!   and DECnet-connected users via VMS MAIL.
+!
+! AUTHOR:   	    M. Madison
+!
+! Copyright (c) 2008, Matthew Madison.
+! 
+! All rights reserved.
+! 
+! Redistribution and use in source and binary forms, with or without
+! modification, are permitted provided that the following conditions
+! are met:
+! 
+!     * Redistributions of source code must retain the above
+!       copyright notice, this list of conditions and the following
+!       disclaimer.
+!     * Redistributions in binary form must reproduce the above
+!       copyright notice, this list of conditions and the following
+!       disclaimer in the documentation and/or other materials provided
+!       with the distribution.
+!     * Neither the name of the copyright owner nor the names of any
+!       other contributors may be used to endorse or promote products
+!       derived from this software without specific prior written
+!       permission.
+! 
+! THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
+! "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
+! LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
+! A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
+! OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
+! SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
+! LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
+! DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
+! THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
+! (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
+! OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+!
+! CREATION DATE:    14-DEC-1989
+!
+! MODIFICATION HISTORY:
+!
+!   14-DEC-1989	V1.0    Madison	    Initial coding.
+!   03-JAN-1990	V1.0-1	Madison	    Fixed problem with subprocess $STATUS.
+!   04-JAN-1990	V1.0-2	Madison	    Fixed null-message problem.
+!   04-JAN-1990 V1.0-3	Madison	    Subject problem workaround.
+!   24-FEB-1990	V1.0-4	Madison	    Fix problem on invalid From.
+!   04-APR-1990	V1.1-5	Madison	    Add debug/trace.
+!   03-MAY-1990	V1.1-6	Madison	    Work around status problem, fix local send.
+!   17-MAY-1990	V1.1-7	Madison	    Added msg_text file error check.
+!   09-OCT-1990	V1.2	Madison	    Turn off subproc privs for MAIL/PROTO.
+!   27-OCT-1990	V1.2-1	Madison	    Quote VMS MAIL destination addresses.
+!   01-NOV-1990	V1.3	Madison	    Retry on MAIL-E-OPENOUT failures.
+!   08-NOV-1990	V1.4	Madison	    Special case from-address failures.
+!   11-FEB-1991	V2.0	Madison	    Programmed headers; accounting.
+!   13-FEB-1991	V2.0-1	Madison	    Make OTHER mean X- headers, too.
+!   25-MAR-1991	V2.0-2	Madison	    Trim off <> from from address.
+!   13-MAY-1991	V3.0	Madison	    Use callable mail.
+!   31-MAY-1991	V3.0-1	Madison	    Was deleting MSG_TEXT file!
+!   10-JUN-1991	V3.1	Madison	    Some errors were not handled well.
+!   22-OCT-1991	V3.2	Madison	    Use RCPTDEF structure, OPEN_MSG_TEXT.
+!   28-OCT-1991	V3.3	Madison	    Record status on retries.
+!   15-NOV-1991	V3.3-1	Madison	    New MEM RCPT rtns.
+!   06-OCT-1992	V3.4	Madison	    Update for OpenVMS Alpha AXP.
+!   10-MAR-1993 V3.5	Goatley     Added TRACE statement if MSG_TEXT error.
+!   13-APR-1993 V3.6	Goatley     Add ability to decode MIME BASE64 files.
+!   15-APR-1993 V3.6-1	Goatley     Add support for multiple "From:" addresses.
+!   28-APR-1993 V3.6-2	Goatley     Add MAIL$_SEND_NO_DEFAULT_TRANSPORT!
+!   30-APR-1993 V3.6-3	Goatley     Add "[File]" to subject for /FOREIGN files.
+!    3-MAY-1993 V3.6-4	Goatley     Correct handling of success/retries.
+!   20-JUL-1993 V3.7	Goatley     Fixed bug in success queue handling.
+!   17-DEC-1993 V3.7-1	Goatley     Added decoding of quoted-printable,
+!				    restructured DELIVER.
+!   10-JAN-1994 V3.7-2	Goatley     Correct placement of MIME headers in msg.
+!   16-JAN-1994 V3.7-3	Goatley     Add multiple To:, CC: addrs (from GG)
+!   18-JAN-1994 V3.7-4	Goatley     Fix warning messages for V3.7-3.
+!   18-JAN-1994 V3.7-5	Goatley     Don't parse "To:" line if it's not there.
+!   19-JAN-1994 V3.7-6	Goatley     One more fix to the To: processing.
+!   14-MAR-1994 V3.8	Goatley     Allow quoted-printable with only TEXT/PLAIN.
+!   26-JUN-1996 V3.9	Goatley     Add personal name to VMS From: line.
+!    7-NOV-1996 V3.9-1	Goatley     Leave off (), if there.  Clean up.
+!    6-DEC-1996 V3.9-2	Goatley     Don't truncate message records at 255 chars.
+!				    (VMS Mail will copy them in anyway.)  Same
+!				    with headers (up to 504 bytes).
+!   14-FEB-1997	V3.9-3	Goatley	    Fix PARSEFAIL accvio in MAIL_ERR_HANDLER.
+!   20-FEB-1997 V3.9-4	Goatley     Beef up MAIL_ERR_HANDLER some more to
+!				    $UNWIND on access violations!  Before, an
+!				    accvio would cause callable MAIL to accvio
+!				    again, calling us in an infinite loop.
+!   31-MAY-1997	V3.9-5	Madison	    Set text attribute on main type of text,
+!   	    	    	    	    instead of full type of text/plain.
+!   04-JUN-1997	V3.9-6	Madison	    Fix TEXT check.
+!   27-AUG-1997 V3.9-7	Goatley	    If VMS supports sig files, disable in send.
+!				    Also, show MAIL status text on error.
+!   29-AUG-1997	V3.10	Madison	    New RCPT structure.
+!   21-NOV-1997 V3.10-1	Goatley     Check LOCAL_INFO flag before decoding QP.
+!   19-APR-1998	V4.0	Madison	    Add SET LOCAL/DISABLE_EXQUOTA; folder delivery.
+!   22-APR-1998	V4.0-1	Madison	    Fix folder delivery; reset max length to 255.
+!   15-NOV-1998	V4.0-2	Madison	    Allow longer max line length based on logical name.
+!   31-OCT-1999	V4.0-3	Madison	    Handle EXDISKQUOTA explicitly.
+!   25-NOV-2000	V4.1	Madison	    Make ALLOW_LONG_LINES a real setting.
+!   03-JAN-2001	V4.2	Madison	    Character conversion changes; fix FLK fatal error.
+!   24-JAN-2001 V4.2-1  Madison     Handle RMS$_FUL as a retryable error.
+!   14-FEB-2002 V4.3    Madison     Some folder delivery fixes, Original-Recipient, fix FLK again.
+!   09-MAR-2003 V4.3-1  Madison     Use EXQUOTA FATAL setting.
+!   28-JUN-2003 V4.3-2  Madison     Fix handling of valid address headers that parse into no
+!                                   addresses, so we don't confuse VMS MAIL.
+!--
+    LIBRARY 'SYS$LIBRARY:STARLET';
+    LIBRARY 'MX_SRC_COMMON:FLQ';
+    LIBRARY 'MX_SRC_COMMON:MX';
+    LIBRARY 'MX_SRC_COMMON:MX_LCLDEFS';
+    LIBRARY 'MX_SRC_COMMON:ACCOUNTING';
+    LIBRARY 'MX_SRC_COMMON:CHARCONV';
+    LIBRARY 'MX_SRC_COMMON:QP';
+
+    ACC_REF;
+
+    FORWARD ROUTINE
+	format_address_list,
+    	DELIVER,
+    	MAIL_ERR_HANDLER,
+    	ADD_TO_QUEUE,
+    	ADD_ADDRESS,
+    	SEND_MESSAGE,
+	mail_to_recipients,
+    	deliver_to_folder,
+	write_error_headers,
+    	lock_folder,
+    	unlock_folder,
+    	notify_folder_delivery;
+
+    EXTERNAL ROUTINE
+	decode_base64_file,
+	decode_qp_file,
+    	G_HAT (PARSE_ADDRLIST, FORMAT_HDR, MEM_GETTXT, MX_TO_VMS, DECODE_HEADER,
+    	    	MEM_GETRCPT, MEM_FREERCPT, PARSE_MBOX, DSN_REPORT_ADD_RCPT, XTEXT_DECODE),
+    	G_HAT (CHARCONV_BEGIN, CHARCONV_CONVERT, CHARCONV_GET_CHARSET_NAME, CHARCONV_END),
+    	G_HAT (MAIL$SEND_BEGIN, MAIL$SEND_END, MAIL$SEND_ADD_ATTRIBUTE,
+    	    MAIL$SEND_ADD_BODYPART, MAIL$SEND_ADD_ADDRESS, MAIL$SEND_MESSAGE),
+    	G_HAT (MAIL$USER_BEGIN, MAIL$USER_GET_INFO, MAIL$USER_END),
+    	G_HAT (MAIL$MAILFILE_BEGIN, MAIL$MAILFILE_OPEN, MAIL$MAILFILE_CLOSE, MAIL$MAILFILE_END),
+    	G_HAT (MAIL$MESSAGE_BEGIN, MAIL$MESSAGE_COPY, MAIL$MESSAGE_END),
+    	G_HAT (STR$COPY_R, STR$COPY_DX, STR$CONCAT, STR$FREE1_DX, STR$PREFIX,
+    	    STR$APPEND, LIB$GETJPI, LIB$SYS_FAO, LIB$FREE_VM, LIB$GET_VM,
+    	    LIB$CVT_HTB, LIB$CVT_DTB, LIB$DELETE_FILE, STR$POSITION, STR$RIGHT,
+	    STR$CASE_BLIND_COMPARE, STR$UPCASE, STR$POS_EXTR,
+    	    STR$COMPARE_EQL, LIB$MATCH_COND, FDL$CREATE);
+
+    EXTERNAL
+    	LOCAL_INFO  : LOCALDEF,
+	sigfile_support;
+
+    TRACE_DECLARATIONS (EXTERNAL);
+
+    OWN
+    	FINSTAT,
+    	PRV_EXQUOTA : VECTOR [2,LONG] INITIAL (PRV$M_EXQUOTA, 0),
+    	ERRMSGQ	    : QUEDEF;
+
+    BIND
+	null_str	= %ASCID'',
+	doublequote_str	= %ASCID'"',
+	atsign_str	= %ASCID'@',
+    	binary_d    	= %ASCID'binary' : BLOCK [,BYTE];
+
+%IF NOT %DECLARED(MAIL$_SEND_NO_SIGFILE)
+%THEN
+literal mail$_send_no_sigfile = 24;     !  Signature file
+%FI
+
+    LITERAL
+	mime_c_version	= 1,
+	mime_c_applvms	= 2,
+	mime_c_base64	= 4,
+	mime_c_text	= 8,
+	mime_c_quotedp	= 16,
+	mime_c_binary	= 32;
+
+    LITERAL
+	!
+	!  Though the docs say the VMS Mail To:, From:, CC:, and Subj:
+	!  lines can't be longer than 255, they can really be as much
+	!  as 510 bytes long (2 * NAM$C_MAXRSS).  So use that value
+	!  instead.)  Well, really, up to 504 bytes will be displayed;
+	!  6 bytes are needed for "Subj:<TAB>".  So make it 504.
+    	!
+    	!  The above does not apply for DECnet (MAIL-11) delivery, so
+    	!  we must truncate at 255.
+	!
+	MAIL_HDR$C_MAX_SIZE	= NAM$C_MAXRSS,
+        MAIL_CPY$C_MAX_SIZE     = 512,      ! max text length for sequential message files
+	MAIL_TXT$C_MAX_SIZE	= 65535;
+
+    MACRO
+	mime_c_all_vms_rms = mime_c_version + mime_c_applvms + mime_c_base64%,
+	mime_c_all_qp	= mime_c_version + mime_c_quotedp + mime_c_text%;
+
+    MACRO
+	INSERT_HEADERS (vec) =		!Write headers to file.  Written as
+	    BEGIN			!... macro because it's used twice.
+		LOCAL
+		    txtque	: QUEDEF, 
+		    TXT		: REF TXTDEF;
+
+		INIT_QUEUE (txtque);
+	    	HDR = .HDRQUE [QUE_L_HEAD];
+	    	WHILE .HDR NEQA HDRQUE [QUE_L_HEAD] DO
+	    	BEGIN
+	    	    IF ((.HDR [TXT_W_CODE] GEQU MX_K_HDR_OTHER) AND
+	    	    	    .vec [MX_K_HDR_OTHER]) OR
+			((.hdr [TXT_W_CODE] LEQU MX_K_HDR_OTHER) AND
+	    	    	    .vec [.HDR [TXT_W_CODE]]) THEN
+	    	    BEGIN
+	    	    	FORMAT_HDR (.HDR, TXTQUE, 80);
+	    	    	WHILE NOT REMQUE (.TXTQUE [QUE_L_HEAD], TXT) DO
+	    	    	BEGIN
+	    	    	    RAB [RAB$W_RSZ] = MIN (.TXT [TXT_W_LEN], MAIL_HDR$C_MAX_SIZE);
+	    	    	    RAB [RAB$L_RBF] = TXT [TXT_T_TEXT];
+	    	    	    $PUT (RAB=RAB);
+	    	    	    MSGSIZE = .MSGSIZE + .RAB [RAB$W_RSZ];
+	    	    	    FREETXT (TXT);
+	    	    	END;
+	    	    END;
+	    	    HDR = .HDR [TXT_L_FLINK];
+	    	END;
+	    END%,
+
+	!
+	!  This macro strips the brackets (<>) off of a "From:" address.
+	!  Written as a macro because it appears twice....
+	!
+	strip_brackets (len, ptr) =
+	    BEGIN
+	    IF (.len GTRU 3)
+	    THEN
+		IF CH$RCHAR (.ptr) EQLU %C'<' AND
+			CH$RCHAR (.ptr+1) NEQU %C'@'
+		THEN
+		    BEGIN
+		    len = .len - 2;
+		    ptr = .ptr + 1;
+		    END;
+	    END%;
+
+%SBTTL 'FORMAT_ADDRESS_LIST'
+ROUTINE FORMAT_ADDRESS_LIST (str_a, address_list, disallow_multiple, defstr_a) =
+BEGIN
+!+
+!	str: in			string to parse
+!	address_list: out	dynamic string descriptor
+!	disallow_multiple: in	true if only one address is allowed
+!	defstr:	in		string to be used if parsing fails
+!
+!	returns: OVF		true if line overflowed
+!-
+    BIND
+	str		= .str_a 	: $BBLOCK[DSC$K_S_BLN],
+	defstr		= .defstr_a	: $BBLOCK[DSC$K_S_BLN],
+	list_desc	= .address_list	: $BBLOCK[DSC$K_S_BLN];
+
+    LOCAL
+    	txtque	: QUEDEF,
+    	txt 	: REF TXTDEF,
+	ptr	: REF $BBLOCK,
+	len,
+	tmpstr	: BLOCK[DSC$K_S_BLN, BYTE],
+	ovf,
+	status;
+
+    INIT_QUEUE (TXTQUE);
+    txt = 0;
+    ovf = 0;
+    INIT_DYNDESC (tmpstr);
+    status = PARSE_ADDRLIST (str, txtque, 0);		!Parse the list
+
+    IF NOT(.status)					!If it failed....
+    THEN						!Then look for a "<"
+	BEGIN						!... start with that
+	LOCAL i;
+	IF (i = STR$POSITION (str, %ASCID'<')) NEQU 0
+	THEN
+	    BEGIN
+	    STR$RIGHT (tmpstr, str, i);
+	    status = PARSE_ADDRLIST (tmpstr, txtque, 0);
+	    END;
+	END;
+
+    !
+    !  Now that the RFC822 From: has been parsed, create the VMS Mail
+    !  From: line.
+    !
+    IF NOT(.status) OR queue_empty(txtque)	!Parsing the "From:" header
+    THEN					!... failed, so just use the
+	BEGIN					!... sender as the VMS Mail
+	len = .defstr [DSC$W_LENGTH];		!... "From:" line.
+	ptr = .defstr [DSC$A_POINTER];
+        status = 0;                             ! make sure of failure status for later checks
+	END
+    ELSE
+	!
+	!  TXTQUE is a queue of all the addresses specified in the
+	!  appropriate RFC822 header (Reply-To:, From: or CC:).
+	!  If multiple addresses are allowed, then
+	!  use as many RFC822  addresses as will fit on the
+	!  VMS Mail header line (MAIL_HDR$C_MAX_SIZE characters).
+	!
+	BEGIN
+	txt = .txtque [QUE_L_HEAD];			!Start with first entry
+	free_strings(list_desc);			!empty output string
+	WHILE (.txt NEQA txtque [QUE_L_HEAD]) DO	!For each queue entry,
+	    BEGIN					!... construct the
+	    LOCAL str_desc : $BBLOCK[DSC$K_S_BLN];	!... VMS format address
+	    len = MIN (.txt [TXT_W_LEN], MAIL_HDR$C_MAX_SIZE);		!... (MX%",...")
+	    ptr = txt [TXT_T_TEXT];
+	    IF (.disallow_multiple)			!If multiple From:'s
+	    THEN					!... not allowed, just
+		EXITLOOP;				!... exit this loop
+	    strip_brackets (len, ptr);			!Remove "<>"
+	    INIT_SDESC (str_desc, .len, .ptr);		!Init static desc.
+	    MX_TO_VMS (str_desc, TMPSTR);		!Convert to MX%"..." address
+	    !
+	    !  Here we have the address in MX%"..." format.  Add it to the
+	    !  "From:" string if the string has not exceeded the maximum
+	    !  length allowed by VMS Mail.
+	    !
+	    IF ((.list_desc [DSC$W_LENGTH] + .tmpstr [DSC$W_LENGTH] + 1) LEQU MAIL_HDR$C_MAX_SIZE)
+	    THEN
+		IF (.list_desc[DSC$W_LENGTH] EQLU 0)	!First address?
+		THEN					!Just copy the string
+		    STR$COPY_DX (list_desc, tmpstr)
+		ELSE					!Otherwise, concatenate
+		    STR$CONCAT (list_desc, list_desc, %ASCID',', tmpstr)
+	    ELSE
+		BEGIN
+		!
+		!  There are too many addresses to fit on the VMS Mail
+		!  line, so add a warning to the message headers.
+		!
+			ovf = 1;
+			EXITLOOP;
+		END;
+	    txt = .txt [TXT_L_FLINK];
+	    END;
+	END;
+
+    IF (NOT(.status) OR (.disallow_multiple))
+    THEN
+	BEGIN
+	IF (.len EQLU 0)		!If there was an error parsing the
+	THEN				!... address, then just return default
+	    STR$COPY_R (list_desc, len, .ptr)
+	ELSE
+	    BEGIN
+	    len = MIN (.len, MAIL_HDR$C_MAX_SIZE);	! in no case output a too long string
+	    strip_brackets (len, ptr);
+	    STR$COPY_R (tmpstr, len, .ptr);
+	    MX_TO_VMS (tmpstr, list_desc);
+	    END;
+	END;
+
+    !
+    !  Deallocate memory held by "From:" address queue.
+    !
+    WHILE NOT REMQUE (.TXTQUE [QUE_L_HEAD], TXT) DO FREETXT (TXT);
+
+    FREE_STRINGS (tmpstr);
+
+    .ovf
+
+END;
+
+
+%SBTTL 'DELIVER'
+GLOBAL ROUTINE DELIVER (QENT_A, SENDER_A, USRQUE_A, HDRQUE_A, RETRY_A, FOLDER_A, dsnctx_a) = 
+BEGIN
+!++
+! FUNCTIONAL DESCRIPTION:
+!
+!   Creates a text file with a mail message in it and sends it
+!   through MAIL/PROTOCOL=MX for delivery.
+!
+!   VMS Mail "from" address determination:
+!
+!   	Pick appropriate address from 822 headers (Reply-To if present,
+!   	    else From if present, else Sender if present, else
+!   	    821 source address).
+!
+!   	If address is parseable, then use it.  Otherwise, check
+!   	to see if it's an address of the form
+!
+!   	    Person's name <user@host>
+!
+!   	Some systems allow invalid names to be used in the leading
+!   	phrase, so check for the "<" and just parse what comes after
+!   	that.  If that's valid, then use it.  Otherwise, use the
+!   	821 source address.
+!
+! RETURNS:  	cond_value, longword (unsigned), write only, by value
+!
+! PROTOTYPE:
+!
+!   DELIVER
+!
+! IMPLICIT INPUTS:  None.
+!
+! IMPLICIT OUTPUTS: None.
+!
+! COMPLETION CODES:
+!
+!   SS$_NORMAL:	    	normal successful completion.
+!
+! SIDE EFFECTS:
+!
+!   None.
+!--
+    BUILTIN
+    	ACTUALCOUNT;
+
+    BIND
+    	QENT	= .QENT_A   	: QENTDEF,
+    	SENDER	= .SENDER_A 	: BLOCK [,BYTE],
+    	USRQUE	= .USRQUE_A 	: QUEDEF,
+        orghdrq = .hdrque_a     : QUEDEF,
+    	RETRY	= .RETRY_A  	: QUEDEF,
+    	TOPVEC	= LOCAL_INFO [LOCAL_L_HDRTOP] : BITVECTOR [32],
+    	ENDVEC	= LOCAL_INFO [LOCAL_L_HDREND] : BITVECTOR [32],
+    	dsnctx	= .dsnctx_a;
+
+    LOCAL
+    	FAB 	: $FAB_DECL,
+    	FAB2	: $FAB_DECL,
+    	RAB 	: $RAB_DECL,
+    	RAB2	: $RAB_DECL,
+    	XABFHC	: $XABFHC_DECL,
+    	NAM 	: $NAM_DECL,
+    	NAM2	: $NAM_DECL,
+    	ESPEC	: BLOCK [255,BYTE],
+    	RSPEC	: BLOCK [255,BYTE],
+    	TXT 	: REF TXTDEF,
+    	HDR 	: REF TXTDEF,
+    	USR 	: REF RCPTDEF,
+    	TXTQUE	: QUEDEF,
+        hdrque  : QUEDEF,
+    	FROMADR : BLOCK [DSC$K_S_BLN,BYTE],
+    	REPLYTO	: BLOCK [DSC$K_S_BLN,BYTE],
+    	SNDR822 : BLOCK [DSC$K_S_BLN,BYTE],
+    	MSGFILE	: BLOCK [DSC$K_S_BLN,BYTE],
+    	SUBJECT	: BLOCK [DSC$K_S_BLN,BYTE],
+	ccadr	: $BBLOCK [DSC$K_S_BLN],
+	toadr	: $BBLOCK [DSC$K_S_BLN],
+	personal_name : $BBLOCK [DSC$K_S_BLN],
+    	STR 	: BLOCK [DSC$K_S_BLN,BYTE],
+    	STR2	: BLOCK [DSC$K_S_BLN,BYTE],
+    	STR3	: BLOCK [DSC$K_S_BLN,BYTE],
+    	SDSC	: BLOCK [DSC$K_S_BLN,BYTE],
+    	file_d	: BLOCK [DSC$K_S_BLN,BYTE],
+    	fdlstr	: BLOCK [DSC$K_S_BLN,BYTE],
+    	fdl_filename	: BLOCK [DSC$K_S_BLN,BYTE],
+    	netcharset  	: BLOCK [DSC$K_S_BLN,BYTE],
+    	lclcharset  	: BLOCK [DSC$K_S_BLN,BYTE],
+    	netcsbuf    	: VECTOR [32,BYTE],
+    	lclcsbuf    	: VECTOR [32,BYTE],
+    	TIME	    	: VECTOR [2,LONG],
+    	saved_cte_ptr	: REF TXTDEF,
+    	saved_ctype_ptr	: REF TXTDEF,
+    	convctx,
+    	convbuf,
+	mime_headers,
+	separate_file,
+	fdl_sts,
+	ptr	: REF $BBLOCK,
+	len,
+    	MAICTX,
+    	MSGSIZE,
+    	PID,
+    	folder_delivery,
+    	allow_long_lines,
+    	STATUS;
+
+    INIT_DYNDESC (FROMADR, MSGFILE, REPLYTO, SNDR822, STR, STR2, STR3,
+		  SUBJECT, fdlstr, fdl_filename, ccadr, toadr,
+		  personal_name);
+
+    INIT_SDESC (netcharset, 0, netcsbuf);
+
+    folder_delivery = ACTUALCOUNT () GTR 5 AND .folder_a NEQA 0;
+
+    !  Duplicate the header queue.
+
+    INIT_QUEUE (hdrque);
+    hdr = .orghdrq [QUE_L_HEAD];
+    WHILE .hdr NEQA orghdrq DO
+    BEGIN
+        txt = MEM_GETTXT (.hdr [TXT_W_LEN], hdr [TXT_T_TEXT]);
+        txt [TXT_W_CODE] = .hdr [TXT_W_CODE];
+        INSQUE (.txt, .hdrque [QUE_L_TAIL]);
+        hdr = .hdr [TXT_L_FLINK];
+    END;
+
+    !
+    !  Check line-length limitation.  Don't enable long lines if this queue
+    !  contains DECnet addresses (they are separated from real local deliveries by PROCESS).
+    !
+    usr = .usrque [QUE_L_HEAD];
+    txt = .usr [RCPT_A_ROUTE];
+    allow_long_lines = .LOCAL_INFO [LOCAL_V_LONG_LINES];
+    IF .allow_long_lines AND .txt NEQA 0 THEN
+    	IF CH$FIND_CH (.txt [TXT_W_LEN], txt [TXT_T_TEXT], %C':') THEN
+    	    allow_long_lines = 0;
+
+    !
+    !  Construct a name for the temporary file.
+    !
+    $GETTIM (TIMADR=TIME);
+    LIB$GETJPI (%REF (JPI$_PID), 0, 0, PID);
+    LIB$SYS_FAO (%ASCID'MX_LOCAL_DIR:LCL_!XL_!XL_!XL.TMP', 0, STR,
+    	.TIME [0], .TIME [1], .PID);
+
+    !
+    !  Create the temporary file.
+    !
+    $FAB_INIT (FAB=FAB, FAC=PUT, MRS=0, FNA=.STR [DSC$A_POINTER],
+    	FNS=.STR [DSC$W_LENGTH], RAT=CR, RFM=VAR, NAM=NAM);
+    $NAM_INIT (NAM=NAM, ESA=ESPEC, ESS=%ALLOCATION (ESPEC),
+    	RSA=RSPEC, RSS=%ALLOCATION (RSPEC));
+    $RAB_INIT (RAB=RAB, ROP=WBH, FAB=FAB);
+    STATUS = $CREATE (FAB=FAB);
+    IF NOT .STATUS THEN
+    BEGIN
+    	TRACE ('  DELIVER: Status=!XL on attempt to create temp file.', .STATUS);
+    	FREE_STRINGS (STR, MSGFILE);
+    	WHILE NOT REMQUE_HEAD (.usrque [QUE_L_HEAD], usr) DO
+    	BEGIN
+    	    usr [RCPT_L_DSN_STATUS] = MX__DSN_WS_OTHER;
+    	    usr [RCPT_L_STATUS] = .status;
+    	    INSQUE (.usr, .retry [QUE_L_TAIL]);
+    	END;
+    	RETURN .STATUS;
+    END;
+    $CONNECT (RAB=RAB);
+
+    INIT_SDESC (file_d, .nam[NAM$B_RSL], rspec);	!Init static descriptor
+
+    !
+    !  Loop through the headers looking for the "From:", "Subject:", etc.
+    !
+    mime_headers = 0;			!Assume it's not a MIME message
+    saved_cte_ptr = saved_ctype_ptr = 0;
+    HDR = .HDRQUE [QUE_L_HEAD];
+    WHILE .HDR NEQ HDRQUE [QUE_L_HEAD] DO
+    BEGIN
+    	CASE .HDR [TXT_W_CODE] FROM MX_K_HDR_FIRSTCODE TO MX_K_HDR_LASTCODE OF
+    	SET
+    	    [MX_K_HDR_FROM] :
+    	    	STR$COPY_R (FROMADR, HDR [TXT_W_LEN], HDR [TXT_T_TEXT]);
+    	    [MX_K_HDR_REPLY_TO] :
+    	    	STR$COPY_R (REPLYTO, HDR [TXT_W_LEN], HDR [TXT_T_TEXT]);
+    	    [MX_K_HDR_SENDER] :
+    	    	STR$COPY_R (SNDR822, HDR [TXT_W_LEN], HDR [TXT_T_TEXT]);
+    	    [MX_K_HDR_SUBJECT] :
+    	    	BEGIN
+    	    	    LOCAL dsc : BLOCK [DSC$K_S_BLN,BYTE];
+    	    	    INIT_SDESC (dsc, .hdr [TXT_W_LEN], hdr [TXT_T_TEXT]);
+    	    	    IF NOT DECODE_HEADER (QP__HDR_TEXT, dsc, 0, subject) THEN
+    	    	    	STR$COPY_R (subject, hdr [TXT_W_LEN], hdr [TXT_T_TEXT]);
+    	    	END;
+    	    [MX_K_HDR_TO] :
+    	    	STR$COPY_R (toadr, hdr [TXT_W_LEN], hdr [TXT_T_TEXT]);
+    	    [MX_K_HDR_CC] :
+    	    	STR$COPY_R (ccadr, hdr [TXT_W_LEN], hdr [TXT_T_TEXT]);
+	    [MX_K_HDR_MIME_VERSION] :
+		mime_headers = .mime_headers OR mime_c_version;
+	    [MX_K_HDR_MIME_C_T_E] :
+		BEGIN
+    	    	saved_cte_ptr = .hdr;
+		STR$COPY_R (str, hdr [TXT_W_LEN], hdr [TXT_T_TEXT]);
+		IF (STR$CASE_BLIND_COMPARE (str, %ASCID'BASE64') EQLU 0)
+		THEN
+		    mime_headers = .mime_headers OR mime_c_base64
+		ELSE IF (STR$CASE_BLIND_COMPARE (str, %ASCID'QUOTED-PRINTABLE') EQLU 0)
+		THEN
+		    mime_headers = .mime_headers OR mime_c_quotedp
+    	    	ELSE IF STR$CASE_BLIND_COMPARE (str, %ASCID'7BIT') EQLU 0 OR
+    	    	        STR$CASE_BLIND_COMPARE (str, %ASCID'8BIT') EQLU 0 OR
+    	    	    	STR$CASE_BLIND_COMPARE (str, binary_d) EQLU 0
+    	    	THEN
+    	    	    mime_headers = .mime_headers OR mime_c_binary;
+		END;
+	    [MX_K_HDR_MIME_C_TYPE] :
+		BEGIN
+    	    	saved_ctype_ptr = .hdr;
+		STR$COPY_R (str, hdr [TXT_W_LEN], hdr [TXT_T_TEXT]);
+		STR$UPCASE (str, str);
+		IF CH$EQL (30, UPLIT('APPLICATION/VMS-RMS; VMS-FDL="'),
+			   30, .str[DSC$A_POINTER], 0)
+		THEN
+		    BEGIN
+			LOCAL x : REF $BBLOCK, y : REF $BBLOCK, z;
+			x = CH$FIND_CH (.str[DSC$W_LENGTH], .str[DSC$A_POINTER],
+						%C'"') + 1;
+			y = CH$PLUS (.str[DSC$A_POINTER], .str[DSC$W_LENGTH]-1);
+			IF (CH$RCHAR(.y) EQLU %C'"')
+			THEN
+			    BEGIN
+			    z = CH$DIFF(.y, .x);
+			    STR$COPY_R (fdlstr, z, .x);
+			    END;
+			IF (.fdlstr[DSC$W_LENGTH] NEQU 0)
+			THEN
+			    mime_headers = .mime_headers OR mime_c_applvms;
+		    END
+		ELSE
+    	    	    BEGIN
+    	    	    	LOCAL cp;
+    	    	    	cp = CH$FIND_CH (.str [DSC$W_LENGTH], .str [DSC$A_POINTER], %C'/');
+    	    	    	IF CH$FAIL (.cp)
+    	    	    	THEN
+    	    	    	    BEGIN
+		    	    IF CH$EQL (4, UPLIT('TEXT'),
+    	    	    	    	MIN (.str [DSC$W_LENGTH], 4), .str [DSC$A_POINTER], 0)
+		    	    THEN
+			    	mime_headers = .mime_headers OR mime_c_text;
+    	    	    	    END
+    	    	    	ELSE
+    	    	    	    IF CH$EQL (.cp-.str [DSC$A_POINTER], .str [DSC$A_POINTER],
+    	    	    	    	    	4, UPLIT ('TEXT'), 0)
+    	    	    	    THEN
+    	    	    	    	mime_headers = .mime_headers OR mime_c_text;
+    	    	    	IF (.mime_headers AND mime_c_text) EQLU mime_c_text THEN
+    	    	    	BEGIN
+    	    	    	    cp = CH$FIND_CH (.str [DSC$W_LENGTH], .str [DSC$A_POINTER], %C';');
+    	    	    	    IF NOT CH$FAIL (.cp) THEN
+    	    	    	    BEGIN
+    	    	    	    	LOCAL remain;
+    	    	    	    	DO cp = CH$PLUS (.cp, 1)
+    	    	    	    	WHILE .cp LSSA CH$PLUS (.str [DSC$A_POINTER], .str [DSC$W_LENGTH]) AND
+    	    	    	    	    	CH$RCHAR (.cp) EQL %C' ';
+    	    	    	    	remain = .str [DSC$W_LENGTH] - CH$DIFF (.cp, .str [DSC$A_POINTER]);
+    	    	    	    	IF .remain GTRU 8 AND CH$EQL (8, .cp, 8, UPLIT ('CHARSET='), 0) THEN
+    	    	    	    	BEGIN
+    	    	    	    	    LOCAL csnamlen;
+    	    	    	    	    cp = CH$PLUS (.cp, 8);
+    	    	    	    	    remain = .remain - 8;
+    	    	    	    	    IF CH$RCHAR (.cp) EQL %C'"' THEN
+    	    	    	    	    BEGIN
+    	    	    	    	    	cp = CH$PLUS (.cp, 1);
+    	    	    	    	    	remain = .remain - 1;
+    	    	    	    	    	csnamlen = .remain;
+    	    	    	    	    	INCR ep FROM .cp TO CH$PLUS (.cp, .remain) DO
+    	    	    	    	    	    IF CH$RCHAR (.ep) EQL %C'"' THEN
+    	    	    	    	    	    BEGIN
+    	    	    	    	    	    	csnamlen = CH$DIFF (.ep, .cp);
+    	    	    	    	    	    	EXITLOOP;
+    	    	    	    	    	    END;
+    	    	    	    	    END
+    	    	    	    	    ELSE
+    	    	    	    	    BEGIN
+    	    	    	    	    	csnamlen = .remain;
+    	    	    	    	    	INCR ep FROM .cp TO CH$PLUS (.cp, .remain) DO
+    	    	    	    	    	    IF CH$RCHAR (.ep) EQL %C';' THEN
+    	    	    	    	    	    BEGIN
+    	    	    	    	    	    	csnamlen = CH$DIFF (.ep, .cp);
+    	    	    	    	    	    	EXITLOOP;
+    	    	    	    	    	    END;
+    	    	    	    	    END;
+    	    	    	    	    netcharset [DSC$W_LENGTH] = MINU (.csnamlen, %ALLOCATION (netcsbuf));
+    	    	    	    	    CH$MOVE (.netcharset [DSC$W_LENGTH], .cp, netcsbuf);
+    	    	    	    	END;
+    	    	    	    END;
+    	    	    	END;
+    	    	    END;
+		END;
+    	    [INRANGE,OUTRANGE] :;
+    	TES;
+    	HDR = .HDR [TXT_L_FLINK];
+    END;
+
+    TRACE ('  DELIVER: mime_headers = !UL', .mime_headers);
+    TRACE ('  DELIVER: fdlstr = "!AS"', fdlstr);
+
+    IF .usr [RCPT_A_ORTYPE] NEQA 0 AND .usr [RCPT_A_ORADDR] NEQA 0 THEN
+    BEGIN
+        BIND
+            ortype  = usr [RCPT_A_ORTYPE] : REF TXTDEF,
+            oraddr  = usr [RCPT_A_ORADDR] : REF TXTDEF;
+
+        status = XTEXT_DECODE (oraddr, str2);
+        IF .status THEN
+        BEGIN
+            LIB$SYS_FAO (%ASCID'!AD;!AS', 0, str3,
+                        .ortype [TXT_W_LEN], ortype [TXT_T_TEXT], str2);
+            INSTXT (str3, hdrque, MX_K_HDR_ORIG_RECIP);
+        END;
+    END;
+
+    INSTXT (SENDER, HDRQUE, MX_K_HDR_RETURN_PATH);
+
+    !
+    !  Figure out which one to use as the "From:" address.
+    !
+    STR$COPY_DX (STR,
+    	(IF .REPLYTO [DSC$W_LENGTH] NEQ 0 THEN REPLYTO
+    	    ELSE IF .FROMADR [DSC$W_LENGTH] NEQ 0 THEN FROMADR
+    	    ELSE IF .SNDR822 [DSC$W_LENGTH] NEQ 0 THEN SNDR822
+    	    ELSE SENDER));
+
+    !
+    !  Create the VMS Mail "From:" line.  MX may be configured to allow
+    !  multiple addresses, if there are multiple addresses in the RFC822
+    !  headers.
+    !
+    !  First, check to see if there's only one address.  If there are
+    !  multiple addresses on the line, PARSE_MBOX will fail.
+    !
+    status = PARSE_MBOX (str, str2, str3, personal_name);
+    IF (.status)
+    THEN
+	BEGIN
+    	    IF .personal_name [DSC$W_LENGTH] NEQU 0 THEN
+    	    BEGIN
+    	    	IF DECODE_HEADER (QP__HDR_WORD, personal_name, 0, str) THEN
+    	    	    STR$COPY_DX (personal_name, str);
+    	    END;
+	!
+	!  We have one address.  Build the VMS Mail From: line, appending
+	!  the "personal name" (comment), if it exists.
+	!
+	STR$CONCAT (fromadr, str2, atsign_str, str3);
+	MX_TO_VMS (fromadr, fromadr);
+	IF (.personal_name [DSC$W_LENGTH] NEQU 0) AND
+	   (.personal_name [DSC$W_LENGTH] LEQU 250)
+	THEN
+	    BEGIN
+	    !
+	    !  We need to massage the personal name some.  Use a static
+	    !  descriptor and temporary buffer for the work to avoid the
+	    !  overhead of messing with the personal name dynamic string.
+	    !
+	    LOCAL
+		wrkbuff	: $BBLOCK [MAIL_HDR$C_MAX_SIZE],
+		wrklen,
+		srcptr	: REF $BBLOCK,
+		dstptr	: REF $BBLOCK,
+		wrkdsc	: $BBLOCK [DSC$K_S_BLN];
+
+	    srcptr = dstptr = wrkbuff+1;
+	    wrklen = .personal_name [DSC$W_LENGTH];
+	    dstptr = CH$MOVE (.wrklen, .personal_name [DSC$A_POINTER], .dstptr);
+
+	    !
+	    !  If the comment is of the form "(name)", strip off the
+	    !  parentheses so things look a little better.
+	    !
+	    IF (CH$RCHAR(.srcptr) EQLU %C'(') AND
+		(CH$RCHAR (.dstptr - 1) EQLU %C')')
+	    THEN
+		BEGIN
+		srcptr = .srcptr + 1;
+		dstptr = .dstptr - 1;
+		END;
+
+	    IF (CH$RCHAR (.srcptr) NEQU %C'"')
+	    THEN
+		BEGIN
+		CH$WCHAR (%C'"', (srcptr = .srcptr - 1));
+		CH$WCHAR_A (%C'"', dstptr);
+		END;
+
+	    wrkdsc [DSC$W_LENGTH] = CH$DIFF (.dstptr, .srcptr);
+	    wrkdsc [DSC$B_DTYPE] = DSC$K_DTYPE_T;
+	    wrkdsc [DSC$B_CLASS] = DSC$K_CLASS_S;
+	    wrkdsc [DSC$A_POINTER] = .srcptr;
+
+	    IF (.fromadr [DSC$W_LENGTH] + 2 + .wrkdsc [DSC$W_LENGTH])
+		LEQU MAIL_HDR$C_MAX_SIZE
+	    THEN
+		STR$CONCAT (fromadr, fromadr, %ASCID'  ', wrkdsc);
+	    END;
+	END
+    ELSE
+	IF format_address_list (str, fromadr, .local_info[LOCAL_V_ONE_FROM],
+		sender)
+	THEN
+		INSTXT (%ASCID %STRING('X-MX-Warning: VMS Mail From: line ',
+				'does not include all From/Reply-To addresses'),
+				.hdrque [QUE_L_TAIL], MX_K_HDR_OTHER);
+
+    TRACE ('  DELIVER:  Using !AS as VMS MAIL From address.', FROMADR);
+
+    IF (.toadr [DSC$W_LENGTH] NEQU 0)
+    THEN
+	IF format_address_list (toadr, toadr, 0, null_str)
+	THEN
+	    INSTXT (%ASCID %STRING('X-MX-Warning: VMS Mail To: line ',
+			'does not include all To: addresses'),
+			.hdrque [QUE_L_TAIL], MX_K_HDR_OTHER);
+
+    TRACE ('  DELIVER:  Using !AS as VMS MAIL To address.', toadr);
+
+    IF (.ccadr [DSC$W_LENGTH] NEQU 0)
+    THEN
+	IF format_address_list (ccadr, ccadr, 0, null_str)
+	THEN
+	    INSTXT (%ASCID %STRING('X-MX-Warning: VMS Mail CC: line ',
+			'does not include all CC: addresses'),
+			.hdrque [QUE_L_TAIL], MX_K_HDR_OTHER);
+
+    TRACE ('  DELIVER:  Using !AS as VMS MAIL CC address.', ccadr);
+
+    TRACE ('  DELIVER:  Using "!AS" as subject.', SUBJECT);
+
+    MSGSIZE = 0;
+
+    !
+    !  Set up a new FAB, etc., for the xxx.MSG_TEXT file, which contains
+    !  the text of the message to be sent.
+    !
+    $FAB_INIT (FAB=FAB2, FAC=GET, XAB=XABFHC);
+    IF CH$EQL (MXQ_S_FILEID, QENT [MXQ_X_FILEID], 4, UPLIT (0), %CHAR (0)) THEN
+    BEGIN
+    	FLQ_MAKE_FSPEC (.QENT [MXQ_L_BACKREF], %ASCID'MSG_TEXT', MSGFILE);
+    	FAB2 [FAB$L_FNA] = .MSGFILE [DSC$A_POINTER];
+    	FAB2 [FAB$B_FNS] = .MSGFILE [DSC$W_LENGTH];
+    END
+    ELSE
+    BEGIN
+    	$NAM_INIT (NAM=NAM2);
+    	CH$MOVE (MXQ_S_FILEID, QENT [MXQ_X_FILEID], NAM2 [NAM$T_DVI]);
+    	FAB2 [FAB$L_NAM] = NAM2;
+    	FAB2 [FAB$V_NAM] = 1;
+    END;
+
+    $XABFHC_INIT (XAB=XABFHC);
+    $RAB_INIT (RAB=RAB2, FAB=FAB2, ROP=RAH);
+    STATUS = $OPEN (FAB=FAB2);
+    IF .STATUS THEN
+    BEGIN
+	!
+	!  Figure out the size of the input buffer we need.
+	!
+    	RAB2 [RAB$W_USZ] = (IF .XABFHC [XAB$W_LRL] EQL 0
+				THEN MAIL_TXT$C_MAX_SIZE
+    	    	    		ELSE .XABFHC [XAB$W_LRL]);
+    	LIB$GET_VM (%REF (.RAB2 [RAB$W_USZ]), RAB2 [RAB$L_UBF]);
+    	RAB [RAB$L_RBF] = .RAB2 [RAB$L_UBF];
+
+    	$CONNECT (RAB=RAB2);
+	!
+	!  Copy the message body from .MSG_TEXT to the .TMP file.
+	!
+	separate_file = 0;
+	fdl_sts = 0;
+	!
+	!  See if this is an APPLICATION-VMS encoded message.
+	!
+	IF NOT .folder_delivery AND (.fdlstr[DSC$W_LENGTH] NEQU 0) AND	!If there's an FDL string and
+	   (.mime_headers EQLU mime_c_all_vms_rms) !... all 3 headers were found
+	THEN
+	    BEGIN
+	    !
+	    !  Decode the file.
+	    !
+	    status = decode_base64_file (fdlstr, rab2, fdl_filename, fdl_sts);
+	    !
+	    !  Insert a comment or warning, depending on status.  The
+	    !  line is included as a header line.  Even if headers are
+	    !  to be included *after* the message, it's inserted here
+	    !  to draw attention to the status.
+	    !
+	    IF (.status)
+	    THEN
+		separate_file = 1;
+	    write_error_headers (hdrque, %ASCID'BASE64',
+			 %ASCID'BASE64 decoded file sent under separate cover',
+			status, fdl_sts);
+	    END;
+
+
+	IF (.mime_headers EQLU mime_c_all_qp) AND NOT .local_info [LOCAL_V_DONT_DECODE_QP]
+	THEN
+	    BEGIN
+	    status = decode_qp_file (rab2, 0, .convctx);
+	    !
+	    !  If successful (and to simplify processing here), decode_qp_file
+	    !  will automatically close the open .MSG_TEXT (FAB2 and RAB2)
+	    !  and set up FAB2 and RAB2 to use the newly-created temporary
+	    !  file so that the message text can be copied below.
+	    !
+	    !  Having it done in that routine eliminates the overhead of
+	    !  closing the decoded file, then re-opening it here.
+	    !
+	    !  If there's an error in the processing, then the routine
+	    !  $REWINDs RAB2 to start at the beginning of the file.
+	    !
+	    write_error_headers (hdrque, %ASCID'QUOTED-PRINTABLE',
+		 %ASCID	'QUOTED-PRINTABLE message automatically decoded',
+				status, fdl_sts);
+	    !
+	    !  If we successfully decoded the file, we don't want
+	    !  the user agent to try to decode it again.  Prevent that
+	    !  by modifying the Content-Transfer-Encoding header
+	    !  to read BINARY, which means no encoding has been done.
+	    !
+	    IF .status AND .saved_cte_ptr NEQA 0 
+	    THEN
+		BEGIN
+    	    	LOCAL tmp : REF TXTDEF;
+    	    	tmp = .saved_cte_ptr [TXT_L_BLINK];
+    	    	REMQUE (.saved_cte_ptr, saved_cte_ptr);
+    	    	FREETXT (saved_cte_ptr);
+	    	INSTXT (binary_d, .tmp, MX_K_HDR_MIME_C_T_E);
+    	    	mime_headers = (.mime_headers AND NOT mime_c_quotedp) OR mime_c_binary;
+    	    	saved_cte_ptr = .tmp [TXT_L_FLINK];
+    	    	END;
+	    END;
+
+    	!
+    	!   If no Content-Transfer-Encoding: header, classify as
+    	!   binary/7bit/8bit so we do character conversion.
+    	!
+    	IF .saved_cte_ptr EQLA 0 AND .mime_headers NEQU 0 THEN
+    	    mime_headers = .mime_headers OR mime_c_binary;
+
+    	convctx = 0;
+    	INIT_SDESC (lclcharset, %ALLOCATION (lclcsbuf), lclcsbuf);
+    	IF .mime_headers EQLU 0 OR (.mime_headers AND (mime_c_text OR mime_c_binary)) EQLU
+    	    	    	    	    (mime_c_text OR mime_c_binary) THEN
+    	BEGIN
+            LOCAL
+                udsc : BLOCK [DSC$K_S_BLN,BYTE];
+            usr = .usrque [QUE_L_HEAD];
+            txt = .usr [RCPT_A_ROUTE];
+            INIT_SDESC (udsc, .txt [TXT_W_LEN], txt [TXT_T_TEXT]);
+    	    IF CHARCONV_BEGIN (CHARCONV__NETWORK_TO_LOCAL, convctx, lclcharset [DSC$W_LENGTH],
+    	    	    	       lclcharset, (IF .netcharset [DSC$W_LENGTH] EQLU 0 THEN 0 ELSE netcharset), udsc) THEN
+    	    BEGIN
+    	    	LOCAL
+    	    	    buf : VECTOR [256,BYTE],
+    	    	    dsc : BLOCK [DSC$K_S_BLN,BYTE],
+    	    	    tmp : REF TXTDEF;
+    	    	IF .saved_ctype_ptr NEQA 0 THEN
+    	    	BEGIN
+    	    	    tmp = .saved_ctype_ptr [TXT_L_BLINK];
+    	    	    REMQUE (.saved_ctype_ptr, saved_ctype_ptr);
+    	    	    FREETXT (saved_ctype_ptr);
+    	    	END
+    	    	ELSE
+    	    	    tmp = .hdrque [QUE_L_TAIL];
+    	    	INIT_SDESC (dsc, %ALLOCATION (buf), buf);
+    	    	$FAO (%ASCID'text/plain; charset="!AS"', dsc [DSC$W_LENGTH], dsc, lclcharset);
+    	    	INSTXT (dsc, .tmp, MX_K_HDR_MIME_C_TYPE);
+    	    	saved_ctype_ptr = .tmp [TXT_L_FLINK];    	    	
+
+    	    	!
+    	    	!   Make sure we reclassify the Content-Transfer-Encoding as binary
+    	    	!   in case there are 8-bit or control characters after the conversion.
+    	    	!   XXX -- we really should write out these headers AFTER processing the
+    	    	!   content, but this will do for now.
+    	    	!
+    	    	IF .saved_cte_ptr NEQA 0 THEN
+    	    	BEGIN
+    	    	    IF CH$NEQ (.saved_cte_ptr [TXT_W_LEN], saved_cte_ptr [TXT_T_TEXT],
+    	    	    	    	.binary_d [DSC$W_LENGTH], .binary_d [DSC$A_POINTER], %C' ') THEN
+    	    	    BEGIN
+    	    	    	LOCAL tmp : REF TXTDEF;
+    	    	    	tmp = .saved_cte_ptr [TXT_L_BLINK];
+    	    	    	REMQUE (.saved_cte_ptr, saved_cte_ptr);
+    	    	    	FREETXT (saved_cte_ptr);
+	    	    	INSTXT (binary_d, .tmp, MX_K_HDR_MIME_C_T_E);
+    	    	    	saved_cte_ptr = .tmp [TXT_L_FLINK];
+    	    	    END;
+    	    	END
+    	    	ELSE
+    	    	BEGIN
+    	    	    INSTXT (binary_d, .saved_ctype_ptr, MX_K_HDR_MIME_C_T_E);
+    	    	    saved_cte_ptr = .saved_ctype_ptr [TXT_L_FLINK];
+    	    	END;
+    	    END
+    	    ELSE
+    	    	convctx = 0;
+    	END;
+	!
+	!  If headers are included at the top, then write them to the temporary
+	!  file now.
+	!
+	IF .LOCAL_INFO [LOCAL_L_HDRTOP] NEQ 0
+	THEN
+	    INSERT_HEADERS (topvec);
+
+    	convbuf = 0;
+    	IF .convctx NEQU 0 THEN
+    	BEGIN
+    	    IF NOT LIB$GET_VM (%REF (65536), convbuf) THEN
+    	    	convbuf = 0;
+    	END;
+	!
+	!  If an error occurred decoding the file, or there was no file  
+	!  to decode, then copy the message body in after the headers.
+	!
+	IF NOT .separate_file THEN
+        BEGIN
+            ! Insert the separating blank line when headers are at the top
+	    IF .LOCAL_INFO [LOCAL_L_HDRTOP] NEQ 0 THEN
+	    BEGIN
+		rab [RAB$W_RSZ] = 0;
+		$PUT (RAB = rab);
+	    END;
+
+            ! Copy in the rest of the message
+    	    WHILE $GET (RAB=RAB2) DO
+	    BEGIN
+                LOCAL
+                    len : WORD,
+                    ptr : REF BLOCK [,BYTE];
+
+                len = .rab2 [RAB$W_RSZ];
+                ptr = .rab2 [RAB$L_RBF];
+    	    	IF .convbuf NEQA 0 THEN
+    	    	BEGIN
+    	    	    LOCAL 
+    	    	    	in : BLOCK [DSC$K_S_BLN,BYTE],
+    	    	    	ou : BLOCK [DSC$K_S_BLN,BYTE];
+    	    	    INIT_SDESC (in, .rab2 [RAB$W_RSZ], .rab2 [RAB$L_RBF]);
+    	    	    INIT_SDESC (ou, 65535, .convbuf);
+    	    	    IF CHARCONV_CONVERT (convctx, in, len, ou) THEN
+                        ptr = .convbuf;
+    	    	END;
+
+                DO
+                BEGIN
+                    rab [RAB$L_RBF] = .ptr;
+                    IF .allow_long_lines OR .len LEQU MAIL_HDR$C_MAX_SIZE THEN
+                        rab [RAB$W_RSZ] = .len
+                    ELSE
+                    BEGIN
+                        LOCAL cp : REF BLOCK [,BYTE];
+                        cp = CH$PLUS (.ptr, MAIL_HDR$C_MAX_SIZE+1);
+                        WHILE .cp GTRA .ptr AND CH$RCHAR (.cp-1) NEQ %C' ' DO
+                            cp = .cp - 1;
+                        rab [RAB$W_RSZ] = (IF .cp EQLA .ptr THEN MAIL_HDR$C_MAX_SIZE
+                                            ELSE CH$DIFF (.cp, .ptr));
+                    END;
+		    $PUT (RAB=rab);
+		    msgsize = .msgsize + .rab [RAB$W_RSZ];
+                    ptr = CH$PLUS (.ptr, .rab [RAB$W_RSZ]);
+                    len = .len - .rab [RAB$W_RSZ];
+		END
+                UNTIL .len EQLU 0;
+	    END;
+        END;
+
+    	$DISCONNECT (RAB=RAB2);
+    	$CLOSE (FAB=FAB2);
+    	LIB$FREE_VM (%REF (.RAB2 [RAB$W_USZ]), RAB2 [RAB$L_UBF]);
+    	IF .convbuf NEQA 0 THEN
+    	    LIB$FREE_VM (%REF (65536), convbuf);
+
+    END; ! If open succeeded
+
+    IF .convctx NEQA 0 THEN
+    	CHARCONV_END (convctx);
+
+    IF NOT(.STATUS)
+    THEN
+    	TRACE ('  DELIVER: Status=!XL on attempt to open MSG_TEXT file "!AD".',
+			.STATUS, MSGFILE);
+
+    !
+    !  If headers go at the end of the message, then put them there.
+    !
+    IF .LOCAL_INFO [LOCAL_L_HDREND] NEQ 0 THEN
+    BEGIN
+    	RAB [RAB$L_RBF] = UPLIT ('--------------------',
+    	    '--------------------', '--------------------',
+    	    '--------------------');
+    	RAB [RAB$W_RSZ] = 80;
+    	$PUT (RAB=RAB);
+
+	INSERT_HEADERS (endvec);
+    END;
+
+    $DISCONNECT (RAB=RAB);
+    $CLOSE (FAB=FAB);
+
+    !
+    !  Now mail the file(s) to the recipients.  First, mail the original
+    !  message to the user.  If the file was an encoded binary, this file
+    !  consists only of the message headers.
+    !
+    IF .folder_delivery THEN
+    	status = deliver_to_folder (usrque, .folder_a, file_d, fromadr, toadr, ccadr,
+    	    	    	    	    subject, 0, retry, sender, msgsize, .dsnctx_a)
+    ELSE
+    	status = mail_to_recipients (usrque, file_d, fromadr, toadr, ccadr,
+				subject, 0,
+				retry, sender, msgsize, .dsnctx_a);
+    !
+    !  Now mail the decoded file, if there is one.
+    !
+    IF (.fdl_filename[DSC$W_LENGTH] NEQU 0)  ! will never be true for folder delivery
+    THEN
+	BEGIN
+	TRACE ('  DELIVER: Delivering part 2 of MIME BASE64 file');
+	IF ((.subject[DSC$W_LENGTH] + 7) LEQ MAIL_HDR$C_MAX_SIZE)
+	THEN
+	    STR$CONCAT (subject, %ASCID'[File] ', subject);
+	status = mail_to_recipients (usrque, fdl_filename,
+				fromadr, toadr, ccadr,
+				subject, 1,	!Mail it /FOREIGN
+				retry, sender, msgsize, .dsnctx_a);
+	END;
+
+    !
+    !  Free the memory held by the queue of recipient addresses.
+    !
+    WHILE NOT REMQUE (.USRQUE [QUE_L_HEAD], USR) DO
+    BEGIN
+    	IF .usr [RCPT_L_DSN_STATUS] EQL 0 THEN usr [RCPT_L_DSN_STATUS] = MX__DSN_S__OTHER;
+    	DSN_REPORT_ADD_RCPT (dsnctx, usr, 2);
+    	MEM_FREERCPT (USR);
+    END;
+
+    !
+    !  Delete the temporary file.
+    !
+    LIB$DELETE_FILE (file_d);
+    IF (.fdl_filename[DSC$W_LENGTH] NEQU 0)	!If there was a /FOREIGN file...
+    THEN
+	LIB$DELETE_FILE (fdl_filename);
+
+    WHILE NOT REMQUE (.HDRQUE [QUE_L_HEAD], HDR) DO FREETXT (HDR);
+
+    FREE_STRINGS (FROMADR, MSGFILE, REPLYTO, SNDR822, STR, STR2, STR3,
+		  SUBJECT, fdlstr, fdl_filename, toadr, ccadr, personal_name);
+
+    SS$_NORMAL
+
+END; ! DELIVER
+
+%SBTTL 'MAIL_ERR_HANDLER'
+ROUTINE MAIL_ERR_HANDLER (SIG_A, MECH_A) = 
+BEGIN
+!++
+! FUNCTIONAL DESCRIPTION:
+!
+!   Condition handler for DELIVER's call to MAIL$SEND_MESSAGE.
+!
+! RETURNS:  	cond_value, longword (unsigned), write only, by value
+!
+! PROTOTYPE:
+!
+!   MAIL_ERR_HANDLER
+!
+! IMPLICIT INPUTS:  None.
+!
+! IMPLICIT OUTPUTS: None.
+!
+! COMPLETION CODES:
+!
+!   SS$_NORMAL:	    	normal successful completion.
+!
+! SIDE EFFECTS:
+!
+!   None.
+!--
+    BIND
+    	SIG 	= .SIG_A    : VECTOR [,LONG],
+    	MECH	= .MECH_A   : VECTOR [,LONG];
+
+    LOCAL
+	saved_sigargcnt;
+
+!    SIG [0] = .SIG [0] OR %X'000F0000';
+
+    !
+    !  The signal array comes in with CHF$L_SIG_ARGS set to a value which
+    !  includes the PC and PSL.  We want to just pass the thing to $PUTMSG,
+    !  but we need to not pass the PC and PSL.  We do this by temporarily
+    !  changing the length to the value - 2.
+    !
+
+    IF (.sig[0] EQLU 1) AND (.sig[1] EQLU SS$_UNWIND)
+    THEN
+	RETURN SS$_CONTINUE;	!Just return if only unwinding
+
+    IF (.sig[0] GTRU 1) AND
+	(LIB$MATCH_COND (sig [1], %REF(SS$_ACCVIO)) NEQ 0)
+    THEN
+	BEGIN
+	FINSTAT = SS$_ACCVIO;
+	$UNWIND();
+	RETURN (SS$_CONTINUE);
+	END;
+	
+    IF ((saved_sigargcnt = .sig [0]) GTR 4)
+    THEN
+	sig[0] = .sig[0] - 2;
+
+    $PUTMSG (MSGVEC=SIG, ACTRTN=ADD_TO_QUEUE);
+
+    IF .SIG [0] GTR 1 THEN
+    BEGIN
+    	LOCAL sigidx;
+
+    	sigidx = 1;
+    	IF LIB$MATCH_COND (SIG [.sigidx], %REF (MAIL$_SENDERR), %REF (MAIL$_SENDERRAT)) NEQ 0 THEN
+    	BEGIN
+    	    sigidx = .sigidx + .sig [.sigidx + 1] + 2;
+    	    IF LIB$MATCH_COND (SIG [.sigidx], %REF (MAIL$_OPENOUT)) NEQ 0 THEN
+    	    BEGIN
+    	    	LOCAL sptr : REF BLOCK [,BYTE];
+    	    	sigidx = .sigidx + .sig [.sigidx + 1] + 2;
+    	    	sptr = sig [.sigidx];
+    	    	IF .sptr [STS$V_FAC_NO] EQLU RMS$_FACILITY AND
+    	    	    LIB$MATCH_COND (sig [.sigidx], %REF (RMS$_FLK), %REF (RMS$_FUL)) EQL 0 THEN
+    	    	    FINSTAT = .sig [.sigidx + 1]
+    	    	ELSE
+    	    	    FINSTAT = MAIL$_OPENOUT;
+
+    	    	RETURN SS$_CONTINUE;
+
+    	    END
+	    ELSE IF LIB$MATCH_COND (sig [.sigidx], %REF(SS$_ACCVIO)) NEQ 0 THEN
+		 $UNWIND();
+
+    	END;
+
+    	IF LIB$MATCH_COND (SIG [1], %REF (MAIL$_LOGLINK)) NEQ 0 THEN
+    	    IF LIB$MATCH_COND (SIG [.SIG [2]+3], %REF (SS$_NOSUCHNODE)) NEQ 0
+    	    THEN
+    	    BEGIN
+    	    	FINSTAT = SS$_NOSUCHNODE;
+    	    	RETURN SS$_CONTINUE;
+    	    END;
+
+    END;
+
+    sig [0] = .saved_sigargcnt;		!Restore isn't needed, but do it anyway
+
+    FINSTAT = .SIG [1];
+    SS$_CONTINUE
+
+END; ! MAIL_ERR_HANDLER
+
+%SBTTL 'ADD_TO_QUEUE'
+GLOBAL ROUTINE ADD_TO_QUEUE (STR_A) = 
+BEGIN
+!++
+! FUNCTIONAL DESCRIPTION:
+!
+!   description
+!
+! RETURNS:  	cond_value, longword (unsigned), write only, by value
+!
+! PROTOTYPE:
+!
+!   ADD_TO_QUEUE
+!
+! IMPLICIT INPUTS:  None.
+!
+! IMPLICIT OUTPUTS: None.
+!
+! COMPLETION CODES:
+!
+!   SS$_NORMAL:	    	normal successful completion.
+!
+! SIDE EFFECTS:
+!
+!   None.
+!--
+    BIND STR = .STR_A	: BLOCK [,BYTE];
+
+    INSTXT (STR, .ERRMSGQ [QUE_L_TAIL]);
+
+    0
+
+END; ! ADD_TO_QUEUE
+
+%SBTTL 'ADD_ADDRESS'
+ROUTINE ADD_ADDRESS (MAICTX_A, USR_A) =
+BEGIN
+!++
+! FUNCTIONAL DESCRIPTION:
+!
+!   description
+!
+! RETURNS:  	cond_value, longword (unsigned), write only, by value
+!
+! PROTOTYPE:
+!
+!   x
+!
+! IMPLICIT INPUTS:  None.
+!
+! IMPLICIT OUTPUTS: None.
+!
+! COMPLETION CODES:
+!
+!   SS$_NORMAL:	    	normal successful completion.
+!
+! SIDE EFFECTS:
+!
+!   None.
+!--
+    BIND
+    	MAICTX	= .MAICTX_A,
+    	USR 	= .USR_A    	    	: RCPTDEF,
+    	ua  	= .usr [RCPT_A_ROUTE]	: TXTDEF;
+
+    ENABLE
+    	MAIL_ERR_HANDLER;
+
+    LOCAL
+    	MAILST2	: $ITMLST_DECL (ITEMS=2),
+    	HDR 	: REF TXTDEF,
+    	STATUS;
+
+    $ITMLST_INIT (ITMLST=MAILST2,
+    	(ITMCOD=MAIL$_SEND_USERNAME, BUFADR=ua [TXT_T_TEXT],
+    	    	    BUFSIZ=.ua [TXT_W_LEN]),
+    	(ITMCOD=0, BUFADR=0, BUFSIZ=0, RETLEN=0));
+    FINSTAT = SS$_NORMAL;
+    MAIL$SEND_ADD_ADDRESS (MAICTX, MAILST2, %REF (0));
+    STATUS = .FINSTAT;
+    IF .STATUS THEN
+    	WHILE NOT REMQUE (.ERRMSGQ [QUE_L_HEAD], HDR) DO FREETXT (HDR);
+
+    .STATUS
+
+END; ! ADD_ADDRESS
+
+%SBTTL 'SEND_MESSAGE'
+ROUTINE SEND_MESSAGE (MAICTX_A) =
+BEGIN
+!++
+! FUNCTIONAL DESCRIPTION:
+!
+!   description
+!
+! RETURNS:  	cond_value, longword (unsigned), write only, by value
+!
+! PROTOTYPE:
+!
+!   x
+!
+! IMPLICIT INPUTS:  None.
+!
+! IMPLICIT OUTPUTS: None.
+!
+! COMPLETION CODES:
+!
+!   SS$_NORMAL:	    	normal successful completion.
+!
+! SIDE EFFECTS:
+!
+!   None.
+!--
+    BIND
+    	MAICTX	= .MAICTX_A;
+
+    ENABLE
+    	MAIL_ERR_HANDLER;
+
+    LOCAL
+    	HDR 	: REF TXTDEF,
+    	prvprv	: BLOCK [8,BYTE],
+    	STATUS;
+
+    IF .local_info [LOCAL_V_NO_EXQUOTA] THEN
+    	$SETPRV (ENBFLG=0, PRVADR=PRV_EXQUOTA, PRVPRV=prvprv);
+    FINSTAT = SS$_NORMAL;
+    MAIL$SEND_MESSAGE (MAICTX, %REF (0), %REF (0));
+    STATUS = .FINSTAT;
+    IF .local_info [LOCAL_V_NO_EXQUOTA] AND .prvprv [PRV$V_EXQUOTA] THEN
+    	$SETPRV (ENBFLG=1, PRVADR=PRV_EXQUOTA);
+
+    .STATUS
+
+END; ! SEND_MESSAGE
+
+
+%SBTTL 'copy_message'
+ROUTINE copy_message (MAICTX_A, inlist_a, outlist_a) =
+BEGIN
+!++
+! FUNCTIONAL DESCRIPTION:
+!
+!   description
+!
+! RETURNS:  	cond_value, longword (unsigned), write only, by value
+!
+! PROTOTYPE:
+!
+!   x
+!
+! IMPLICIT INPUTS:  None.
+!
+! IMPLICIT OUTPUTS: None.
+!
+! COMPLETION CODES:
+!
+!   SS$_NORMAL:	    	normal successful completion.
+!
+! SIDE EFFECTS:
+!
+!   None.
+!--
+    ENABLE
+    	MAIL_ERR_HANDLER;
+
+    finstat = SS$_NORMAL;
+    MAIL$MESSAGE_COPY (.maictx_a, .inlist_a, .outlist_a);
+    .finstat
+
+END; ! SEND_MESSAGE
+
+
+%SBTTL 'MAIL_TO_RECIPIENTS'
+ROUTINE MAIL_TO_RECIPIENTS (usrque_a, file_a, from_a, to_a, cc_a, subj_a,
+	foreign, retry_a, sender_a, msgsize_a, dsnctx_a) =
+BEGIN
+!++
+! FUNCTIONAL DESCRIPTION:
+!
+!	This routine uses callable VMS Mail to mail a file to all the
+!	recipients in the given queue.
+!
+! RETURNS:  	cond_value, longword (unsigned), write only, by value
+!
+! FORMAL PARAMETERS:
+!
+!	usrque_a	- Address of queue listhead for the recipients
+!	file_a		- Address of descriptor for filename to mail
+!	from_a		- Address of descriptor for VMS Mail "From:" string
+!	to_a		- Address of descriptor for VMS Mail "To:" string
+!	cc_a		- Address of descriptor for VMS Mail "CC:" string
+!	subj_a		- Address of descriptor for the "Subj:" line.
+!	foreign		- Flag indicating whether /FOREIGN or not (BY VALUE)
+!	retry_a		- Address of queue listhead for retries
+!	sender_a	- Address of descriptor for sender string (for acctng)
+!	msgsize_a	- Address of longword for message size in bytes
+!
+! IMPLICIT INPUTS:  None.
+!
+! IMPLICIT OUTPUTS: None.
+!
+! COMPLETION CODES:
+!
+!   SS$_NORMAL:	    	normal successful completion.
+!
+! SIDE EFFECTS:
+!
+!   None.
+!--
+    BIND
+	usrque	= .usrque_a	: QUEDEF,
+	file	= .file_a	: $BBLOCK,
+	fromadr	= .from_a	: $BBLOCK,
+	toadr	= .to_a		: $BBLOCK,
+	ccadr	= .cc_a		: $BBLOCK,
+	subject	= .subj_a	: $BBLOCK,
+    	retry	= .retry_a	: QUEDEF,
+	sender	= .sender_a	: $BBLOCK,
+	msgsize	= .msgsize_a,
+    	dsnctx  = .dsnctx_a;
+
+    LOCAL
+    	USR 	: REF RCPTDEF,
+    	HDR 	: REF TXTDEF,
+	success	: QUEDEF,
+    	MAILST1	: $ITMLST_DECL (ITEMS=1),
+    	MAILST2	: $ITMLST_DECL (ITEMS=3),
+    	MAILST4	: $ITMLST_DECL (ITEMS=4),
+	maictx,
+	status;
+
+    INIT_QUEUE (success);
+
+    !
+    !  Use callable VMS Mail to deliver the message.
+    !
+    WHILE NOT REMQUE (.USRQUE [QUE_L_HEAD], usr) DO
+    BEGIN
+    	BIND ua = .usr [RCPT_A_ROUTE] : TXTDEF;
+    	TRACE ('  DELIVER:  Delivering to !AD', .ua [TXT_W_LEN], ua [TXT_T_TEXT]);
+    	MAICTX = 0;
+    	$ITMLST_INIT (ITMLST=MAILST2,
+    	    (ITMCOD=MAIL$_NOSIGNAL, BUFADR=0, BUFSIZ=0),
+	    !
+	    !  We don't want MX to loop with itself in case it's started
+	    !  from an account that has a default transport set!!
+	    !
+	    (ITMCOD=MAIL$_SEND_NO_DEFAULT_TRANSPORT, BUFADR=0, BUFSIZ=0),
+	    !
+	    !  If this version of VMS has VMS MAIL signature file support,
+	    !  then be sure we disable it!
+	    !
+	    (ITMCOD=(IF .sigfile_support THEN MAIL$_SEND_NO_SIGFILE
+		     ELSE 0), BUFADR=0, BUFSIZ=0));
+
+    	STATUS = MAIL$SEND_BEGIN (MAICTX, MAILST2, %REF (0));
+    	IF .STATUS THEN
+    	BEGIN
+    	    $ITMLST_INIT (ITMLST=MAILST4,
+    	    	(ITMCOD=MAIL$_NOSIGNAL, BUFADR=0, BUFSIZ=0),
+    	    	(ITMCOD=MAIL$_SEND_FROM_LINE, BUFADR=.FROMADR [DSC$A_POINTER],
+    	    	    BUFSIZ=MIN (.FROMADR [DSC$W_LENGTH], MAIL_HDR$C_MAX_SIZE)),
+    	    	(ITMCOD=MAIL$_SEND_SUBJECT,
+    	    	    BUFADR=.SUBJECT [DSC$A_POINTER],
+    	    	    BUFSIZ=MIN (.SUBJECT [DSC$W_LENGTH], MAIL_HDR$C_MAX_SIZE)),
+		!
+		!  If it should be mailed /FOREIGN, then say so, otherwise
+		!  just zero out the last item.
+		!
+		(ITMCOD= (IF .foreign THEN MAIL$_SEND_FOREIGN ELSE 0),
+		    BUFADR = 0, BUFSIZ = 0));
+    	    STATUS = MAIL$SEND_ADD_ATTRIBUTE (MAICTX, MAILST4, %REF (0));
+    	END;
+
+	IF (.status AND (.toadr [DSC$W_LENGTH] NEQU 0))
+	THEN
+	    BEGIN
+	    $ITMLST_INIT (ITMLST=MAILST1,
+			(ITMCOD=MAIL$_SEND_TO_LINE, 
+			 BUFADR= .toadr [DSC$A_POINTER],
+			 BUFSIZ= .toadr [DSC$W_LENGTH]));
+    	    	STATUS = MAIL$SEND_ADD_ATTRIBUTE (MAICTX, MAILST1, %REF (0));
+	    END;
+
+	IF (.status AND (.ccadr [DSC$W_LENGTH] NEQU 0))
+	THEN
+	    BEGIN
+	    $ITMLST_INIT (ITMLST=MAILST1,
+			(ITMCOD=MAIL$_SEND_CC_LINE, 
+			 BUFADR= .ccadr [DSC$A_POINTER],
+			 BUFSIZ= .ccadr [DSC$W_LENGTH]));
+    	    	STATUS = MAIL$SEND_ADD_ATTRIBUTE (MAICTX, MAILST1, %REF (0));
+	    END;
+
+    	FINSTAT = SS$_NORMAL;
+    	INIT_QUEUE (ERRMSGQ);
+
+	!
+	!  Add the address to the MAIL$ list.
+	!
+    	IF .STATUS THEN STATUS = ADD_ADDRESS (MAICTX, .USR);
+
+	!
+	!  If the address was added successfully, then send the .TMP file.
+	!
+    	IF .STATUS THEN
+    	BEGIN
+    	    $ITMLST_INIT (ITMLST=MAILST2,
+    	    	(ITMCOD=MAIL$_NOSIGNAL, BUFADR=0, BUFSIZ=0),
+    	    	(ITMCOD=MAIL$_SEND_FILENAME, BUFADR=.file[DSC$A_POINTER],
+    	    	    BUFSIZ=.file[DSC$W_LENGTH]));
+    	    STATUS = MAIL$SEND_ADD_BODYPART (MAICTX, MAILST2, %REF (0));
+    	END;
+
+    	IF .STATUS THEN STATUS = SEND_MESSAGE (MAICTX);
+    	$ITMLST_INIT (ITMLST=MAILST1,
+    	    (ITMCOD=MAIL$_NOSIGNAL, BUFADR=0, BUFSIZ=0));
+    	MAIL$SEND_END (MAICTX, MAILST1, %REF (0));
+
+    	TRACE ('  DELIVER:  Status=!XL from MAIL$ routines', .STATUS);
+    	IF NOT .status THEN TRACE_PUTMSG ('  DELIVER:    --!AS', .STATUS);
+	!
+	!  If an error occurred, is it one we can handle on a retry?
+	!
+    	IF .STATUS EQL SS$_EXDISKQUOTA AND NOT .local_info [LOCAL_V_EXQUOTA_FATAL]
+	THEN
+	    BEGIN
+    	    TRACE ('  DELIVER:    --mailbox full (EXDISKQUOTA); will retry.');
+    	    usr [RCPT_L_DSN_STATUS] = MX__DSN_WM_MBXFUL;
+    	    USR [RCPT_L_LASTERR] = .STATUS;
+    	    FREETXT (USR [RCPT_A_ROUTE]);  ! actual VMS username; will get reset on retry
+    	    USR [RCPT_A_ROUTE] = 0;
+    	    INSQUE (.USR, .RETRY [QUE_L_TAIL]);
+	    END
+    	ELSE IF .STATUS EQL MAIL$_LOGLINK OR .STATUS EQL MAIL$_OPENOUT
+	THEN
+	    BEGIN
+    	    TRACE ('  DELIVER:    --LOGLINK or OPENOUT failure; will retry.');
+    	    usr [RCPT_L_DSN_STATUS] = MX__DSN_WM_OTHER;
+    	    USR [RCPT_L_LASTERR] = .STATUS;
+    	    FREETXT (USR [RCPT_A_ROUTE]);  ! actual VMS username; will get reset on retry
+    	    USR [RCPT_A_ROUTE] = 0;
+    	    INSQUE (.USR, .RETRY [QUE_L_TAIL]);
+	    END
+    	ELSE
+	    BEGIN
+	    IF .STATUS			!Successful send, so add it to
+	    THEN
+		BEGIN					!... the LOCAL accounting file.
+		IF .LOCAL_INFO [LOCAL_V_ACCTG]
+		THEN
+		    ACC_LOG ('!17%D DELIVER: SOURCE="!AS", USER=!AD, SIZE=!UL',
+    	    	             0, SENDER, .ua [TXT_W_LEN], ua [TXT_T_TEXT],
+			     .MSGSIZE);
+    	    	usr [RCPT_L_DSN_STATUS] = MX__DSN_S__OTHER;
+    	    	usr [RCPT_L_STATUS] = SS$_NORMAL;
+		INSQUE (.usr, .success [QUE_L_TAIL]);	!Stick in success queue
+		END
+	     ELSE				!Delivery was not successful,
+	    	BEGIN				!... so return the message.
+    	    	LOCAL txt : REF TXTDEF;
+    	    	usr [RCPT_L_DSN_STATUS] = MX__DSN_FM_OTHER;
+    	    	usr [RCPT_L_STATUS] = .status;
+    	    	WHILE NOT REMQUE_HEAD (errmsgq, txt) DO INSQUE_TAIL (.txt, usr [RCPT_Q_DIAGTXTQUE]);
+    	    	DSN_REPORT_ADD_RCPT (dsnctx, usr, 2);
+    	    	MEM_FREERCPT (usr);
+		END;
+	     END;
+    END;
+
+    !
+    !  Free memory held by error queue, if there.
+    !
+    WHILE NOT REMQUE (.ERRMSGQ [QUE_L_HEAD], HDR) DO FREETXT (HDR);
+
+    !
+    !  Now re-create the USRQUE so that it consists only of those users
+    !  to which mail was successfully sent.  This is needed in case we
+    !  need to pass part 2 of a message through.  If there is no part
+    !  2 to send, well, we've just wasted a little bit of CPU time.
+    !
+    IF (.success [QUE_L_HEAD] NEQA success [QUE_L_HEAD]) !If we were successful,
+    THEN					!... then copy success queue
+	BEGIN					!... back as user queue
+	INIT_QUEUE (usrque);
+	WHILE NOT REMQUE (.success [QUE_L_HEAD], usr) DO
+		INSQUE (.usr, .usrque [QUE_L_TAIL]);
+	END;
+
+    SS$_NORMAL
+
+END;
+
+
+%SBTTL 'deliver_to_folder'
+ROUTINE deliver_to_folder (usrque_a, folder_a, file_a, from_a, to_a, cc_a, subj_a,
+	foreign, retry_a, sender_a, msgsize_a, dsnctx_a) =
+BEGIN
+!++
+! FUNCTIONAL DESCRIPTION:
+!
+!   This routine uses callable VMS Mail to deliver a message to a
+!   mail folder for a single user.
+!
+! RETURNS:  	cond_value, longword (unsigned), write only, by value
+!
+! FORMAL PARAMETERS:
+!
+!	usrque_a	- Address of queue listhead for the recipient (only 1 in queue)
+!   	folder_a    	- Address of descriptor for folder name
+!	file_a		- Address of descriptor for filename to mail
+!	from_a		- Address of descriptor for VMS Mail "From:" string
+!	to_a		- Address of descriptor for VMS Mail "To:" string
+!	cc_a		- Address of descriptor for VMS Mail "CC:" string
+!	subj_a		- Address of descriptor for the "Subj:" line.
+!	foreign		- Flag indicating whether /FOREIGN or not (BY VALUE)
+!	retry_a		- Address of queue listhead for retries
+!	sender_a	- Address of descriptor for sender string (for acctng)
+!	msgsize_a	- Address of longword for message size in bytes
+!
+! IMPLICIT INPUTS:  None.
+!
+! IMPLICIT OUTPUTS: None.
+!
+! COMPLETION CODES:
+!
+!   SS$_NORMAL:	    	normal successful completion.
+!
+! SIDE EFFECTS:
+!
+!   None.
+!--
+    BIND
+	usrque	= .usrque_a	: QUEDEF,
+    	folder	= .folder_a 	: BLOCK [,BYTE],
+	file	= .file_a	: $BBLOCK,
+	fromadr	= .from_a	: $BBLOCK,
+	toadr	= .to_a		: $BBLOCK,
+	ccadr	= .cc_a		: $BBLOCK,
+	subject	= .subj_a	: $BBLOCK,
+    	retry	= .retry_a	: QUEDEF,
+	sender	= .sender_a	: $BBLOCK,
+	msgsize	= .msgsize_a,
+    	dsnctx  = .dsnctx_a;
+
+    LOCAL
+    	USR 	: REF RCPTDEF,
+    	HDR 	: REF TXTDEF,
+    	time	: VECTOR [2,LONG],
+    	mfile	: BLOCK [DSC$K_S_BLN,BYTE],
+    	str 	: BLOCK [DSC$K_S_BLN,BYTE],
+    	MAILST1	: $ITMLST_DECL (ITEMS=1),
+    	MAILST2	: $ITMLST_DECL (ITEMS=2),
+    	MAILST4	: $ITMLST_DECL (ITEMS=4),
+    	fab 	: $FAB_DECL,
+    	fab2	: $FAB_DECL,
+    	rab 	: $RAB_DECL,
+    	rab2	: $RAB_DECL,
+    	nam 	: $NAM_DECL,
+    	xabfhc	: $XABFHC_DECL,
+    	mfspec	: BLOCK [256,BYTE],
+    	espec	: BLOCK [255,BYTE],
+    	rspec	: BLOCK [255,BYTE],
+    	mflen, pid, lock,
+	maictx, msgctx,
+	status;
+
+    INIT_QUEUE (errmsgq);
+    INIT_DYNDESC (str);
+    !
+    !  Build the sequential message file and use callable mail
+    !  to copy it into the user's mail folder.
+    !
+    !  N.B.: Even though the following looks like a loop through a queue,
+    !	     there is really only supposed to be one recipient in that queue.
+    !	     The loop construct was retained from the original code (in the deliver_to_recipients routine)
+    !	     and to break out of processing early in case of some kind of error.
+    !
+    WHILE NOT REMQUE (.USRQUE [QUE_L_HEAD], usr) DO
+    BEGIN
+    	BIND ua = .usr [RCPT_A_ROUTE] : TXTDEF;
+    	TRACE ('  DELIVER:  Delivering to !AD, folder !AS', .ua [TXT_W_LEN], ua [TXT_T_TEXT], folder);
+
+    	status = lock_folder (.ua [TXT_W_LEN], ua [TXT_T_TEXT], folder, lock);
+    	IF NOT .status THEN EXITLOOP;
+
+    	maictx = 0;
+    	$ITMLST_INIT (ITMLST=mailst1,
+    	    (ITMCOD=MAIL$_NOSIGNAL, BUFADR=mailst1, BUFSIZ=0));
+    	status = MAIL$USER_BEGIN (maictx, mailst1, %REF (0));
+    	IF NOT .status THEN EXITLOOP;
+
+    	mflen = 0;
+    	$ITMLST_INIT (ITMLST=mailst2,
+    	    (ITMCOD=MAIL$_NOSIGNAL, BUFADR=mailst2, BUFSIZ=0),
+    	    (ITMCOD=MAIL$_USER_USERNAME, BUFADR=ua [TXT_T_TEXT], BUFSIZ=.ua [TXT_W_LEN]));
+    	$ITMLST_INIT (ITMLST=mailst1,
+    	    (ITMCOD=MAIL$_USER_FULL_DIRECTORY, BUFADR=mfspec, BUFSIZ=%ALLOCATION (mfspec)-1, RETLEN=mflen));
+    	status = MAIL$USER_GET_INFO (maictx, mailst2, mailst1);
+    	MAIL$USER_END (maictx, %REF (0), %REF (0));
+    	IF NOT .status THEN EXITLOOP;
+
+    	IF .mflen GTR %ALLOCATION (mfspec)-9 THEN
+    	BEGIN
+    	    status = RMS$_FNM;
+    	    EXITLOOP;
+    	END;
+    	CH$MOVE (8, UPLIT ('MAIL.MAI'), CH$PLUS (mfspec, .mflen));
+    	mflen = .mflen + 8;
+
+    	$GETTIM (TIMADR=time);
+    	LIB$GETJPI (%REF (JPI$_PID), 0, 0, pid);
+    	LIB$SYS_FAO (%ASCID'MX_LOCAL_DIR:FLD_!XL_!XL_!XL.TMP', 0, str,
+    	    	    	.time [0], .time [1], .pid);
+    	$FAB_INIT (FAB=fab, FAC=PUT, MRS=0, FNA=.str [DSC$A_POINTER],
+    	    	    FNS=.str [DSC$W_LENGTH], RAT=CR, RFM=VAR, NAM=nam);
+    	$NAM_INIT (NAM=nam, ESA=espec, ESS=%ALLOCATION (espec),
+    	    	    RSA=rspec, RSS=%ALLOCATION (rspec));
+    	$RAB_INIT (RAB=rab, ROP=WBH, FAB=fab);
+    	status = $CREATE (FAB=fab);
+    	IF NOT .status THEN EXITLOOP;
+    	$CONNECT (RAB=rab);
+    	INIT_SDESC (mfile, .nam [NAM$B_RSL], rspec);
+
+    	rab [RAB$L_RBF] = UPLIT (%CHAR (12)); ! form feed
+    	rab [RAB$W_RSZ] = 1;
+    	$PUT (RAB=rab);
+
+    	LIB$SYS_FAO (%ASCID %STRING ('From:', %CHAR (9), '!AD !17%D'), 0, str,
+    	    	    	MIN (.fromadr [DSC$W_LENGTH], MAIL_HDR$C_MAX_SIZE-24),
+    	    	    	.fromadr [DSC$A_POINTER], 0);
+    	rab [RAB$L_RBF] = .str [DSC$A_POINTER];
+    	rab [RAB$W_RSZ] = .str [DSC$W_LENGTH];
+    	$PUT (RAB=rab);
+
+    	LIB$SYS_FAO (%ASCID %STRING ('To:', %CHAR (9), '!AD'), 0, str,
+    	    	    	(IF .toadr [DSC$W_LENGTH] NEQ 0 THEN MIN (.toadr [DSC$W_LENGTH], MAIL_HDR$C_MAX_SIZE-4)
+    	    	    	    ELSE .ua [TXT_W_LEN]),
+    	    	    	(IF .toadr [DSC$W_LENGTH] NEQ 0 THEN .toadr [DSC$A_POINTER] ELSE ua [TXT_T_TEXT]));
+    	rab [RAB$L_RBF] = .str [DSC$A_POINTER];
+    	rab [RAB$W_RSZ] = .str [DSC$W_LENGTH];
+    	$PUT (RAB=rab);
+
+    	LIB$SYS_FAO (%ASCID %STRING ('CC:', %CHAR (9), '!AD'), 0, str,
+    	    	    	MIN (.ccadr [DSC$W_LENGTH], MAIL_HDR$C_MAX_SIZE-4),
+    	    	    	.ccadr [DSC$A_POINTER]);
+    	rab [RAB$L_RBF] = .str [DSC$A_POINTER];
+    	rab [RAB$W_RSZ] = .str [DSC$W_LENGTH];
+    	$PUT (RAB=rab);
+
+    	LIB$SYS_FAO (%ASCID %STRING ('Subj:', %CHAR (9), '!AD'), 0, str,
+    	    	    	MIN (.subject [DSC$W_LENGTH], MAIL_HDR$C_MAX_SIZE-6),
+    	    	    	.subject [DSC$A_POINTER]);
+    	rab [RAB$L_RBF] = .str [DSC$A_POINTER];
+    	rab [RAB$W_RSZ] = .str [DSC$W_LENGTH];
+    	$PUT (RAB=rab);
+
+    	rab [RAB$W_RSZ] = 0;
+    	$PUT (RAB=rab);
+
+    	$FAB_INIT (FAB=fab2, FAC=GET, XAB=xabfhc, FNA=.file [DSC$A_POINTER], FNS=.file [DSC$W_LENGTH]);
+    	$RAB_INIT (RAB=rab2, FAB=fab2);
+    	$XABFHC_INIT (XAB=xabfhc);
+    	status = $OPEN (FAB=fab2);
+    	IF NOT .status THEN
+    	BEGIN
+    	    fab [FAB$V_DLT] = 1;
+    	    $CLOSE (FAB=fab);
+    	    EXITLOOP;
+    	END;
+    	$CONNECT (RAB=rab2);
+    	rab2 [RAB$W_USZ] = (IF .xabfhc [XAB$W_LRL] EQL 0 THEN MAIL_TXT$C_MAX_SIZE ELSE .xabfhc [XAB$W_LRL]);
+    	status = LIB$GET_VM (%REF (.rab2 [RAB$W_USZ]), rab2 [RAB$L_UBF]);
+    	IF NOT .status THEN
+    	BEGIN
+    	    fab [FAB$V_DLT] = 1;
+    	    $CLOSE (FAB=fab2);
+    	    $CLOSE (FAB=fab);
+    	    EXITLOOP;
+    	END;
+    	rab [RAB$L_RBF] = .rab2 [RAB$L_UBF];
+    	WHILE (status = $GET (RAB=rab2)) DO
+    	BEGIN
+    	    rab [RAB$W_RSZ] = MINU (.rab2 [RAB$W_RSZ], MAIL_CPY$C_MAX_SIZE);
+    	    IF NOT (status = $PUT (RAB=rab)) THEN EXITLOOP;
+    	END;
+    	LIB$FREE_VM (%REF (.rab2 [RAB$W_USZ]), rab2 [RAB$L_UBF]);
+    	IF .status EQL RMS$_EOF THEN status = 1;
+    	IF NOT .status THEN fab [FAB$V_DLT] = 1;
+    	$CLOSE (FAB=fab2);
+    	$CLOSE (FAB=fab);
+    	IF NOT .status THEN EXITLOOP;
+
+    	maictx = 0;
+    	status = MAIL$MAILFILE_BEGIN (maictx, %REF (0), %REF (0));
+    	IF NOT .status THEN EXITLOOP;
+    	$ITMLST_INIT (ITMLST=mailst2,
+    	    (ITMCOD=MAIL$_NOSIGNAL, BUFSIZ=0, BUFADR=mailst2),
+    	    (ITMCOD=MAIL$_MAILFILE_NAME, BUFSIZ=.mfile [DSC$W_LENGTH], BUFADR=.mfile [DSC$A_POINTER]));
+    	status = MAIL$MAILFILE_OPEN (maictx, mailst2, %REF (0));
+    	IF .status THEN
+    	BEGIN
+    	    msgctx = 0;
+    	    $ITMLST_INIT (ITMLST=mailst2,
+    	    	(ITMCOD=MAIL$_NOSIGNAL, BUFSIZ=0, BUFADR=mailst2),
+    	    	(ITMCOD=MAIL$_MESSAGE_FILE_CTX, BUFSIZ=4, BUFADR=maictx));
+    	    status = MAIL$MESSAGE_BEGIN (msgctx, mailst2, %REF (0));
+    	END;
+    	IF .status THEN
+    	BEGIN
+    	    LOCAL
+    	    	prvprv : BLOCK [8,BYTE];
+
+    	    IF .local_info [LOCAL_V_NO_EXQUOTA] THEN
+    	    	$SETPRV (ENBFLG=0, PRVADR=PRV_EXQUOTA, PRVPRV=prvprv);
+
+    	    $ITMLST_INIT (ITMLST=mailst4,
+    	    	(ITMCOD=MAIL$_MESSAGE_DEFAULT_NAME, BUFSIZ=.mflen, BUFADR=mfspec),
+    	    	(ITMCOD=MAIL$_MESSAGE_FILENAME, BUFSIZ=8, BUFADR=CH$PLUS (mfspec, .mflen-8)),
+    	    	(ITMCOD=MAIL$_MESSAGE_NEXT, BUFSIZ=0, BUFADR=mailst4),
+    	    	(ITMCOD=MAIL$_MESSAGE_FOLDER, BUFSIZ=.folder [DSC$W_LENGTH], BUFADR=.folder [DSC$A_POINTER]));
+            status = copy_message (msgctx, mailst4, %REF (0));
+    	    MAIL$MESSAGE_END (msgctx, %REF (0), %REF (0));
+    	    IF .local_info [LOCAL_V_NO_EXQUOTA] AND .prvprv [PRV$V_EXQUOTA] THEN
+    	    	$SETPRV (ENBFLG=1, PRVADR=PRV_EXQUOTA);
+    	END;
+    	MAIL$MAILFILE_CLOSE (maictx, %REF (0), %REF (0));
+    	MAIL$MAILFILE_END (maictx, %REF (0), %REF (0));
+
+    	IF .status THEN
+    	    notify_folder_delivery (.ua [txt_w_len], ua [txt_t_text], folder, fromadr);
+
+    	EXITLOOP;
+
+    END; ! fake while loop
+
+    LIB$DELETE_FILE (mfile);  ! Temporary message file
+    unlock_folder (lock);
+
+
+    TRACE ('  DELIVER:  Status=!XL from MAIL$ routines on folder delivery', .status);
+    IF NOT .status THEN TRACE_PUTMSG ('  DELIVER:    --!AS', .STATUS);
+    !
+    !  If an error occurred, is it one we can handle on a retry?
+    !
+    IF .STATUS EQL MAIL$_LOGLINK OR .STATUS EQL MAIL$_OPENOUT
+    THEN
+    BEGIN
+    	TRACE ('  DELIVER:    --LOGLINK or OPENOUT failure; will retry.');
+    	USR [RCPT_L_LASTERR] = .STATUS;
+    	usr [RCPT_L_DSN_STATUS] = MX__DSN_WM_OTHER;
+    	FREETXT (USR [RCPT_A_ROUTE]);  ! actual VMS username; will get reset on retry
+    	USR [RCPT_A_ROUTE] = 0;
+    	INSQUE (.USR, .RETRY [QUE_L_TAIL]);
+    END
+    ELSE
+    BEGIN
+	IF .status THEN
+	BEGIN					!... the LOCAL accounting file.
+    	    BIND ua = .usr [RCPT_A_ROUTE] : TXTDEF;
+	    IF .LOCAL_INFO [LOCAL_V_ACCTG] THEN
+	    	ACC_LOG ('!17%D DELIVER: SOURCE="!AS", USER=!AD, SIZE=!UL',
+    	    	             0, SENDER, .ua [TXT_W_LEN], ua [TXT_T_TEXT],
+			     .MSGSIZE);
+    	    usr [RCPT_L_DSN_STATUS] = MX__DSN_SM_OTHER;
+    	    usr [RCPT_L_STATUS] = SS$_NORMAL;
+    	    DSN_REPORT_ADD_RCPT (dsnctx, usr, 2);
+    	    MEM_FREERCPT (usr);
+    	END
+	ELSE				!Delivery was not successful,
+	BEGIN				!... so return the message.
+            LOCAL txt : REF TXTDEF;
+    	    usr [RCPT_L_DSN_STATUS] = MX__DSN_FM_OTHER;
+    	    usr [RCPT_L_STATUS] = .status;
+            WHILE NOT REMQUE_HEAD (errmsgq, txt) DO
+                INSQUE_TAIL (.txt, usr [RCPT_Q_DIAGTXTQUE]);
+    	    DSN_REPORT_ADD_RCPT (dsnctx, usr, 2);
+	    MEM_FREERCPT (usr);		!Free user memory
+    	END;
+    END;
+
+    WHILE NOT REMQUE_HEAD (errmsgq, hdr) DO
+        FREETXT (hdr);
+
+    FREE_STRINGS (str);
+
+    SS$_NORMAL
+
+END; ! deliver_to_folder
+
+
+%SBTTL 'WRITE_ERROR_HEADERS'
+ROUTINE WRITE_ERROR_HEADERS (hdrque_a, type_a, success_msg_a,
+			     status1_a, status2_a) =
+BEGIN
+!++
+! FUNCTIONAL DESCRIPTION:
+!
+!	This routine writes informational X-MX- headers for decoded files.
+!
+! RETURNS:  	cond_value, longword (unsigned), write only, by value
+!
+! FORMAL PARAMETERS:
+!
+!	hdrque_a	- Address of header queue
+!	type_a		- Address of descriptor for decode type
+!	success_msg_a	- Address of descriptor for success message
+!	status1_a	- Address of first status value
+!	status2_a	- Address of additional status value
+!
+! IMPLICIT INPUTS:  None.
+!
+! IMPLICIT OUTPUTS: None.
+!
+! COMPLETION CODES:
+!
+!   SS$_NORMAL:	    	normal successful completion.
+!
+! SIDE EFFECTS:
+!
+!   None.
+!--
+    BIND
+	hdrque		= .hdrque_a		: QUEDEF,
+	type		= .type_a		: $BBLOCK,
+	success_msg	= .success_msg_a	: $BBLOCK,
+	status1		= .status1_a,
+	status2		= .status2_a;
+
+    LOCAL
+	status,
+	msg		: $BBLOCK[DSC$K_S_BLN];
+
+    INIT_DYNDESC (msg);
+    IF NOT(.status1)
+    THEN
+	IF (.status1 EQLU SS$_ABORT)
+	THEN
+	    LIB$SYS_FAO (%ASCID %STRING ('X-MX-Warning: ',
+				'!AS encoding contains invalid characters'),
+			0, msg, type)
+	ELSE
+	    BEGIN
+	    LOCAL errmsg_buff	: $BBLOCK[255],
+		  errmsg	: $BBLOCK[DSC$K_S_BLN];
+	    INIT_SDESC (errmsg, 256, errmsg_buff);
+	    LIB$SYS_FAO (%ASCID %STRING ('X-MX-Warning: Error decoding !AS ',
+			'file included below'), 0, msg, type);
+
+	    INSTXT (msg, .hdrque [QUE_L_TAIL], MX_K_HDR_OTHER);
+
+	    $GETMSG (MSGID = .status1, MSGLEN = errmsg, BUFADR = errmsg);
+	    LIB$SYS_FAO (%ASCID'X-MX-Warning: !AS', 0, msg, errmsg);
+	    IF (.status2 NEQU 0)
+	    THEN
+		BEGIN
+		INSTXT (msg, .hdrque [QUE_L_TAIL], MX_K_HDR_OTHER);
+		errmsg [DSC$W_LENGTH] = 255;
+		$GETMSG (MSGID = .status2, MSGLEN = errmsg,
+			 BUFADR = errmsg);
+		LIB$SYS_FAO (%ASCID'X-MX-Warning: !AS', 0, msg, errmsg);
+		END;
+	    END
+    ELSE
+	LIB$SYS_FAO (%ASCID'X-MX-Comment: !AS', 0, msg, success_msg);
+
+    INSTXT (msg, .hdrque [QUE_L_TAIL], MX_K_HDR_OTHER);
+
+    FREE_STRINGS (msg);
+
+    SS$_NORMAL
+
+END;
+
+%SBTTL 'lock_folder'
+ROUTINE lock_folder (ulen, unam_a, fdsc_a, lock_a) = 
+BEGIN
+!++
+! FUNCTIONAL DESCRIPTION:
+!
+!   Uses the lock manager to provide an interlock against simultaneous
+!   deliveries to the same user/folder combination.
+!
+! RETURNS:  	cond_value, longword (unsigned), write only, by value
+!
+! PROTOTYPE:
+!
+!   x
+!
+! IMPLICIT INPUTS:  None.
+!
+! IMPLICIT OUTPUTS: None.
+!
+! COMPLETION CODES:
+!
+!   SS$_NORMAL:	    	normal successful completion.
+!
+! SIDE EFFECTS:
+!
+!   None.
+!--
+    BIND
+    	lock	= .lock_a   : LONG;
+    LOCAL
+    	resnam	: BLOCK [DSC$K_S_BLN,BYTE],
+    	resbuf	: BLOCK [31,BYTE],  ! 31 is max length of a resource name
+    	lsb 	: BLOCK [8,BYTE],
+    	status;
+
+    INIT_SDESC (resnam, %ALLOCATION (resbuf), resbuf);
+    status = $FAO (%ASCID'MX_!AD+!AS', resnam [DSC$W_LENGTH], resnam, .ulen, .unam_a, .fdsc_a);
+    IF NOT .status THEN RETURN .status;
+    status = $ENQW (LKMODE=LCK$K_EXMODE, LKSB=lsb, FLAGS=LCK$M_SYSTEM, RESNAM=resnam);
+    IF .status THEN status = .lsb [0,0,16,0];
+    IF .status THEN lock = .lsb [4,0,32,0];
+
+    .status
+
+END; ! lock_folder
+
+
+%SBTTL 'unlock_folder'
+ROUTINE unlock_folder (lock_a) = 
+BEGIN
+!++
+! FUNCTIONAL DESCRIPTION:
+!
+!   Releases the lock taken out by lock_folder.
+!
+! RETURNS:  	cond_value, longword (unsigned), write only, by value
+!
+! PROTOTYPE:
+!
+!   UNLOCK_FOLDER lockid
+!
+! IMPLICIT INPUTS:  None.
+!
+! IMPLICIT OUTPUTS: None.
+!
+! COMPLETION CODES:
+!
+!   SS$_NORMAL:	    	normal successful completion.
+!
+! SIDE EFFECTS:
+!
+!   None.
+!--
+    BIND
+    	lock	= .lock_a   : LONG;
+
+    $DEQ (LKID=.lock)
+
+END; ! unlock_folder
+
+%SBTTL 'notify_folder_delivery'
+ROUTINE notify_folder_delivery (ulen, unam_a, folddsc_a, fromdsc_a) = 
+BEGIN
+!++
+! FUNCTIONAL DESCRIPTION:
+!
+!   Sends a mail broadcast to notify a user of delivery to a folder.
+!
+! RETURNS:  	cond_value, longword (unsigned), write only, by value
+!
+! PROTOTYPE:
+!
+!   NOTIFY_FOLER_DELIVERY  ulen, unam, folddsc, fromdsc
+!
+!   ulen:   	longword_unsigned, read only, by value
+!   unam:   	character string, read only, by reference
+!   folddsc:	character string, read only, by descriptor
+!   fromdsc:	character string, read only, by descriptor
+!
+! IMPLICIT INPUTS:  None.
+!
+! IMPLICIT OUTPUTS: None.
+!
+! COMPLETION CODES:
+!
+!   SS$_NORMAL:	    	normal successful completion.
+!
+! SIDE EFFECTS:
+!
+!   None.
+!--
+
+    LOCAL
+    	msgdsc	: BLOCK [DSC$K_S_BLN,BYTE],
+    	usrdsc	: BLOCK [DSC$K_S_BLN,BYTE],
+    	msgbuf	: VECTOR [128,BYTE],
+    	lnmlst	: $ITMLST_DECL (ITEMS=1),
+    	mflags,
+    	status;
+
+    BIND
+    	withtime = %ASCID %STRING (%CHAR (13), %CHAR (10), %CHAR (7), 'New mail in folder !AS from !AS (!8%T)', %CHAR (13)),
+    	notime = %ASCID %STRING (%CHAR (13), %CHAR (10), %CHAR (7), 'New mail in folder !AS from !AS', %CHAR (13));
+
+    $ITMLST_INIT (ITMLST=lnmlst,
+    	(ITMCOD=LNM$_STRING, BUFADR=msgbuf, BUFSIZ=%ALLOCATION (msgbuf), RETLEN=mflags));
+    mflags = 0;
+    status = $TRNLNM (LOGNAM=%ASCID'MAIL$SYSTEM_FLAGS', TABNAM=%ASCID'LNM$SYSTEM', ITMLST=lnmlst);
+    IF .status THEN
+    	status = LIB$CVT_DTB (.mflags, msgbuf, mflags);
+    IF NOT .status THEN mflags = 0;
+
+    INIT_SDESC (msgdsc, %ALLOCATION (msgbuf), msgbuf);
+    status = $FAO ((IF .mflags<2,1,0> THEN withtime ELSE notime), msgdsc [DSC$W_LENGTH], msgdsc, .folddsc_a, .fromdsc_a, 0);
+    INIT_SDESC (usrdsc, .ulen, .unam_a);
+    IF .status THEN
+    	status = $BRKTHRUW (MSGBUF=msgdsc, SENDTO=usrdsc, SNDTYP=BRK$C_USERNAME, CARCON=0,
+    	    	    	    FLAGS=(IF .mflags<1,1,0> THEN BRK$M_CLUSTER ELSE 0), REQID=BRK$C_MAIL, TIMOUT=5);
+
+    .status
+
+END; ! notify_folder_delivery
+
+END
+ELUDOM
