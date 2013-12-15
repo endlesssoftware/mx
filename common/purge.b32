@@ -1,0 +1,182 @@
+%TITLE 'PURGE'
+MODULE PURGE (IDENT='V1.0-1', ADDRESSING_MODE (EXTERNAL=LONG_RELATIVE, NONEXTERNAL=LONG_RELATIVE)) =
+BEGIN
+!++
+! FACILITY: 	    MX
+!
+! ABSTRACT: 	    Routine for purging files.
+!
+! MODULE DESCRIPTION:
+!
+!   description
+!
+! AUTHOR:   	    M. Madison
+!
+! Copyright (c) 2008, Matthew Madison.
+! 
+! All rights reserved.
+! 
+! Redistribution and use in source and binary forms, with or without
+! modification, are permitted provided that the following conditions
+! are met:
+! 
+!     * Redistributions of source code must retain the above
+!       copyright notice, this list of conditions and the following
+!       disclaimer.
+!     * Redistributions in binary form must reproduce the above
+!       copyright notice, this list of conditions and the following
+!       disclaimer in the documentation and/or other materials provided
+!       with the distribution.
+!     * Neither the name of the copyright owner nor the names of any
+!       other contributors may be used to endorse or promote products
+!       derived from this software without specific prior written
+!       permission.
+! 
+! THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
+! "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
+! LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
+! A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
+! OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
+! SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
+! LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
+! DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
+! THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
+! (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
+! OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+!
+! CREATION DATE:    02-JUL-1998
+!
+! MODIFICATION HISTORY:
+!
+!   02-JUL-1998	V1.0	Madison	    Initial coding.
+!   11-AUG-1998	V1.0-1	Madison	    LOWVER doesn't get set on $SEARCH.
+!--
+    LIBRARY 'SYS$LIBRARY:STARLET';
+
+    FORWARD ROUTINE
+    	MX_FILE_PURGE;
+
+    EXTERNAL ROUTINE
+    	LIB$ANALYZE_SDESC   : BLISS ADDRESSING_MODE (GENERAL);
+
+
+%SBTTL 'MX_FILE_PURGE'
+GLOBAL ROUTINE MX_FILE_PURGE (fspec_a, reset_version) = 
+BEGIN
+!++
+! FUNCTIONAL DESCRIPTION:
+!
+!   Purges old versions of files, and optionally resets the
+!   version of the remaining file to 1.
+!
+! RETURNS:  	cond_value, longword (unsigned), write only, by value
+!
+! PROTOTYPE:
+!
+!   MX_FILE_PURGE  fspec [,resetversion]
+!
+! IMPLICIT INPUTS:  None.
+!
+! IMPLICIT OUTPUTS: None.
+!
+! COMPLETION CODES:
+!
+!   SS$_NORMAL:	    	normal successful completion.
+!
+! SIDE EFFECTS:	    None.
+!--
+    BUILTIN
+    	ACTUALCOUNT;
+
+    LOCAL
+    	fsptr,
+    	fslen	: WORD,
+    	orlen	: WORD,
+    	nrlen	: WORD,
+    	fab 	: $FAB_DECL,
+    	erafab	: $FAB_DECL,
+    	nam 	: $NAM_DECL,
+    	espec	: VECTOR [256,BYTE],
+    	rspec	: VECTOR [256,BYTE],
+    	fspec	: VECTOR [256,BYTE],
+    	origfs	: VECTOR [256,BYTE],
+    	newfs	: VECTOR [256,BYTE],
+    	dorename,
+    	status;
+
+    dorename = ACTUALCOUNT () GTR 1 AND .reset_version;
+
+    status = LIB$ANALYZE_SDESC (.fspec_a, fslen, fsptr);
+    IF NOT .status THEN RETURN .status;
+
+    $FAB_INIT (FAB=fab, NAM=nam, FNA=.fsptr, FNS=.fslen, FAC=GET);
+    $NAM_INIT (NAM=nam, ESS=255, ESA=espec, RSS=255, RSA=rspec);
+
+    status = $PARSE (FAB=fab);
+    IF NOT .status THEN RETURN .status;
+
+    IF .nam [NAM$V_WILDCARD] OR .nam [NAM$V_EXP_VER] THEN
+    BEGIN
+    	nam [NAM$V_SYNCHK] = 1;
+    	$PARSE (FAB=fab);
+    	RETURN SS$_BADPARAM;
+    END;
+
+    fslen =  .nam [NAM$B_ESL] - .nam [NAM$B_VER];
+    CH$MOVE (.fslen, .nam [NAM$L_ESA], fspec);
+    CH$WCHAR (%C';', CH$PLUS (fspec, .fslen));
+    CH$WCHAR (%C'*', CH$PLUS (fspec, .fslen+1));
+    fslen = .fslen + 2;
+
+    nam [NAM$V_SYNCHK] = 1;
+    $PARSE (FAB=fab);
+
+    $FAB_INIT (FAB=fab, NAM=nam, FNA=fspec, FNS=.fslen, FAC=GET);
+    $NAM_INIT (NAM=nam, ESS=255, ESA=espec, RSS=255, RSA=rspec);
+
+    status = $PARSE (FAB=fab);
+    IF NOT .status THEN RETURN .status;
+
+    $FAB_INIT (FAB=erafab, FNA=rspec, FNS=0);
+
+    status = $SEARCH (FAB=fab);
+    IF .status THEN
+    BEGIN
+    	IF .dorename THEN
+    	    dorename = NOT (.nam [NAM$B_VER] EQL 2 AND CH$RCHAR (CH$PLUS (.nam [NAM$L_VER],1)) EQL %C'1');
+    	IF .dorename THEN
+    	BEGIN
+    	    CH$MOVE (.nam [NAM$B_RSL], .nam [NAM$L_RSA], origfs);
+    	    orlen = .nam [NAM$B_RSL];
+    	    nrlen = .nam [NAM$B_RSL] - .nam [NAM$B_VER];
+    	    CH$MOVE (.nrlen, .nam [NAM$L_RSA], newfs);
+    	    CH$WCHAR (%C';', CH$PLUS (newfs, .nrlen));
+    	    CH$WCHAR (%C'1', CH$PLUS (newfs, .nrlen+1));
+    	    nrlen = .nrlen + 2;
+    	END;
+    	WHILE $SEARCH (FAB=fab) DO
+    	BEGIN
+    	    erafab [FAB$B_FNS] = .nam [NAM$B_RSL];
+    	    status = $ERASE (FAB=erafab);
+    	    IF NOT .status THEN EXITLOOP;
+    	END;
+    END;
+
+    nam [NAM$V_SYNCHK] = 1;
+    $PARSE (FAB=fab);
+
+    IF .status AND .dorename THEN
+    BEGIN
+    	LOCAL
+    	    newfab  : $FAB_DECL;
+    	$FAB_INIT (FAB=fab, FNA=origfs, FNS=.orlen);
+    	$FAB_INIT (FAB=newfab, FNA=newfs, FNS=.nrlen);
+    	status = $RENAME (OLDFAB=fab, NEWFAB=newfab);
+    END;
+
+    .status
+
+END; ! MX_FILE_PURGE
+
+END
+ELUDOM

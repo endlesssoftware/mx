@@ -1,0 +1,14 @@
+!+
+!   MD5DEF.R32
+!
+!   Definitions for callers of the MD5 routines.
+!   07-JUN-1997 mdm
+!-
+
+    LITERAL
+    	MD5_S_MD5CTXDEF	= 88,
+    	MD5_S_MD5SUMDEF	= 16;
+
+    MACRO
+    	MD5CTXDEF   = BLOCK [MD5_S_MD5CTXDEF,BYTE]%,
+    	MD5SUMDEF   = BLOCK [MD5_S_MD5SUMDEF,BYTE]%;

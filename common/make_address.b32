@@ -1,0 +1,393 @@
+%TITLE 'MAKE_ADDRESS'
+MODULE MAKE_ADDRESS (IDENT='V2.0-2', ADDRESSING_MODE (EXTERNAL=LONG_RELATIVE,NONEXTERNAL=LONG_RELATIVE)) =
+BEGIN
+!++
+! FACILITY: 	    MX
+!
+! ABSTRACT: 	    Routines for forming addresses for local users.
+!
+! MODULE DESCRIPTION:
+!
+!
+! AUTHOR:   	    M. Madison
+!
+! Copyright (c) 2008, Matthew Madison.
+! 
+! All rights reserved.
+! 
+! Redistribution and use in source and binary forms, with or without
+! modification, are permitted provided that the following conditions
+! are met:
+! 
+!     * Redistributions of source code must retain the above
+!       copyright notice, this list of conditions and the following
+!       disclaimer.
+!     * Redistributions in binary form must reproduce the above
+!       copyright notice, this list of conditions and the following
+!       disclaimer in the documentation and/or other materials provided
+!       with the distribution.
+!     * Neither the name of the copyright owner nor the names of any
+!       other contributors may be used to endorse or promote products
+!       derived from this software without specific prior written
+!       permission.
+! 
+! THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
+! "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
+! LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
+! A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
+! OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
+! SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
+! LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
+! DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
+! THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
+! (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
+! OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+!
+! CREATION DATE:    13-MAR-1992
+!
+! MODIFICATION HISTORY:
+!
+!   13-MAR-1992 V1.0  	Madison	    Initial coding.
+!   01-MAY-1997	V2.0	Madison	    New routines, new formatting logicals.
+!   05-MAY-1997	V2.0-1	Madision    Allow host specification on MAKE_ADDR821.
+!   24-JAN-2000	V2.0-2	Madison	    Fix ACTUALCOUNT ref in  MAKE_TO_ADDRESS and MAKE_ADDR821.
+!--
+
+    LIBRARY 'SYS$LIBRARY:STARLET';
+    LIBRARY 'SYS$LIBRARY:TPAMAC';
+    LIBRARY 'MX_SRC_COMMON:MX';
+
+    FORWARD ROUTINE
+    	MAKE_ADDRESS,
+    	MAKE_ADDR821,
+    	MAKE_TO_ADDRESS,
+    	IS_LOCAL_HOST,
+    	GET_EXEC_LOGICAL;
+
+    EXTERNAL ROUTINE
+    	VERIFY_PHRASE,
+    	G_HAT (STR$COPY_DX, STR$COPY_R, STR$CONCAT, LIB$SYS_FAO,
+    	       LIB$SCOPY_DXDX, STR$CASE_BLIND_COMPARE);
+
+    BIND
+    	mx_from_host	= %ASCID'MX_FROM_HOST'	: BLOCK [,BYTE],
+    	mx_envfrom_host	= %ASCID'MX_ENVELOPE_FROM_HOST' : BLOCK [,BYTE],
+    	mx_node_name	= %ASCID'MX_NODE_NAME'	: BLOCK [,BYTE],
+    	mx_to_host  	= %ASCID'MX_TO_HOST'	: BLOCK [,BYTE],
+    	mx_vmsmail_from_format = %ASCID'MX_VMSMAIL_FROM_FORMAT'	: BLOCK [,BYTE],
+    	mx_envfrom_format = %ASCID'MX_ENVELOPE_FROM_FORMAT' 	: BLOCK [,BYTE];
+
+%SBTTL 'MAKE_ADDRESS'
+GLOBAL ROUTINE MAKE_ADDRESS (USER_A, PNAME_A, ADDR822_A, LEN_A) =
+BEGIN
+!++
+! FUNCTIONAL DESCRIPTION:
+!
+!   Formats a FROM address. (RFC822 From)
+!
+! RETURNS:  	cond_value, longword (unsigned), write only, by value
+!
+! PROTOTYPE:
+!
+!   MAKE_ADDRESS  username, persname, outstr [,len]
+!
+! IMPLICIT INPUTS:  None.
+!
+! IMPLICIT OUTPUTS: None.
+!
+! COMPLETION CODES:
+!
+!   SS$_NORMAL:	    	normal successful completion.
+!
+! SIDE EFFECTS:
+!
+!   None.
+!--
+    BUILTIN
+    	ACTUALCOUNT;
+
+    BIND
+    	USER	= .USER_A   : BLOCK [DSC$K_S_BLN,BYTE],
+    	PNAME	= .PNAME_A  : BLOCK [DSC$K_S_BLN,BYTE],
+    	ADDR822	= .ADDR822_A: BLOCK [DSC$K_S_BLN,BYTE];
+
+    LOCAL
+    	ADRBUF	: VECTOR [1024,BYTE],
+    	ADRDSC	: BLOCK [DSC$K_S_BLN,BYTE],
+    	MXNBUF	: VECTOR [256,BYTE],
+    	MXNODE	: BLOCK [DSC$K_S_BLN,BYTE],
+    	FRMBUF	: VECTOR [256,BYTE],
+    	FRMFMT	: BLOCK [DSC$K_S_BLN,BYTE],
+    	STR 	: BLOCK [DSC$K_S_BLN,BYTE],
+    	STATUS;
+
+    INIT_SDESC (ADRDSC, %ALLOCATION (ADRBUF), ADRBUF);
+    INIT_SDESC (MXNODE, %ALLOCATION (MXNBUF), MXNBUF);
+    INIT_SDESC (FRMFMT, %ALLOCATION (FRMBUF), FRMBUF);
+
+    STATUS = GET_EXEC_LOGICAL (mx_from_host, MXNODE, MXNODE [DSC$W_LENGTH]);
+    IF NOT .STATUS THEN
+    	STATUS = GET_EXEC_LOGICAL (mx_node_name, MXNODE, MXNODE [DSC$W_LENGTH]);
+    IF NOT .STATUS THEN RETURN .STATUS;
+
+    IF GET_EXEC_LOGICAL (mx_vmsmail_from_format, FRMFMT, FRMFMT [DSC$W_LENGTH]) THEN
+    	STATUS = $FAO (FRMFMT, ADRDSC [DSC$W_LENGTH], ADRDSC, USER, MXNODE)
+    ELSE
+    	STATUS = $FAO (%ASCID'<!AS@!AS>', ADRDSC [DSC$W_LENGTH], ADRDSC, USER, MXNODE);
+
+    IF NOT .STATUS THEN RETURN .STATUS;
+
+    IF .PNAME_A NEQA 0 THEN
+    	IF .PNAME [DSC$W_LENGTH] GTR 0 THEN
+    	BEGIN
+    	    INIT_DYNDESC (STR);
+    	    VERIFY_PHRASE (PNAME, STR);
+    	    STATUS = LIB$SYS_FAO (%ASCID'!AS !AS',
+    	    	(IF ACTUALCOUNT () GTR 3 THEN .LEN_A ELSE 0), ADDR822,
+    	    	STR, ADRDSC);
+    	    FREE_STRINGS (STR);
+    	    RETURN .STATUS;
+    	END;
+
+    ADRDSC [DSC$A_POINTER] = CH$PLUS (.ADRDSC [DSC$A_POINTER], 1);
+    ADRDSC [DSC$W_LENGTH] = .ADRDSC [DSC$W_LENGTH]-2;
+    STATUS = LIB$SCOPY_DXDX (ADRDSC, ADDR822);
+    IF .STATUS AND ACTUALCOUNT () GTR 3 THEN
+    	IF .LEN_A NEQA 0 THEN
+    	BEGIN
+    	    BIND LEN = .LEN_A : WORD;
+    	    LEN = .ADRDSC [DSC$W_LENGTH];
+    	END;
+    
+    .STATUS
+
+END; ! MAKE_ADDRESS
+
+%SBTTL 'MAKE_ADDR821'
+GLOBAL ROUTINE MAKE_ADDR821 (USER_A, ADDR821_A, LEN_A, HOST_A) =
+BEGIN
+!++
+! FUNCTIONAL DESCRIPTION:
+!
+!   Formats an envelope FROM address.
+!
+! RETURNS:  	cond_value, longword (unsigned), write only, by value
+!
+! PROTOTYPE:
+!
+!   MAKE_ADDR821  username, outstr [,len] [,host]
+!
+! IMPLICIT INPUTS:  None.
+!
+! IMPLICIT OUTPUTS: None.
+!
+! COMPLETION CODES:
+!
+!   SS$_NORMAL:	    	normal successful completion.
+!
+! SIDE EFFECTS:
+!
+!   None.
+!--
+    BUILTIN
+    	ACTUALCOUNT;
+
+    BIND
+    	USER	= .USER_A   : BLOCK [DSC$K_S_BLN,BYTE],
+    	ADDR821	= .ADDR821_A: BLOCK [DSC$K_S_BLN,BYTE];
+
+    LOCAL
+    	ADRBUF	: VECTOR [1024,BYTE],
+    	ADRDSC	: BLOCK [DSC$K_S_BLN,BYTE],
+    	MXNBUF	: VECTOR [255,BYTE],
+    	MXNODE	: BLOCK [DSC$K_S_BLN,BYTE],
+    	FRMBUF	: VECTOR [255,BYTE],
+    	FRMFMT	: BLOCK [DSC$K_S_BLN,BYTE],
+    	STATUS;
+
+    INIT_SDESC (ADRDSC, %ALLOCATION (ADRBUF), ADRBUF);
+    INIT_SDESC (MXNODE, %ALLOCATION (MXNBUF), MXNBUF);
+    INIT_SDESC (FRMFMT, %ALLOCATION (FRMBUF), FRMBUF);
+
+    IF ACTUALCOUNT () GTR 3 AND .HOST_A NEQA 0 THEN
+    	CH$MOVE (DSC$K_S_BLN, .HOST_A, MXNODE)
+    ELSE
+    BEGIN
+    	STATUS = GET_EXEC_LOGICAL (mx_envfrom_host, MXNODE, MXNODE [DSC$W_LENGTH]);
+    	IF NOT .STATUS THEN
+    	    STATUS = GET_EXEC_LOGICAL (mx_node_name, MXNODE, MXNODE [DSC$W_LENGTH]);
+    	IF NOT .STATUS THEN RETURN .STATUS;
+    END;
+
+    IF GET_EXEC_LOGICAL (mx_envfrom_format, FRMFMT, FRMFMT [DSC$W_LENGTH]) THEN
+    	STATUS = $FAO (FRMFMT, ADRDSC [DSC$W_LENGTH], ADRDSC, USER, MXNODE)
+    ELSE
+    	STATUS = $FAO (%ASCID'<!AS@!AS>', ADRDSC [DSC$W_LENGTH], ADRDSC, USER, MXNODE);
+
+    IF .STATUS THEN STATUS = LIB$SCOPY_DXDX (ADRDSC, ADDR821);
+
+    IF .STATUS AND ACTUALCOUNT () GTR 2 THEN
+    	IF .LEN_A NEQA 0 THEN
+    	BEGIN
+    	    BIND LEN = .LEN_A : WORD;
+    	    LEN = .ADRDSC [DSC$W_LENGTH];
+    	END;
+    
+    .STATUS
+
+END; ! MAKE_ADDR821
+
+%SBTTL 'MAKE_TO_ADDRESS'
+GLOBAL ROUTINE MAKE_TO_ADDRESS (USER_A, ADDR822_A, LEN_A) =
+BEGIN
+!++
+! FUNCTIONAL DESCRIPTION:
+!
+!   Formats a TO address.
+!
+! RETURNS:  	cond_value, longword (unsigned), write only, by value
+!
+! PROTOTYPE:
+!
+!   MAKE_TO_ADDRESS  username, outstr [,len]
+!
+! IMPLICIT INPUTS:  None.
+!
+! IMPLICIT OUTPUTS: None.
+!
+! COMPLETION CODES:
+!
+!   SS$_NORMAL:	    	normal successful completion.
+!
+! SIDE EFFECTS:
+!
+!   None.
+!--
+    BUILTIN
+    	ACTUALCOUNT;
+
+    BIND
+    	USER	= .USER_A   : BLOCK [DSC$K_S_BLN,BYTE],
+    	ADDR822	= .ADDR822_A: BLOCK [DSC$K_S_BLN,BYTE];
+
+    LOCAL
+    	ADRBUF	: VECTOR [1024,BYTE],
+    	ADRDSC	: BLOCK [DSC$K_S_BLN,BYTE],
+    	MXNBUF	: VECTOR [255,BYTE],
+    	MXNODE	: BLOCK [DSC$K_S_BLN,BYTE],
+    	STATUS;
+
+    INIT_SDESC (ADRDSC, %ALLOCATION (ADRBUF), ADRBUF);
+    INIT_SDESC (MXNODE, %ALLOCATION (MXNBUF), MXNBUF);
+
+    STATUS = GET_EXEC_LOGICAL (mx_to_host, MXNODE, MXNODE [DSC$W_LENGTH]);
+    IF NOT .STATUS THEN
+    	STATUS = GET_EXEC_LOGICAL (mx_node_name, MXNODE, MXNODE [DSC$W_LENGTH]);
+    IF NOT .STATUS THEN RETURN .STATUS;
+
+    STATUS = $FAO (%ASCID'!AS@!AS', ADRDSC [DSC$W_LENGTH], ADRDSC, USER, MXNODE);
+
+    IF NOT .STATUS THEN RETURN .STATUS;
+
+    STATUS = LIB$SCOPY_DXDX (ADRDSC, ADDR822);
+    IF .STATUS AND ACTUALCOUNT () GTR 2 THEN
+    	IF .LEN_A NEQA 0 THEN
+    	BEGIN
+    	    BIND LEN = .LEN_A : WORD;
+    	    LEN = .ADRDSC [DSC$W_LENGTH];
+    	END;
+    
+    .STATUS
+
+END; ! MAKE_TO_ADDRESS
+
+%SBTTL 'IS_LOCAL_HOST'
+GLOBAL ROUTINE IS_LOCAL_HOST (type, dsc_a) = 
+BEGIN
+!++
+! FUNCTIONAL DESCRIPTION:
+!
+!   Checks to see if a host name is equivalent to the "local" host name
+!   (for the purposes of address formatting).
+!
+! RETURNS:  	cond_value, longword (unsigned), write only, by value
+!
+! PROTOTYPE:
+!
+!   IS_LOCAL_HOST  format-type, length, pointer
+!
+! IMPLICIT INPUTS:  None.
+!
+! IMPLICIT OUTPUTS: None.
+!
+! COMPLETION CODES:
+!
+!   SS$_NORMAL:	    	normal successful completion.
+!
+! SIDE EFFECTS:
+!
+!   None.
+!--
+    LOCAL
+    	hbuf	: VECTOR [256,BYTE],
+    	hdsc	: BLOCK [DSC$K_S_BLN,BYTE],
+    	lognam	: REF BLOCK [,BYTE],
+    	status;
+
+    INIT_SDESC (hdsc, %ALLOCATION (hbuf), hbuf);
+    SELECTONE .type OF
+    SET
+    	[MX__FMT_FROM] 	    : lognam = mx_from_host;
+    	[MX__FMT_ENVFROM]   : lognam = mx_envfrom_host;
+    	[MX__FMT_TO]	    : lognam = mx_to_host;
+    	[OTHERWISE] 	    : lognam = mx_node_name;
+    TES;
+    status = GET_EXEC_LOGICAL (.lognam, hdsc, hdsc [DSC$W_LENGTH]);
+    IF NOT .status THEN status = GET_EXEC_LOGICAL (mx_node_name, hdsc, hdsc [DSC$W_LENGTH]);
+    IF NOT .status THEN RETURN .status;
+
+    STR$CASE_BLIND_COMPARE (hdsc, .dsc_a) EQL 0
+
+END; ! IS_LOCAL_HOST
+
+%SBTTL 'GET_EXEC_LOGICAL'
+ROUTINE GET_EXEC_LOGICAL (LOGNAM_A, BUFDSC_A, RETLEN_A) = 
+BEGIN
+!++
+! FUNCTIONAL DESCRIPTION:
+!
+!   Translates an exec-mode logical name out of LNM$FILE_DEV.
+!
+! RETURNS:  	cond_value, longword (unsigned), write only, by value
+!
+! PROTOTYPE:
+!
+!   GET_EXEC_LOGICAL lognam, bufdsc, retlen
+!
+! IMPLICIT INPUTS:  None.
+!
+! IMPLICIT OUTPUTS: None.
+!
+! COMPLETION CODES:
+!
+!   SS$_NORMAL:	    	normal successful completion.
+!
+! SIDE EFFECTS:
+!
+!   None.
+!--
+    BIND
+    	bufdsc	= .BUFDSC_A 	    	: BLOCK [,BYTE];
+
+    LOCAL
+    	lnmlst	: $ITMLST_DECL (ITEMS=1);
+
+    $ITMLST_INIT (ITMLST=lnmlst,
+    	(ITMCOD=LNM$_STRING, BUFSIZ=.bufdsc [DSC$W_LENGTH],
+    	    BUFADR=.bufdsc [DSC$A_POINTER], RETLEN=.RETLEN_A));
+    $TRNLNM (LOGNAM=.LOGNAM_A, TABNAM=%ASCID'LNM$FILE_DEV', ITMLST=lnmlst)
+
+END; ! GET_EXEC_LOGICAL
+
+END
+ELUDOM

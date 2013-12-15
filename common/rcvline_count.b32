@@ -1,0 +1,132 @@
+%TITLE 'RCVLINE_COUNT'
+MODULE RCVLINE_COUNT (IDENT='V1.1') =
+BEGIN
+!++
+! FACILITY: 	    RCVLINE_COUNT
+!
+! ABSTRACT: 	    Received-line counting
+!
+! MODULE DESCRIPTION:
+!
+!   Counts Received: lines that contain a string to be matched.
+!
+! AUTHOR:   	    M. Madison
+!
+! Copyright (c) 2008, Matthew Madison.
+! 
+! All rights reserved.
+! 
+! Redistribution and use in source and binary forms, with or without
+! modification, are permitted provided that the following conditions
+! are met:
+! 
+!     * Redistributions of source code must retain the above
+!       copyright notice, this list of conditions and the following
+!       disclaimer.
+!     * Redistributions in binary form must reproduce the above
+!       copyright notice, this list of conditions and the following
+!       disclaimer in the documentation and/or other materials provided
+!       with the distribution.
+!     * Neither the name of the copyright owner nor the names of any
+!       other contributors may be used to endorse or promote products
+!       derived from this software without specific prior written
+!       permission.
+! 
+! THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
+! "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
+! LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
+! A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
+! OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
+! SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
+! LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
+! DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
+! THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
+! (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
+! OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+!
+! CREATION DATE:    07-FEB-1992
+!
+! MODIFICATION HISTORY:
+!
+!   07-FEB-1992	V1.0	Madison	    Initial coding.
+!   27-DEC-1996	V1.1	Madison	    Avoid using dynamic strings.
+!--
+    LIBRARY 'SYS$LIBRARY:STARLET';
+    LIBRARY 'MX';
+
+    EXTERNAL ROUTINE
+    	G_HAT (STR$UPCASE);
+
+%SBTTL 'RCVLINE_COUNT'
+GLOBAL ROUTINE RCVLINE_COUNT (HDRQ_A, STR_A) = 
+BEGIN
+!++
+! FUNCTIONAL DESCRIPTION:
+!
+!   Counts Received lines that contain a string.
+!
+! RETURNS:  	longword_unsigned, longword (unsigned), write only, by value
+!
+! PROTOTYPE:
+!
+!   RCVLINE_COUNT
+!
+! IMPLICIT INPUTS:  None.
+!
+! IMPLICIT OUTPUTS: None.
+!
+! COMPLETION CODES:
+!
+!   None.
+!
+! SIDE EFFECTS:
+!
+!   None.
+!--
+    BIND
+    	HDRQ	= .HDRQ_A   : QUEDEF,
+    	STR 	= .STR_A    : BLOCK [DSC$K_S_BLN,BYTE];
+
+    LOCAL
+    	SDSC	: BLOCK [DSC$K_S_BLN,BYTE],
+    	STR1	: BLOCK [DSC$K_S_BLN,BYTE],
+    	STR2	: BLOCK [DSC$K_S_BLN,BYTE],
+    	TMP1	: VECTOR [1024,BYTE],
+    	TMP2	: VECTOR [256,BYTE],
+    	HDR 	: REF TXTDEF,
+    	COUNT;
+
+    IF .STR [DSC$W_LENGTH] LEQU %ALLOCATION (TMP2) THEN
+    	INIT_SDESC (STR2, .STR [DSC$W_LENGTH], TMP2)
+    ELSE
+    	$INIT_DYNDESC (STR2);
+
+    STR$UPCASE (STR2, STR);
+   
+    COUNT = 0;
+    HDR = .HDRQ [QUE_L_HEAD];
+    WHILE .HDR NEQA HDRQ DO
+    BEGIN
+    	IF .HDR [TXT_W_CODE] EQL MX_K_HDR_RECEIVED THEN
+    	BEGIN
+    	    INIT_SDESC (SDSC, .HDR [TXT_W_LEN], HDR [TXT_T_TEXT]);
+    	    IF .HDR [TXT_W_LEN] LEQU %ALLOCATION (TMP1) THEN
+    	    	INIT_SDESC (STR1, .HDR [TXT_W_LEN], TMP1)
+    	    ELSE
+    	    	$INIT_DYNDESC (STR1);
+    	    STR$UPCASE (STR1, SDSC);
+    	    IF NOT CH$FAIL (CH$FIND_SUB (.STR1 [DSC$W_LENGTH],
+    	    	    	.STR1 [DSC$A_POINTER], .STR2 [DSC$W_LENGTH],
+    	    	    	.STR2 [DSC$A_POINTER])) THEN COUNT = .COUNT + 1;
+    	    IF .HDR [TXT_W_LEN] GTRU %ALLOCATION (TMP1) THEN
+    	    	FREE_STRINGS (STR1);
+    	END;
+    	HDR = .HDR [TXT_L_FLINK];
+    END;
+
+    .COUNT
+
+END; ! RCVLINE_COUNT
+
+END
+ELUDOM

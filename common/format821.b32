@@ -1,0 +1,155 @@
+%TITLE 'FORMAT821'
+MODULE FORMAT821 (IDENT='V1.1') =
+BEGIN
+!++
+! FACILITY: 	    MX
+!
+! ABSTRACT: 	    Formats SMTP (RFC821)-type addresses
+!
+! MODULE DESCRIPTION:
+!
+!   description
+!
+! AUTHOR:   	    M. Madison
+!
+! Copyright (c) 2008, Matthew Madison.
+! 
+! All rights reserved.
+! 
+! Redistribution and use in source and binary forms, with or without
+! modification, are permitted provided that the following conditions
+! are met:
+! 
+!     * Redistributions of source code must retain the above
+!       copyright notice, this list of conditions and the following
+!       disclaimer.
+!     * Redistributions in binary form must reproduce the above
+!       copyright notice, this list of conditions and the following
+!       disclaimer in the documentation and/or other materials provided
+!       with the distribution.
+!     * Neither the name of the copyright owner nor the names of any
+!       other contributors may be used to endorse or promote products
+!       derived from this software without specific prior written
+!       permission.
+! 
+! THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
+! "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
+! LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
+! A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
+! OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
+! SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
+! LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
+! DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
+! THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
+! (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
+! OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+!
+! CREATION DATE:    22-DEC-1989
+!
+! MODIFICATION HISTORY:
+!
+!   22-DEC-1989	V1.0	Madison 	Initial coding.
+!   22-DEC-1996	V1.1	Madison	    	Eliminate use of dynamic strings.
+!--
+    LIBRARY 'SYS$LIBRARY:STARLET';
+    LIBRARY 'MX';
+
+    EXTERNAL ROUTINE
+    	G_HAT (LIB$ANALYZE_SDESC, LIB$SCOPY_R_DX);
+
+%SBTTL 'FORMAT821'
+GLOBAL ROUTINE FORMAT821 (RTEQ_A, LCLP_A, DOMP_A, STR_A) = 
+BEGIN
+!++
+! FUNCTIONAL DESCRIPTION:
+!
+!   Formats a route queue, local part, and domain part into an RFC821
+!   route-address.
+!
+! RETURNS:  	cond_value, longword (unsigned), write only, by value
+!
+! PROTOTYPE:
+!
+!   FORMAT821  rteq, lclp, domp, result
+!
+! IMPLICIT INPUTS:  None.
+!
+! IMPLICIT OUTPUTS: None.
+!
+! COMPLETION CODES:
+!
+!   SS$_NORMAL:	    	normal successful completion.
+!
+! SIDE EFFECTS:
+!
+!   None.
+!--
+    BIND
+    	RTEQ	= .RTEQ_A   	: QUEDEF,
+    	LCLP	= .LCLP_A   	: BLOCK [,BYTE],
+    	DOMP	= .DOMP_A   	: BLOCK [,BYTE];
+    LOCAL
+    	TMPBUF	: BLOCK [2048, BYTE],
+    	R   	: REF TXTDEF,
+    	LCLLEN	: WORD,
+    	DOMLEN	: WORD,
+    	TOTLEN, LCLPTR, DOMPTR, SKIP_ROUTE, SKIP_ADDRESS, LEN, TMPP, STATUS;
+
+
+    SKIP_ROUTE = SKIP_ADDRESS = TOTLEN = 0;
+    R = .RTEQ [QUE_L_HEAD];
+    WHILE .R NEQA RTEQ [QUE_L_HEAD] DO
+    BEGIN
+    	TOTLEN = .TOTLEN + .R [TXT_W_LEN] + 
+    	    	    (IF .TOTLEN EQLU 0 THEN 1 ELSE 2); ! [,]@domain-name
+    	R = .R [TXT_L_FLINK];
+    END;
+    IF .TOTLEN NEQU 0 THEN TOTLEN = .TOTLEN + 1; ! for the colon
+    STATUS = LIB$ANALYZE_SDESC (LCLP, LCLLEN, LCLPTR);
+    IF NOT .STATUS THEN RETURN .STATUS;
+    TOTLEN = .TOTLEN + .LCLLEN;
+    STATUS = LIB$ANALYZE_SDESC (DOMP, DOMLEN, DOMPTR);
+    IF NOT .STATUS THEN RETURN .STATUS;
+    TOTLEN = .TOTLEN + .DOMLEN + 1;  ! @domain-name
+    TOTLEN = .TOTLEN + 2;  ! for the angle brackets
+
+    IF .TOTLEN GTRU %ALLOCATION (TMPBUF) THEN
+    BEGIN
+    	TOTLEN = .LCLLEN + .DOMLEN + 3;
+    	IF .TOTLEN GTRU %ALLOCATION (TMPBUF) THEN SKIP_ADDRESS = 1;
+    	SKIP_ROUTE = 1;
+    END;
+
+    TMPP = TMPBUF;
+    CH$WCHAR_A (%C'<', TMPP);
+    IF NOT .SKIP_ROUTE AND .RTEQ [QUE_L_HEAD] NEQA RTEQ [QUE_L_HEAD] THEN
+    BEGIN
+    	R = .RTEQ [QUE_L_HEAD];
+    	WHILE .R NEQA RTEQ [QUE_L_HEAD] DO
+    	BEGIN
+    	    IF .R NEQA .RTEQ [QUE_L_HEAD] THEN CH$WCHAR_A (%C',', TMPP);
+    	    CH$WCHAR_A (%C'@', TMPP);
+    	    CH$MOVE (.R [TXT_W_LEN], R [TXT_T_TEXT], .TMPP);
+    	    TMPP = CH$PLUS (.TMPP, .R [TXT_W_LEN]);
+    	    R = .R [TXT_L_FLINK];
+    	END;
+    	CH$WCHAR_A (%C':', TMPP);
+    END;
+    IF NOT .SKIP_ADDRESS THEN
+    BEGIN
+    	CH$MOVE (.LCLLEN, .LCLPTR, .TMPP);
+    	TMPP = CH$PLUS (.TMPP, .LCLLEN);
+    	CH$WCHAR_A (%C'@', TMPP);
+    	CH$MOVE (.DOMLEN, .DOMPTR, .TMPP);
+    	TMPP = CH$PLUS (.TMPP, .DOMLEN);
+    END;
+    CH$WCHAR_A (%C'>', TMPP);
+
+    TOTLEN = CH$DIFF (.TMPP, TMPBUF);
+
+    LIB$SCOPY_R_DX (TOTLEN, TMPBUF, .STR_A)
+
+END; ! FORMAT821
+
+END
+ELUDOM

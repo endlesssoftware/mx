@@ -1,0 +1,166 @@
+!+
+!  MX_OLD_LCLDEFS.R32
+!
+! Copyright (c) 2008, Matthew Madison.
+! 
+! All rights reserved.
+! 
+! Redistribution and use in source and binary forms, with or without
+! modification, are permitted provided that the following conditions
+! are met:
+! 
+!     * Redistributions of source code must retain the above
+!       copyright notice, this list of conditions and the following
+!       disclaimer.
+!     * Redistributions in binary form must reproduce the above
+!       copyright notice, this list of conditions and the following
+!       disclaimer in the documentation and/or other materials provided
+!       with the distribution.
+!     * Neither the name of the copyright owner nor the names of any
+!       other contributors may be used to endorse or promote products
+!       derived from this software without specific prior written
+!       permission.
+! 
+! THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
+! "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
+! LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
+! A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
+! OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
+! SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
+! LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
+! DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
+! THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
+! (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
+! OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+!
+!   Rewrite rule, alias, path, and mailing list structure definitions for
+!   MX prior to V32A.
+!
+!   18-MAR-1993     Goatley	Taken from MX_LCLDEFS.R32 before mods for AXP.
+!-
+
+    LIBRARY 'FIELDS';
+
+!
+! MX v3.2 and earlier are designated by 32 in the name (RULE32_*, etc.).
+!
+
+   LITERAL
+    	RULE32_S_LHS  	= 255,
+    	RULE32_S_RHS  	= 255;
+
+    _DEF (RULE32)
+    	RULE32_L_FLINK	= _LONG,
+    	RULE32_L_BLINK	= _LONG,
+    	RULE32_W_LHS  	= _WORD,
+    	RULE32_T_LHS  	= _BYTES (RULE32_S_LHS),
+    	RULE32_W_RHS  	= _WORD,
+    	RULE32_T_RHS  	= _BYTES (RULE32_S_RHS)
+    _ENDDEF (RULE32);
+
+    LITERAL
+    	PATH32_S_DOMAIN	= 255,
+    	PATH32_S_PARAM	= 255;
+
+    _DEF (PATH32)
+    	PATH32_L_FLINK	= _LONG,
+    	PATH32_L_BLINK	= _LONG,
+    	PATH32_W_PATH 	= _WORD,
+    	PATH32_W_DOMAIN	= _WORD,
+    	PATH32_T_DOMAIN	= _BYTES (PATH32_S_DOMAIN),
+    	PATH32_W_PARAM	= _WORD,
+    	PATH32_T_PARAM	= _BYTES (PATH32_S_PARAM)
+    _ENDDEF (PATH32);
+
+    LITERAL
+    	MLST32_S_NAME 	= 32,
+    	MLST32_S_ARCHIVE	= 255,
+    	MLST32_S_ERRSTO	= 255,
+    	MLST32_S_DESC 	= 255,
+    	MLST32_S_ADDMSG	= 255,
+    	MLST32_S_REMMSG	= 255,
+    	MLST32_S_FWDMSG	= 255,
+	MLST32_S_RTNADR	= 255;
+
+    _DEF (MLST32)
+    	MLST32_L_FLINK	= _LONG,
+    	MLST32_L_BLINK	= _LONG,
+    	MLST32_Q_OWNQ	= _QUAD,
+    	MLST32_Q_MODQ 	= _QUAD,
+    	MLST32_Q_PEERQ	= _QUAD,
+    	MLST32_L_PROT 	= _LONG,
+    	_OVERLAY (MLST32_L_PROT)
+    	    MLST32_B_WPROT    = _BYTE,
+    	    MLST32_B_GPROT    = _BYTE,
+    	    MLST32_B_OPROT    = _BYTE,
+    	    MLST32_B_SPROT    = _BYTE,
+    	_ENDOVERLAY
+    	MLST32_L_FLAGS	= _LONG,
+    	_OVERLAY (MLST32_L_FLAGS)
+    	    MLST32_V_RTOSNDR  = _BIT,
+    	    MLST32_V_RTOLIST  = _BIT,
+	    MLST32_V_REMRCVD  = _BIT,
+    	_ENDOVERLAY
+    	MLST32_W_NAME 	= _WORD,
+    	MLST32_T_NAME 	= _BYTES (MLST32_S_NAME),
+    	MLST32_W_ARCHIVE	= _WORD,
+    	MLST32_T_ARCHIVE	= _BYTES (MLST32_S_ARCHIVE),
+    	MLST32_W_ERRSTO	= _WORD,
+    	MLST32_T_ERRSTO	= _BYTES (MLST32_S_ERRSTO),
+    	MLST32_W_DESC 	= _WORD,
+    	MLST32_T_DESC 	= _BYTES (MLST32_S_DESC),
+    	MLST32_W_ADDMSG	= _WORD,
+    	MLST32_T_ADDMSG	= _BYTES (MLST32_S_ADDMSG),
+    	MLST32_W_REMMSG	= _WORD,
+    	MLST32_T_REMMSG	= _BYTES (MLST32_S_REMMSG),
+    	MLST32_W_FWDMSG	= _WORD,
+    	MLST32_T_FWDMSG	= _BYTES (MLST32_S_FWDMSG),
+    	MLST32_W_RTNADR	= _WORD,
+    	MLST32_T_RTNADR	= _BYTES (MLST32_S_RTNADR)
+    _ENDDEF (MLST32);
+
+    LITERAL
+    	MLE32_S_ADDR  	= 255,
+    	MLE32_S_NAME  	= 255;
+
+    LITERAL
+    	FSRV32_S_NAME 	= 32,
+    	FSRV32_S_MGR  	= 255,
+    	FSRV32_S_ROOT 	= 255,
+    	FSRV32_S_MLIST	= MLST32_S_NAME,
+    	FSRV32_S_DESC	= 255;
+
+    _DEF (FSRV32)
+    	FSRV32_L_FLINK	= _LONG,
+    	FSRV32_L_BLINK	= _LONG,
+    	FSRV32_Q_BEGIN	= _QUAD,
+    	FSRV32_Q_END  	= _QUAD,
+    	FSRV32_Q_HOSTQ	= _QUAD,
+    	FSRV32_Q_USERQ	= _QUAD,
+    	FSRV32_Q_LASTACC	= _QUAD,
+    	FSRV32_Q_LASTSND	= _QUAD,
+    	FSRV32_Q_SNDBEGIN	= _QUAD,
+    	FSRV32_Q_SNDEND	= _QUAD,
+    	FSRV32_Q_SNDNEXT	= _QUAD,
+    	FSRV32_L_THRESH	= _LONG,
+    	FSRV32_L_HOSTLIM	= _LONG,
+    	FSRV32_L_USERLIM	= _LONG,
+    	FSRV32_L_SERVLIM	= _LONG,
+    	FSRV32_L_SERVCNT	= _LONG,
+    	FSRV32_L_MLST32PTR	= _LONG,
+    	FSRV32_L_FLAGS	= _LONG,
+    	_OVERLAY (FSRV32_L_FLAGS)
+    	    FSRV32_V_DLYINIT  = _BIT,
+    	    FSRV32_V_OVERLAP  = _BIT,
+    	_ENDOVERLAY
+    	FSRV32_W_NAME 	= _WORD,
+    	FSRV32_T_NAME 	= _BYTES (FSRV32_S_NAME),
+    	FSRV32_W_MGR  	= _WORD,
+    	FSRV32_T_MGR  	= _BYTES (FSRV32_S_MGR),
+    	FSRV32_W_ROOT 	= _WORD,
+    	FSRV32_T_ROOT 	= _BYTES (FSRV32_S_ROOT),
+    	FSRV32_W_MLIST	= _WORD,
+    	FSRV32_T_MLIST	= _BYTES (FSRV32_S_MLIST),
+	FSRV32_W_DESC	= _WORD,
+	FSRV32_T_DESC	= _BYTES (FSRV32_S_DESC)
+    _ENDDEF (FSRV32);

@@ -1,0 +1,684 @@
+%TITLE 'PARSE822'
+MODULE PARSE822 (IDENT='V1.10', ADDRESSING_MODE (EXTERNAL=LONG_RELATIVE,NONEXTERNAL=LONG_RELATIVE)) =
+BEGIN
+!++
+! FACILITY: 	    MX
+!
+! ABSTRACT: 	    Routines for parsing RFC822 headers.
+!
+! MODULE DESCRIPTION:
+!
+!   This module contains routines that parse things.  All of these routines
+!   use LIB$TPARSE to do the major parsing work.  All of the routines also
+!   use extended TPARSE argument blocks for storing things to keep things
+!   modular.  When a token needs to be saved, an action routine is named
+!   in the transition and the user argument is a constant which indicates
+!   to the action routine which argument in the extended argument block
+!   should be modified.  Some of the argument blocks and numbering schemes
+!   are set up so as to allow direct offsetting from the argument pointer
+!   in the action routine (so be careful when modifying).
+!
+! AUTHOR:   	    M. Madison
+!
+! Copyright (c) 2008, Matthew Madison.
+! 
+! All rights reserved.
+! 
+! Redistribution and use in source and binary forms, with or without
+! modification, are permitted provided that the following conditions
+! are met:
+! 
+!     * Redistributions of source code must retain the above
+!       copyright notice, this list of conditions and the following
+!       disclaimer.
+!     * Redistributions in binary form must reproduce the above
+!       copyright notice, this list of conditions and the following
+!       disclaimer in the documentation and/or other materials provided
+!       with the distribution.
+!     * Neither the name of the copyright owner nor the names of any
+!       other contributors may be used to endorse or promote products
+!       derived from this software without specific prior written
+!       permission.
+! 
+! THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
+! "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
+! LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
+! A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
+! OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
+! SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
+! LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
+! DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
+! THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
+! (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
+! OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+!
+! CREATION DATE:    06-DEC-1989
+!
+! MODIFICATION HISTORY:
+!
+!   06-DEC-1989	V1.0	Madison	    Initial coding (swiped from NEWSRDR).
+!   03-JAN-1990	V1.0-1	Madison	    Added recognition of X-MX-Warning: header.
+!   04-JAN-1990	V1.0-2	Madison	    Fixed stupid bug in PH_STORE.
+!   05-JAN-1990	V1.0-3	Madison	    Fixed stupid state table bugs.
+!   19-JAN-1990	V1.0-4	Madison	    Fixed bug in ROUTEADR.
+!   05-FEB-1990	V1.0-5	Madison	    Change ' ' to TPA$_BLANK.
+!   16-OCT-1990	V1.1	Madison	    Fix group notation bug.
+!   20-MAR-1991	V1.2	Madison	    Use MEM routines.
+!   03-APR-1991	V1.3	Madison	    Handle more comments.
+!   10-MAR-1993 V1.4	Goatley     Converted to AXP (thanks, Matt!).
+!    8-APR-1993 V1.4-1	Goatley     Add some MIME headers.
+!    6-JAN-1994 V1.5	Goatley     Modified PA_STATE to keep group comments.
+!   21-MAY-1996 V1.6	Goatley     In PARSE_ADDRLIST, clear queue on error.
+!   25-DEC-1996	V1.7	Madison	    Eliminate dynamic strings.
+!    1-MAY-1997 V1.8	Goatley	    Added LIST-* and X-LIST-* headers.
+!    1-OCT-1997 V1.8-1	Goatley	    Add missing In-Reply-To, various new hdrs.
+!   25-NOV-2000	V1.9	Madison	    Added X-Junk-Mail-Rating.
+!   14-FEB-2002 V1.10   Madison     Original-Recipient.
+!--
+
+    LIBRARY 'SYS$LIBRARY:STARLET';
+    LIBRARY 'SYS$LIBRARY:TPAMAC';
+    LIBRARY 'MX_SRC_COMMON:MX';
+
+    LITERAL
+    	STORE_HDR = MX_K_HDR_LASTCODE + 1;
+
+    EXTERNAL LITERAL
+    	LIB$_SYNTAXERR;
+
+    FORWARD ROUTINE
+    	PARSE_ADDRLIST,
+    	PAL_STORE,
+    	PARSE_HDRS,
+    	PH_STORE;
+
+    EXTERNAL ROUTINE
+    	G_HAT (LIB$TPARSE, STR$TRANSLATE, MEM_GETTXT);
+
+    MACRO
+    	TPA_A_P1    	=   TPA$C_LENGTH0+00,0,32,0%,
+    	TPA_A_P2    	=   TPA$C_LENGTH0+04,0,32,0%,
+    	TPA_A_P3    	=   TPA$C_LENGTH0+08,0,32,0%,
+    	TPA_A_P4    	=   TPA$C_LENGTH0+12,0,32,0%,
+    	TPA_A_P5    	=   TPA$C_LENGTH0+16,0,32,0%,
+    	TPA_A_P6    	=   TPA$C_LENGTH0+20,0,32,0%,
+    	TPA_A_P7    	=   TPA$C_LENGTH0+24,0,32,0%,
+    	TPA_A_P8    	=   TPA$C_LENGTH0+28,0,32,0%;
+
+%SBTTL 'State table for PARSE_ADDRLIST'
+
+    $INIT_STATE (PA_STATE, PA_KEY);
+
+    $STATE (SKIPWS,
+    	((COMMENT), SKIPWS),
+    	(TPA$_BLANK, SKIPWS),
+    	(TPA$_LAMBDA, GETADR1, PAL_STORE,,,1));
+
+    $STATE (SKIPWS1,
+    	((COMMENT), SKIPWS),
+    	(TPA$_BLANK, SKIPWS),
+    	(TPA$_LAMBDA, GETADR1));
+
+    $STATE (GETADR1,
+    	((MAILBOX), EXPCOM, PAL_STORE,,,2),
+    	((PHRASEPLUSCOL), SKIPWSS, PAL_STORE,,,999),
+    	((PHRASE), SKIPWS1, PAL_STORE,,,999),
+    	(TPA$_ANY, TPA$_FAIL));
+
+    $STATE (SKIPWSS,
+    	((COMMENT), SKIPWSS),		!Used to call SKIPWS3, but the
+    	(TPA$_BLANK, SKIPWSS),		!... group comment is now kept
+    	(TPA$_LAMBDA, GETADR2));	!...
+
+!    $STATE (SKIPWS3,
+!    	((COMMENT), SKIPWS3),
+!    	(TPA$_BLANK, SKIPWS3),
+!    	(TPA$_LAMBDA, GETADR2, PAL_STORE,,,1));	!Leaves invalid trailing ";"
+!
+    $STATE (GETADR2,
+    	((MAILBOX), SEMICOM, PAL_STORE,,,2),
+    	((PHRASE), SKIPWSS, PAL_STORE,,,999),
+    	(TPA$_LAMBDA, EXPSEMI));
+
+    $STATE (SEMICOM,
+    	(TPA$_BLANK, SEMICOM),
+!    	(',', SKIPWS3, PAL_STORE,,,3),
+    	(',', SKIPWSS, PAL_STORE,,,3),
+    	((COMMENT), SEMICOM, PAL_STORE,,,999),
+    	(TPA$_LAMBDA, EXPSEMI));
+
+    $STATE (EXPSEMI,
+    	(TPA$_BLANK, EXPSEMI),
+    	((COMMENT), EXPSEMI, PAL_STORE,,,999),
+    	(';', EXPCOM, PAL_STORE,,,999),
+    	(TPA$_ANY, TPA$_FAIL));
+
+    $STATE (EXPCOM,
+    	(TPA$_BLANK, EXPCOM),
+    	(',', SKIPWS, PAL_STORE,,,3),
+    	((COMMENT), EXPCOM, PAL_STORE,,,999),
+    	(TPA$_EOS, TPA$_EXIT, PAL_STORE,,,3),
+    	(TPA$_LAMBDA, TPA$_FAIL));
+
+    $STATE (PHRASEPLUSCOL,
+    	((PHRASE), PPC1),
+    	(TPA$_LAMBDA, TPA$_FAIL));
+    $STATE (PPC1,
+    	(TPA$_BLANK, PPC1),
+    	(':', TPA$_EXIT),
+    	((COMMENT), PPC1),
+    	(TPA$_LAMBDA, TPA$_FAIL));
+
+    $STATE (MAILBOX,
+    	((COMMENT), MAILBOX),
+    	((ROUTEADR), TPA$_EXIT),
+    	((ADDRSPEC), TPA$_EXIT),
+    	(TPA$_LAMBDA, TPA$_FAIL));
+
+    $STATE (COMMENT,
+    	('(', COM1),
+    	(TPA$_ANY, TPA$_FAIL));
+    $STATE (COM1,
+    	((COMMENT), COM1),
+    	(TPA$_BLANK, COM1),
+    	('\', COMLIT),
+    	(')', TPA$_EXIT),
+    	(TPA$_EOS, TPA$_FAIL),
+    	(TPA$_ANY, COM1));
+    $STATE (COMLIT,
+    	(TPA$_ANY, COM1));
+
+    $STATE (ROUTEADR,
+    	('<', RTADR1),
+    	(TPA$_BLANK, ROUTEADR),
+    	(TPA$_LAMBDA, TPA$_FAIL));
+    $STATE (RTADR1,
+    	('@', RTADR2),
+    	((ADDRSPEC), RTADR5),
+    	(TPA$_LAMBDA, TPA$_FAIL));
+    $STATE (RTADR2,
+    	((DOMAIN), RTADR3),
+    	(TPA$_LAMBDA, TPA$_FAIL));
+    $STATE (RTADR3,
+    	(',', RTADR1),
+    	(':', RTADR4),
+    	(TPA$_BLANK, RTADR3),
+    	(TPA$_LAMBDA, TPA$_FAIL));
+    $STATE (RTADR4,
+    	((ADDRSPEC), RTADR5),
+    	(TPA$_LAMBDA, TPA$_FAIL));
+    $STATE (RTADR5,
+    	(TPA$_BLANK, RTADR5),
+    	('>', TPA$_EXIT));
+
+    $STATE (ADDRSPEC,
+    	(TPA$_BLANK, ADDRSPEC),
+    	((COMMENT), ADDRSPEC),
+    	((LCLPART), ADRS1),
+    	(TPA$_LAMBDA, TPA$_FAIL));
+    $STATE (ADRS1,
+    	('@', ADRS2),
+    	(TPA$_BLANK, ADRS1),
+    	((COMMENT), ADRS1),
+    	(TPA$_LAMBDA, TPA$_FAIL));
+    $STATE (ADRS2,
+    	(TPA$_BLANK, ADRS2),
+    	((COMMENT), ADRS2),
+    	((DOMAIN), TPA$_EXIT),
+    	(TPA$_LAMBDA, TPA$_FAIL));
+
+    $STATE (LCLPART,
+    	((_WORD), LCLP1),
+    	(TPA$_LAMBDA, TPA$_FAIL));
+    $STATE (LCLP1,
+    	('.', LCLP2),
+    	(TPA$_LAMBDA, TPA$_EXIT));
+    $STATE (LCLP2,
+    	((_WORD), LCLP1),
+    	(TPA$_LAMBDA, TPA$_EXIT));
+
+    $STATE (PHRASE,
+    	((_WORD), PHR1),
+    	((COMMENT), PHR1),
+    	(TPA$_LAMBDA, TPA$_FAIL));
+    $STATE (PHR1,
+    	(TPA$_BLANK, PHR2),
+    	(TPA$_LAMBDA, TPA$_EXIT));
+    $STATE (PHR2,
+    	(TPA$_BLANK, PHR2),
+    	((_WORD), PHR1),
+    	((COMMENT), PHR1),
+    	(TPA$_LAMBDA, TPA$_EXIT));
+
+    $STATE (_WORD,
+    	('"', WORDQ),
+    	((COMMENT), _WORD),
+    	(TPA$_ALPHA, WORD1),
+    	(TPA$_DIGIT, WORD1),
+    	('`', WORD1), ('~', WORD1), ('!', WORD1), ('#', WORD1),
+    	('$', WORD1), ('%', WORD1), ('^', WORD1), ('&', WORD1),
+    	('*', WORD1), ('-', WORD1), ('_', WORD1), ('=', WORD1),
+    	('+', WORD1), ('{', WORD1), ('}', WORD1), ('''', WORD1),
+    	('|', WORD1), ('/', WORD1), ('?', WORD1),
+    	(TPA$_LAMBDA, TPA$_FAIL));
+    $STATE (WORDQ,
+    	('\', WORDQ1),
+    	('"', WORD1),
+    	(TPA$_ANY, WORDQ));
+    $STATE (WORDQ1,
+    	(TPA$_ANY, WORDQ));
+    $STATE (WORD1,
+    	('"', WORDQ),
+    	((COMMENT), WORD1),
+    	(TPA$_ALPHA, WORD1),
+    	(TPA$_DIGIT, WORD1),
+    	('`', WORD1), ('~', WORD1), ('!', WORD1), ('#', WORD1),
+    	('$', WORD1), ('%', WORD1), ('^', WORD1), ('&', WORD1),
+    	('*', WORD1), ('-', WORD1), ('_', WORD1), ('=', WORD1),
+    	('+', WORD1), ('{', WORD1), ('}', WORD1), ('''', WORD1),
+    	('|', WORD1), ('/', WORD1), ('?', WORD1),
+    	(TPA$_LAMBDA, TPA$_EXIT));
+
+    $STATE (DOMAIN,
+    	((SUBDOMAIN), DOM1),
+    	(TPA$_LAMBDA, TPA$_FAIL));
+    $STATE (DOM1,
+    	('.', DOM2),
+    	(TPA$_LAMBDA, TPA$_EXIT));
+    $STATE (DOM2,
+    	((SUBDOMAIN), DOM1),
+    	(TPA$_LAMBDA, TPA$_EXIT));
+
+    $STATE (SUBDOMAIN,
+    	('[', SUBDLIT),
+    	('`', SUBD1), ('~', SUBD1), ('!', SUBD1), ('#', SUBD1),
+    	('$', SUBD1), ('%', SUBD1), ('^', SUBD1), ('&', SUBD1),
+    	('*', SUBD1), ('-', SUBD1), ('_', SUBD1), ('=', SUBD1),
+    	('+', SUBD1), ('{', SUBD1), ('}', SUBD1), ('''', SUBD1),
+    	('|', SUBD1), ('/', SUBD1), ('?', SUBD1),
+    	(TPA$_ALPHA, SUBD1),
+    	(TPA$_DIGIT, SUBD1),
+    	(TPA$_LAMBDA, TPA$_FAIL));
+    $STATE (SUBDLIT,
+    	('\', SUBDLQ),
+    	(']', TPA$_EXIT),
+    	(TPA$_ANY, SUBDLIT));
+    $STATE (SUBDLQ,
+    	(TPA$_ANY, SUBDLIT));
+    $STATE (SUBD1,
+    	('`', SUBD1), ('~', SUBD1), ('!', SUBD1), ('#', SUBD1),
+    	('$', SUBD1), ('%', SUBD1), ('^', SUBD1), ('&', SUBD1),
+    	('*', SUBD1), ('-', SUBD1), ('_', SUBD1), ('=', SUBD1),
+    	('+', SUBD1), ('{', SUBD1), ('}', SUBD1), ('''', SUBD1),
+    	('|', SUBD1), ('/', SUBD1), ('?', SUBD1),
+    	(TPA$_ALPHA, SUBD1),
+    	(TPA$_DIGIT, SUBD1),
+    	(TPA$_LAMBDA, TPA$_EXIT));
+
+%SBTTL 'State table for PARSE_HDRS'
+
+    $INIT_STATE (PH_STATE, PH_KEY);
+
+    $STATE (GETTAG,
+    	('FROM',, PH_STORE,,, MX_K_HDR_FROM),
+    	('SENDER',, PH_STORE,,, MX_K_HDR_SENDER),
+    	('TO',, PH_STORE,,, MX_K_HDR_TO),
+    	('CC',, PH_STORE,,, MX_K_HDR_CC),
+    	('RESENT_CC',, PH_STORE,,, MX_K_HDR_R_CC),
+    	('BCC',, PH_STORE,,, MX_K_HDR_BCC),
+    	('RESENT_BCC',, PH_STORE,,, MX_K_HDR_R_BCC),
+    	('MESSAGE_ID',, PH_STORE,,, MX_K_HDR_MESSAGE_ID),
+    	('RESENT_MESSAGE_ID',, PH_STORE,,, MX_K_HDR_R_MESSAGE_ID),
+    	('IN_REPLY_TO',, PH_STORE,,, MX_K_HDR_IN_REPLY_TO),
+    	('REFERENCES',, PH_STORE,,, MX_K_HDR_REFERENCES),
+    	('KEYWORDS',, PH_STORE,,, MX_K_HDR_KEYWORDS),
+    	('SUBJECT',, PH_STORE,,, MX_K_HDR_SUBJECT),
+    	('ENCRYPTED',, PH_STORE,,, MX_K_HDR_ENCRYPTED),
+    	('DATE',, PH_STORE,,, MX_K_HDR_DATE),
+    	('REPLY_TO',, PH_STORE,,, MX_K_HDR_REPLY_TO),
+    	('RECEIVED',, PH_STORE,,, MX_K_HDR_RECEIVED),
+    	('RESENT_REPLY_TO',, PH_STORE,,, MX_K_HDR_R_REPLY_TO),
+    	('RESENT_FROM',, PH_STORE,,, MX_K_HDR_R_FROM),
+    	('RESENT_SENDER',, PH_STORE,,, MX_K_HDR_R_SENDER),
+    	('RESENT_DATE',, PH_STORE,,, MX_K_HDR_R_DATE),
+    	('RESENT_TO',, PH_STORE,,, MX_K_HDR_R_TO),
+    	('RETURN_PATH',, PH_STORE,,, MX_K_HDR_RETURN_PATH),
+    	('X_MX_WARNING',, PH_STORE,,, MX_K_HDR_X_WARNING),
+	('MIME_VERSION',, PH_STORE,,, MX_K_HDR_MIME_VERSION),
+	('CONTENT_TRANSFER_ENCODING',, PH_STORE,,, MX_K_HDR_MIME_C_T_E),
+	('CONTENT_TYPE',, PH_STORE,,, MX_K_HDR_MIME_C_TYPE),
+	('LIST_SUBSCRIBE',, PH_STORE,,, MX_K_HDR_LIST_SUB),
+	('X_LIST_SUBSCRIBE',, PH_STORE,,, MX_K_HDR_LIST_SUB),
+	('LIST_UNSUBSCRIBE',, PH_STORE,,, MX_K_HDR_LIST_UNSUB),
+	('X_LIST_UNSUBSCRIBE',, PH_STORE,,, MX_K_HDR_LIST_UNSUB),
+	('LIST_HELP',, PH_STORE,,, MX_K_HDR_LIST_HELP),
+	('X_LIST_HELP',, PH_STORE,,, MX_K_HDR_LIST_HELP),
+	('LIST_',, PH_STORE,,, MX_K_HDR_LIST_OTHER),
+	('X_LIST_',, PH_STORE,,, MX_K_HDR_LIST_OTHER),
+	('CONTENT_LENGTH',, PH_STORE,,, MX_K_HDR_CONTENT_LENGTH),
+	('ERRORS_TO',, PH_STORE,,, MX_K_HDR_ERRORS_TO),
+	('WARNINGS_TO',, PH_STORE,,, MX_K_HDR_WARNINGS_TO),
+	('PRECEDENCE',, PH_STORE,,, MX_K_HDR_PRECEDENCE),
+	('DISPOSITION_NOTIFICATION_TO',, PH_STORE,,, MX_K_HDR_DISP_NOTIF_TO),
+	('RETURN_RECEIPT_TO',, PH_STORE,,, MX_K_HDR_RTNRECPT_TO),
+	('X_CONFIRM_READING_TO',, PH_STORE,,, MX_K_HDR_CONFIRM_READ_TO),
+	('CONTENT_DISPOSTION',, PH_STORE,,, MX_K_HDR_MIME_C_DISP),
+	('CONTENT_DESCRIPTION',, PH_STORE,,, MX_K_HDR_MIME_C_DESC),
+	('X_LISTNAME',, PH_STORE,,, MX_K_HDR_X_LISTNAME),
+    	('X_JUNK_MAIL_RATING',, PH_STORE,,, MX_K_HDR_X_JUNK_MAIL_RATING),
+    	('X_JUNK_MAIL_REASON',, PH_STORE,,, MX_K_HDR_X_JUNK_MAIL_REASON),
+        ('ORIGINAL_RECIPIENT',, PH_STORE,,, MX_K_HDR_ORIG_RECIP),
+    	(TPA$_LAMBDA, TPA$_EXIT, PH_STORE,,, MX_K_HDR_OTHER));
+    $STATE (,
+    	(':'));
+    $STATE (SKIPWS2,
+    	(TPA$_BLANK, SKIPWS2),
+    	(TPA$_LAMBDA, TPA$_EXIT, PH_STORE,,, STORE_HDR));
+
+%SBTTL 'PARSE_ADDRLIST'
+GLOBAL ROUTINE PARSE_ADDRLIST (STR_A, HDRQ_A, KEEP_NAME) =
+BEGIN
+!++
+! FUNCTIONAL DESCRIPTION:
+!
+!   Parses a string containing a list of mail addresses, separated
+!   by commas.
+!
+!   The addresses are expected to conform with RFC 822, and should
+!   look something like one of the following.
+!
+!   	user@domain     user@domain (comment)      name <user@domain>
+!
+!   Additional comments are also accepted.  Whitespace is allowed in
+!   certain areas as well.  If the KEEP_NAME flag is set, the the
+!   name is returned as part of the address.  Otherwise, it is omitted.
+!   only the leading name and trailing comment/name will be kept.
+!
+! RETURNS:  	cond_value, longword (unsigned), write only, by value
+!
+! PROTOTYPE:
+!
+!   PARSE_ADDRLIST  str, hdrq
+!
+! IMPLICIT INPUTS:  None.
+!
+! IMPLICIT OUTPUTS: None.
+!
+! COMPLETION CODES:
+!
+!   SS$_NORMAL:	    	normal successful completion.
+!
+! SIDE EFFECTS:
+!
+!   None.
+!--
+    BIND
+    	STR 	= .STR_A    : BLOCK [DSC$K_S_BLN,BYTE];
+
+    BUILTIN
+    	ACTUALCOUNT;
+
+    LITERAL
+    	TPA_C_LENGTH	=   TPA$C_LENGTH0 + 20,
+    	TPA_K_COUNT 	=   TPA$K_COUNT0 + 5;
+
+    LOCAL
+    	TPABLK : BLOCK [TPA_C_LENGTH,BYTE],
+    	TMPBUF : VECTOR [2048, BYTE],
+    	TMPLEN : WORD,
+    	STRLEN : WORD,
+    	KPNAME,
+    	STATUS;
+
+    TMPLEN = 0;
+
+    IF ACTUALCOUNT () GTR 2 THEN
+    	KPNAME = .KEEP_NAME
+    ELSE
+    	KPNAME = 0;
+
+    TPABLK [TPA$L_COUNT] = TPA_K_COUNT;
+    TPABLK [TPA$L_OPTIONS] = TPA$M_BLANKS;
+    TPABLK [TPA$L_STRINGCNT] = .STR [DSC$W_LENGTH];
+    TPABLK [TPA$L_STRINGPTR] = .STR [DSC$A_POINTER];
+    TPABLK [TPA_A_P1] = .HDRQ_A;
+    TPABLK [TPA_A_P2] = KPNAME;
+    TPABLK [TPA_A_P3] = TMPBUF;
+    TPABLK [TPA_A_P4] = TMPLEN;
+    TPABLK [TPA_A_P5] = %ALLOCATION (TMPBUF);
+
+    STATUS = LIB$TPARSE (TPABLK, PA_STATE, PA_KEY);
+
+    !
+    !  If an error occurred, don't return any entries in the queue.
+    !
+    IF NOT(.status)
+    THEN
+	BEGIN
+	BIND    hdrq = .hdrq_a : QUEDEF;
+	LOCAL   txt : REF TXTDEF;
+
+	WHILE NOT REMQUE (.hdrq [QUE_L_HEAD], txt) DO FREETXT(txt);
+	END;
+
+    .STATUS
+
+END; ! PARSE_ADDRLIST
+
+%SBTTL 'PAL_STORE'
+TPA_ROUTINE (PAL_STORE, (OPTIONS, STRINGCNT, STRINGPTR, TOKENCNT,
+    	    TOKENPTR, CHAR, NUMBER, PARAM, HDRQ_A, KPNAME_A, TMPBUF_A,
+    	    TMPLEN_A, BUFSIZ))
+!++
+! FUNCTIONAL DESCRIPTION:
+!
+!   Invoked by TPARSE to store a piece of a mail address.
+!
+! RETURNS:  	cond_value, longword (unsigned), write only, by value
+!
+! PROTOTYPE:
+!
+!   PAL_STORE opt, scnt, sptr, tcnt, tptr, chr, num, par, p1, p2, p3
+!
+! IMPLICIT INPUTS:  None.
+!
+! IMPLICIT OUTPUTS: None.
+!
+! COMPLETION CODES:
+!
+!   SS$_NORMAL:	    	normal successful completion.
+!
+! SIDE EFFECTS:
+!
+!   None.
+!--
+    BIND
+    	HDRQ	= .HDRQ_A   	: QUEDEF,
+    	KPNAME	= .KPNAME_A,
+    	TMPBUF	= .TMPBUF_A 	: VECTOR [,BYTE],
+    	TMPLEN	= .TMPLEN_A 	: WORD;
+
+    SELECTONE .PARAM OF
+    SET
+    	[1] :
+    	    TMPLEN = 0;
+
+    	[2] :
+    	    IF .TOKENCNT GTR 0 THEN
+    	    BEGIN
+    	    	IF .TMPLEN GTR 0 THEN
+    	    	BEGIN
+    	    	    TMPBUF [.TMPLEN] = %C' ';
+    	    	    TMPLEN = .TMPLEN + 1;
+    	    	END;
+    	    	IF .TOKENCNT GTR .BUFSIZ - .TMPLEN THEN
+    	    	    RETURN LIB$_SYNTAXERR;
+    	    	CH$MOVE (.TOKENCNT, .TOKENPTR, CH$PLUS (TMPBUF, .TMPLEN));
+    	    	TMPLEN = .TMPLEN + .TOKENCNT;
+    	    END;
+
+    	[3] :
+    	    IF .TMPLEN GTR 0 THEN
+    	    BEGIN
+    	    	LOCAL TMPSTR : BLOCK [DSC$K_S_BLN, BYTE];
+    	    	INIT_SDESC (TMPSTR, .TMPLEN, TMPBUF);
+    	    	INSTXT (TMPSTR, .HDRQ [QUE_L_TAIL]);
+    	    END;
+
+    	[999] :
+    	    IF .KPNAME THEN
+    	    BEGIN
+    	    	IF .TMPLEN GTR 0 THEN
+    	    	BEGIN
+    	    	    TMPBUF [.TMPLEN] = %C' ';
+    	    	    TMPLEN = .TMPLEN + 1;
+    	    	END;
+    	    	WHILE .TOKENCNT GTR 0 DO
+    	    	    IF CH$RCHAR (CH$PLUS (.TOKENPTR, .TOKENCNT-1)) NEQ %C' '
+    	    	       AND CH$RCHAR (CH$PLUS (.TOKENPTR, .TOKENCNT-1)) NEQ %CHAR(9)
+    	    	    THEN EXITLOOP
+    	    	    ELSE TOKENCNT = .TOKENCNT - 1;
+    	    	IF .TOKENCNT GTR .BUFSIZ - .TMPLEN THEN RETURN LIB$_SYNTAXERR;
+    	    	CH$MOVE (.TOKENCNT, .TOKENPTR, CH$PLUS (TMPBUF, .TMPLEN));
+    	    	TMPLEN = .TMPLEN + .TOKENCNT;
+    	    END;
+
+    	[OTHERWISE] : ;
+
+    TES;
+
+    SS$_NORMAL
+
+END; ! PAL_STORE
+
+%SBTTL 'PARSE_HDRS'
+GLOBAL ROUTINE PARSE_HDRS (INQ_A, OUTQ_A) =
+BEGIN
+!++
+! FUNCTIONAL DESCRIPTION:
+!
+!   Parses a list of RFC822 headers, creating tagged text strings.
+!
+! RETURNS:  	cond_value, longword (unsigned), write only, by value
+!
+! PROTOTYPE:
+!
+!   PARSE_HDRS  hdrq, outq
+!
+! IMPLICIT INPUTS:  None.
+!
+! IMPLICIT OUTPUTS: None.
+!
+! COMPLETION CODES:
+!
+!   SS$_NORMAL:	    	normal successful completion.
+!
+! SIDE EFFECTS:
+!
+!   None.
+!--
+    BIND
+    	INQ 	= .INQ_A    : QUEDEF,
+    	OUTQ	= .OUTQ_A   : QUEDEF;
+
+    LITERAL
+    	TPA_C_LENGTH	= TPA$C_LENGTH0 + 16,
+    	TPA_K_COUNT 	= TPA$K_COUNT0 + 4;
+
+    LOCAL
+    	TPABLK	: BLOCK [TPA_C_LENGTH,BYTE],
+    	INTXT	: REF TXTDEF,
+    	OUTTXT	: VOLATILE REF TXTDEF,
+    	STR 	: BLOCK [DSC$K_S_BLN,BYTE],
+    	STR2	: BLOCK [DSC$K_S_BLN,BYTE],
+    	TEMP;
+
+    $INIT_DYNDESC (STR2);
+
+    TPABLK [TPA$L_COUNT] = TPA_K_COUNT;
+    TPABLK [TPA$L_OPTIONS] = TPA$M_BLANKS;
+    TPABLK [TPA_A_P1] = OUTTXT;
+    TPABLK [TPA_A_P2] = TEMP;
+
+    INTXT = .INQ [QUE_L_HEAD];
+    WHILE .INTXT NEQA INQ [QUE_L_HEAD] DO
+    BEGIN
+    	INIT_SDESC (STR, .INTXT [TXT_W_LEN], INTXT [TXT_T_TEXT]);
+    	STR$TRANSLATE (STR2, STR, %ASCID'ABCDEFGHIJKLMNOPQRSTUVWXYZ_ ',
+    	    %ASCID %STRING ('abcdefghijklmnopqrstuvwxyz-', %CHAR (9)));
+    	TPABLK [TPA$L_STRINGCNT] = .STR2 [DSC$W_LENGTH];
+    	TPABLK [TPA$L_STRINGPTR] = .STR2 [DSC$A_POINTER];
+    	TPABLK [TPA_A_P3] = INTXT [TXT_T_TEXT];
+    	TPABLK [TPA_A_P4] = .STR2 [DSC$A_POINTER];
+    	IF LIB$TPARSE (TPABLK, PH_STATE, PH_KEY) THEN
+    	    INSQUE (.OUTTXT, .OUTQ [QUE_L_TAIL]);
+    	INTXT = .INTXT [TXT_L_FLINK];
+    END;
+
+    FREE_STRINGS (STR2);
+
+    SS$_NORMAL
+
+END; ! PARSE_HDRS
+
+%SBTTL 'PH_STORE'
+TPA_ROUTINE (PH_STORE, (OPTIONS, STRCNT, STRPTR, TOKCNT, TOKPTR, CHAR,
+    	    NUMBER, PARAM, P1_A, P2_A, P3_A, STRBASE))
+!++
+! FUNCTIONAL DESCRIPTION:
+!
+!   TPARSE calls this routine store values for PARSE_HDRS.
+!
+! RETURNS:  	cond_value, longword (unsigned), write only, by value
+!
+! PROTOTYPE:
+!
+!   PH_STORE  opt, scnt, sptr, tcnt, tptr, chr, num, par, p1, p2
+!
+! IMPLICIT INPUTS:  None.
+!
+! IMPLICIT OUTPUTS: None.
+!
+! COMPLETION CODES:
+!
+!   SS$_NORMAL:	    	normal successful completion.
+!
+! SIDE EFFECTS:
+!
+!   None.
+!--
+
+    BIND
+    	OUTTXT	= .P1_A	    : REF TXTDEF,
+    	CODE	= .P2_A,
+    	TEXT	= .P3_A	    : BLOCK [,BYTE];
+
+    CASE .PARAM FROM MX_K_HDR_FIRSTCODE TO STORE_HDR OF
+    SET
+    	[MX_K_HDR_FIRSTCODE TO MX_K_HDR_LASTCODE] :
+    	    IF .PARAM NEQ MX_K_HDR_OTHER THEN
+    	    	CODE = .PARAM
+    	    ELSE
+    	    BEGIN
+    	    	OUTTXT = MEM_GETTXT (.STRCNT);
+    	    	OUTTXT [TXT_W_CODE] = .PARAM;
+    	    	OUTTXT [TXT_W_LEN] = .STRCNT;
+    	    	CH$MOVE (.STRCNT, TEXT, OUTTXT [TXT_T_TEXT]);
+    	    END;
+    	[STORE_HDR] :
+    	    BEGIN
+    	    	LOCAL OFFSET;
+    	    	OFFSET = CH$DIFF (.STRPTR, .STRBASE);
+    	    	OUTTXT = MEM_GETTXT (.STRCNT);
+    	    	OUTTXT [TXT_W_CODE] = .CODE;
+    	    	OUTTXT [TXT_W_LEN] = .STRCNT;
+    	    	CH$MOVE (.STRCNT, CH$PLUS (TEXT, .OFFSET),
+    	    	    OUTTXT [TXT_T_TEXT]);
+    	    END;
+    TES;
+
+    SS$_NORMAL
+
+END; ! PH_STORE
+END
+ELUDOM

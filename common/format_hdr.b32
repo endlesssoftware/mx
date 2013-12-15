@@ -1,0 +1,435 @@
+%TITLE 'FORMAT_HDR'
+MODULE FORMAT_HDR (IDENT='V1.8', ADDRESSING_MODE (EXTERNAL=LONG_RELATIVE,NONEXTERNAL=LONG_RELATIVE)) =
+BEGIN
+!++
+! FACILITY: 	    MX mail system
+!
+! ABSTRACT: 	    Routine for formatting RFC822 headers.
+!
+! MODULE DESCRIPTION:
+!
+!   Routine FORMAT_HDR accepts an MX-internal header code+text cell
+!   and formats it into one or more RFC822 header lines.
+!
+! AUTHOR:   	    M. Madison
+!
+! Copyright (c) 2008, Matthew Madison.
+! 
+! All rights reserved.
+! 
+! Redistribution and use in source and binary forms, with or without
+! modification, are permitted provided that the following conditions
+! are met:
+! 
+!     * Redistributions of source code must retain the above
+!       copyright notice, this list of conditions and the following
+!       disclaimer.
+!     * Redistributions in binary form must reproduce the above
+!       copyright notice, this list of conditions and the following
+!       disclaimer in the documentation and/or other materials provided
+!       with the distribution.
+!     * Neither the name of the copyright owner nor the names of any
+!       other contributors may be used to endorse or promote products
+!       derived from this software without specific prior written
+!       permission.
+! 
+! THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
+! "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
+! LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
+! A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
+! OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
+! SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
+! LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
+! DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
+! THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
+! (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
+! OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+!
+! CREATION DATE:    06-DEC-1989
+!
+! MODIFICATION HISTORY:
+!
+!   06-DEC-1989	V1.0	Madison	    Initial coding.
+!   29-DEC-1989	V1.1-1	Madison	    Added invalid-header checking/recovery.
+!   03-JAN-1989	V1.1-2	Madison	    Refine invalid-header checking.
+!   18-OCT-1990	V1.2	Madison	    Refine address-stuffing.
+!   12-DEC-1990	V1.2-1	Madison	    Add X-To, et al (for BITNET 2 mail)
+!   05-FEB-1991	V1.3	Madison	    Allow null CC:, BCC:.
+!    9-APR-1993 V1.4	Goatley     Add some MIME headers.
+!   25-DEC-1996	V1.5	Madison	    Eliminate dynamic strings.
+!   16-APR-1997 V1.5-1	Goatley	    Added List-* headers.
+!   19-APR-1997	V1.5-2	Madison	    Ensure date/time stamp on received
+!   	    	    	    	    headers does not cross line boundary
+!   	    	    	    	    to work around MS mail client bug.
+!   10-SEP-1997	V1.5-3	Madison	    Add NOPARSE argument.
+!   24-SEP-1997 V1.5-4	Goatley	    When wrapping Received:, check GEQ .maxwid.
+!   30-DEC-1997 V1.5-5	Goatley	    Add hack to not wrap Content-Type headers.
+!   11-JUL-1998	V1.6	Madison	    Recieved: hack and Content-Type fix.
+!   25-NOV-2000	V1.7	Madison	    X-Junk-Mail-Rating.
+!   14-FEB-2002 V1.8    Madison     Original-Recipient.
+!--
+    LIBRARY 'SYS$LIBRARY:STARLET';
+    LIBRARY 'MX';
+
+    FORWARD ROUTINE
+    	FORMAT_HDR,
+    	find_break;
+
+    EXTERNAL ROUTINE
+    	PARSE_ADDRLIST,
+    	MEM_GETTXT;
+
+    MACRO
+    	TABLE (TABNAM, ITEM1) [] =
+    	    %IF %LENGTH EQL 1 %THEN %EXITMACRO %FI
+    	    LITERAL %NAME (TABNAM, '_COUNT') = %LENGTH - 1;
+    	    PSECT OWN = $PLIT$;
+    	    OWN TABNAM : VECTOR [%NAME (TABNAM, '_COUNT'),LONG] INITIAL (
+    	    	%ASCID ITEM1
+    	    	%IF NOT %NULL (%REMAINING) %THEN FILLTAB (%REMAINING) %FI);
+    	    PSECT OWN = $OWN$;
+    	%,
+    	FILLTAB (X) [] =
+    	    , %ASCID X %IF NOT %NULL (%REMAINING) %THEN FILLTAB (%REMAINING) %FI
+    	%;
+
+    !
+    !N.B.  THE ORDER HERE MUST MATCH THE ORDER OF THE MX_K_HDR_* LITERALS
+    !	   DEFINED IN MX.R32!!!
+    !
+    TABLE (HDRNAME, 'From', 'Sender', 'To', 'Resent-To', 'CC', 'Resent-CC',
+	'BCC', 'Resent-BCC', 'Message-ID', 'Resent-Message-ID', 'In-Reply-To',
+	'References', 'Keywords', 'Subject', 'Encrypted', 'Date', 'Reply-To',
+	'Received', 'Resent-Reply-To',
+	'Resent-From', 'Resent-Sender', 'Resent-Date', 'Return-Path',
+	'Other???', 'X-MX-Warning', 'X-To', 'X-Resent-To', 'X-CC',
+    	    'X-Resent-CC', 'X-BCC', 'X-Resent-BCC', 'MIME-Version',
+	    'Content-Transfer-Encoding', 'Content-Type',
+	    'List-Subscribe', 'List-Unsubscribe', 'List-Help',
+	    'X-List-Other???',
+	    'Content-Length',
+	    'Errors-To',
+	    'Warnings-To',
+	    'Precedence',
+	    'Disposition-Notification-To',
+	    'Return-Receipt-To',
+	    'X-Confirm-Reading-To',
+	    'Content-Dispostion',
+	    'Content-Description',
+	    'X-Listname',
+    	    'X-Junk-Mail-Rating',
+    	    'X-Junk-Mail-Reason',
+            'Original-Recipient');
+
+
+%SBTTL 'FORMAT_HDR'
+GLOBAL ROUTINE FORMAT_HDR (HDR_A, TXTQ_A, MAXWIDTH, X_NOPARSE) = 
+BEGIN
+!++
+! FUNCTIONAL DESCRIPTION:
+!
+!   Takes a coded header and produces text which conforms to RFC 822.
+!   Note that the X-MX-Warning: header tag indicates a message generated
+!   by a previous FORMAT_HDR invocation, and is filtered to prevent
+!   the warning from being displayed more than once for an invalid header.
+!
+! RETURNS:  	cond_value, longword (unsigned), write only, by value
+!
+! PROTOTYPE:
+!
+!   FORMAT_HDR hdr, txtq
+!
+! IMPLICIT INPUTS:  None.
+!
+! IMPLICIT OUTPUTS: None.
+!
+! COMPLETION CODES:
+!
+!   SS$_NORMAL:	    	normal successful completion.
+!
+! SIDE EFFECTS:
+!
+!   None.
+!--
+
+    BUILTIN
+    	ACTUALCOUNT;
+
+    BIND
+    	HDR 	= .HDR_A    : TXTDEF,
+    	TXTQ	= .TXTQ_A   : QUEDEF;
+
+    LOCAL
+    	TMPBUF	: VECTOR [4096, BYTE],
+    	noparse,
+    	TMPLEN,
+    	STR 	: BLOCK [DSC$K_S_BLN, BYTE],
+    	TMPP,
+    	STATUS,
+    	TXT 	: REF TXTDEF,
+    	INDENT,
+    	LEN,
+    	MAXWID;
+
+    IF .HDR [TXT_W_CODE] EQL MX_K_HDR_X_WARNING THEN RETURN SS$_NORMAL;
+
+    MAXWID = (IF ACTUALCOUNT () GTR 2 THEN
+    	    	IF .MAXWIDTH EQL 0 THEN %ALLOCATION (TMPBUF) ELSE .MAXWIDTH
+    	      ELSE %ALLOCATION (TMPBUF));
+    noparse = (IF ACTUALCOUNT () GTR 3 THEN .X_NOPARSE ELSE 0);
+
+    IF .HDR [TXT_W_CODE] NEQ MX_K_HDR_OTHER THEN
+    BEGIN
+    	BIND HNAME = .HDRNAME [.HDR [TXT_W_CODE]-1] : BLOCK [,BYTE];
+    	CH$MOVE (.HNAME [DSC$W_LENGTH], .HNAME [DSC$A_POINTER], TMPBUF);
+    	TMPBUF [.HNAME [DSC$W_LENGTH]] = %C':';
+    	TMPBUF [.HNAME [DSC$W_LENGTH]+1] = %C' ';
+    	TMPLEN = .HNAME [DSC$W_LENGTH] + 2;
+    	INDENT = .TMPLEN;
+    END
+    ELSE
+    BEGIN
+    	LOCAL CP;
+    	CP = CH$FIND_CH (.HDR [TXT_W_LEN], HDR [TXT_T_TEXT], %C':');
+    	INDENT = (IF CH$FAIL (.CP) THEN 4 ELSE
+    	    CH$DIFF (.CP, HDR [TXT_T_TEXT]) + 2);
+    	TMPLEN = 0;
+    END;
+
+    IF .noparse THEN
+    BEGIN
+    	LOCAL LEN;
+    	LEN = MIN (.HDR [TXT_W_LEN], %ALLOCATION (TMPBUF) - .TMPLEN);
+    	CH$MOVE (.LEN, HDR [TXT_T_TEXT], CH$PLUS (TMPBUF, .TMPLEN));
+    	TMPLEN = .TMPLEN + .LEN;
+    END
+    ELSE
+    CASE .HDR [TXT_W_CODE] FROM MX_K_HDR_FIRSTCODE TO MX_K_HDR_LASTCODE OF
+    SET
+    	[MX_K_HDR_TO, MX_K_HDR_R_TO, MX_K_HDR_CC, MX_K_HDR_R_CC,
+    	    MX_K_HDR_BCC, MX_K_HDR_R_BCC, MX_K_HDR_REPLY_TO,
+    	    MX_K_HDR_R_REPLY_TO, MX_K_HDR_FROM, MX_K_HDR_R_FROM,
+    	    MX_K_HDR_X_TO] :
+    	BEGIN
+    	    LOCAL
+    	    	ADRQ	: QUEDEF,
+    	    	DID_ONE;
+
+    	    ADRQ [QUE_L_TAIL] = ADRQ [QUE_L_HEAD] = ADRQ [QUE_L_HEAD];
+    	    INIT_SDESC (STR, .HDR [TXT_W_LEN], HDR [TXT_T_TEXT]);
+    	    PARSE_ADDRLIST (STR, ADRQ, 1);
+    	    DID_ONE = 0;
+    	    WHILE NOT REMQUE (.ADRQ [QUE_L_HEAD], TXT) DO
+    	    BEGIN
+    	    	IF .DID_ONE THEN
+    	    	BEGIN
+    	    	    TMPBUF [.TMPLEN] = %C',';
+    	    	    TMPBUF [.TMPLEN+1] = %C' ';
+    	    	    TMPLEN = .TMPLEN + 2;
+    	    	END;
+    	    	IF .TXT [TXT_W_LEN] + .TMPLEN LSS .MAXWID-5 THEN
+    	    	BEGIN
+    	    	    CH$MOVE (.TXT [TXT_W_LEN], TXT [TXT_T_TEXT], CH$PLUS (TMPBUF, .TMPLEN));
+    	    	    TMPLEN = .TMPLEN + .TXT [TXT_W_LEN];
+    	    	END
+    	    	ELSE
+    	    	BEGIN
+    	    	    DECR TMP FROM .TXT [TXT_W_LEN]-1 TO 0 DO
+    	    	    BEGIN
+    	    	    	IF CH$RCHAR (CH$PLUS (TXT [TXT_T_TEXT], .TMP)) EQL %C' '
+    	    	    	OR .TMP EQL 0 THEN
+    	    	    	    IF .TMP + .TMPLEN LSS .MAXWID-4
+    	    	    	    OR .TMP EQL 0 THEN
+    	    	    	BEGIN
+    	    	    	    LOCAL CP;
+    	    	    	    IF .TMP GTR 0 THEN
+    	    	    	    BEGIN
+    	    	    	    	CH$MOVE (.TMP, TXT [TXT_T_TEXT], CH$PLUS (TMPBUF, .TMPLEN));
+    	    	    	    	TMPLEN = .TMPLEN + .TMP;
+    	    	    	    END;
+    	    	    	    INIT_SDESC (STR, .TMPLEN, TMPBUF);
+    	    	    	    INSTXT (STR, .TXTQ [QUE_L_TAIL]);
+    	    	    	    CP = CH$FIND_NOT_CH (.TXT [TXT_W_LEN]-.TMP,
+    	    	    	    	    CH$PLUS (TXT [TXT_T_TEXT], .TMP), %C' ');
+    	    	    	    IF CH$FAIL (.CP) THEN
+    	    	    	    BEGIN
+    	    	    	    	CH$FILL (%C' ', .INDENT, TMPBUF);
+    	    	    	    	TMPLEN = .INDENT;
+    	    	    	    END
+    	    	    	    ELSE
+    	    	    	    BEGIN
+    	    	    	    	LEN = .TXT [TXT_W_LEN] - CH$DIFF (.CP, TXT [TXT_T_TEXT]);
+    	    	    	    	IF .LEN GTR %ALLOCATION (TMPBUF)-.INDENT THEN
+    	    	    	    	    LEN = %ALLOCATION (TMPBUF) - .INDENT;
+    	    	    	    	CH$FILL (%C' ', .INDENT, TMPBUF);
+    	    	    	    	CH$MOVE (.LEN, .CP, CH$PLUS (TMPBUF, .INDENT));
+    	    	    	    	TMPLEN = .LEN + .INDENT;
+    	    	    	    END;
+    	    	    	    EXITLOOP;
+    	    	    	END;
+    	    	    END;
+    	    	END;
+    	    	DID_ONE = 1;
+    	    	FREETXT (TXT);
+    	    END;
+    	    IF NOT .DID_ONE AND (.HDR [TXT_W_CODE] NEQ MX_K_HDR_CC AND
+    	    	.HDR [TXT_W_CODE] NEQ MX_K_HDR_BCC AND .HDR [TXT_W_CODE]
+    	    	NEQ MX_K_HDR_R_CC AND .HDR [TXT_W_CODE] NEQ MX_K_HDR_R_BCC)
+    	    THEN
+    	    BEGIN
+    	    	BIND PFX = %ASCID'X-MX-Warning:   Warning -- Invalid "' : BLOCK [,BYTE],
+    	    	     HNM = .HDRNAME [.HDR [TXT_W_CODE]-1]   	    	: BLOCK [,BYTE],
+    	    	     SFX = %ASCID'" header.'	    	    	    	: BLOCK [,BYTE];
+    	    	TXT = MEM_GETTXT (.PFX [DSC$W_LENGTH] + .HNM [DSC$W_LENGTH] + .SFX [DSC$W_LENGTH]);
+    	    	TXT [TXT_W_LEN] = .PFX [DSC$W_LENGTH] + .HNM [DSC$W_LENGTH] + .SFX [DSC$W_LENGTH];
+    	    	CH$COPY (.PFX [DSC$W_LENGTH], .PFX [DSC$A_POINTER],
+    	    	    	 .HNM [DSC$W_LENGTH], .HNM [DSC$A_POINTER],
+    	    	         .SFX [DSC$W_LENGTH], .SFX [DSC$A_POINTER], %C' ',
+    	    	    	 .TXT [TXT_W_LEN], TXT [TXT_T_TEXT]);
+    	    	INSQUE (.TXT, .TXTQ [QUE_L_TAIL]);
+    	    	LEN = .HDR [TXT_W_LEN];
+    	    	IF .LEN GTR %ALLOCATION (TMPBUF) - .TMPLEN THEN
+    	    	    LEN = %ALLOCATION (TMPBUF) - .TMPLEN;
+    	    	CH$MOVE (.LEN, HDR [TXT_T_TEXT], CH$PLUS (TMPBUF, .TMPLEN));
+    	    	TMPLEN = .TMPLEN + .LEN;
+    	    END;
+    	END;
+    	[INRANGE,OUTRANGE] :
+    	BEGIN
+    	    LOCAL LEN;
+    	    LEN = .HDR [TXT_W_LEN];
+    	    IF .LEN GTR %ALLOCATION (TMPBUF) - .TMPLEN THEN
+    	    	LEN = %ALLOCATION (TMPBUF) - .TMPLEN;
+    	    CH$MOVE (.LEN, HDR [TXT_T_TEXT], CH$PLUS (TMPBUF, .TMPLEN));
+    	    TMPLEN = .TMPLEN + .LEN;
+    	END;
+    TES;
+
+    IF .TMPLEN EQL 0 THEN RETURN SS$_NORMAL;
+
+    TMPP = TMPBUF;
+    WHILE .TMPLEN GTRU .MAXWID DO
+    BEGIN
+    	LOCAL SP;
+
+    	IF .HDR [TXT_W_CODE] EQL MX_K_HDR_RECEIVED THEN
+    	BEGIN
+    	    !
+    	    ! Try to keep the date/time stamp together on
+    	    ! one line; Microsoft mail clients don't parse
+    	    ! the date right if it's not.
+    	    !
+    	    sp = find_break (.tmpp, .maxwid, %C';');
+    	    IF CH$FAIL (.sp) THEN sp = find_break (.tmpp, .maxwid);
+    	END
+    	ELSE
+    	    sp = find_break (.tmpp, .maxwid);
+
+    	IF CH$FAIL (.sp) THEN EXITLOOP;
+    	IF .SP LSSA CH$PLUS (.TMPP, .INDENT) THEN EXITLOOP;
+
+    	LEN = CH$DIFF (.SP, .TMPP);
+    	WHILE .LEN GTR 0 AND (CH$RCHAR (CH$PLUS (.TMPP, .LEN-1)) EQL %C' '
+    	    	    OR CH$RCHAR (CH$PLUS (.TMPP, .LEN-1)) EQL %CHAR (9))
+    	DO LEN = .LEN - 1;
+    	INIT_SDESC (STR, .LEN, .TMPP);
+    	INSTXT (STR, .TXTQ [QUE_L_TAIL]);
+    	TMPLEN = .TMPLEN - CH$DIFF (.SP, .TMPP);
+    	TMPP = .SP;
+    	WHILE .tmplen GTRU 0 AND (CH$RCHAR (.TMPP) EQL %C' ' OR CH$RCHAR (.TMPP) EQL %CHAR (9)) DO
+    	BEGIN
+    	    TMPP = CH$PLUS (.TMPP, 1);
+    	    TMPLEN = .TMPLEN - 1;
+    	END;
+    	TMPP = .TMPP - .INDENT;
+    	CH$FILL (%C' ', .INDENT, .TMPP);
+    	TMPLEN = .TMPLEN + .INDENT;
+    END;
+
+    IF .TMPLEN GTR 0 THEN
+    BEGIN
+    	INIT_SDESC (STR, .TMPLEN, .TMPP);
+    	INSTXT (STR, .TXTQ [QUE_L_TAIL]);
+   END;
+
+    SS$_NORMAL
+
+END; ! FORMAT_HDR
+
+%SBTTL 'find_break'
+ROUTINE find_break (startp, maxwid, testchar : BYTE) = 
+BEGIN
+!++
+! FUNCTIONAL DESCRIPTION:
+!
+!   Attempts to find a good breaking point.
+!
+! RETURNS:  	char pointer
+!
+! PROTOTYPE:
+!
+!   FIND_BREAK startp, maxwid [,char]
+!
+! IMPLICIT INPUTS:  None.
+!
+! IMPLICIT OUTPUTS: None.
+!
+! COMPLETION CODES: non-0: success
+!
+! SIDE EFFECTS:	    None.
+!--
+    BUILTIN
+    	ACTUALCOUNT;
+
+    LOCAL
+    	inq,
+    	lastp,
+    	endp,
+    	cp;
+
+    inq = 0;
+    lastp = 0;
+    cp = .startp;
+    endp = CH$PLUS (.startp, .maxwid);
+    WHILE .cp LSSA .endp DO
+    BEGIN
+    	LOCAL ch : BYTE;
+    	ch = CH$RCHAR (.cp);
+    	IF .inq THEN
+    	BEGIN
+    	    IF .ch EQL %C'\' THEN cp = CH$PLUS (.cp, 1)
+    	    ELSE IF .ch EQL %C'"' THEN inq = 0
+    	END
+    	ELSE IF .ch EQL %C'\' THEN cp = CH$PLUS (.cp, 1)
+    	ELSE IF .ch EQL %C'"' THEN inq = 1
+    	ELSE IF ACTUALCOUNT () GTR 2 THEN
+    	BEGIN
+    	    IF .ch EQL .testchar AND CH$PLUS (.cp, 1) LSSA .endp THEN
+    	    BEGIN
+    	    	cp = CH$PLUS (.cp, 1);
+    	    	lastp = .cp;
+    	    	WHILE CH$PLUS (.cp, 1) LSSA .endp AND (CH$RCHAR (CH$PLUS (.cp, 1)) EQL %C' ' OR
+    	    	    	    	    	    	       CH$RCHAR (CH$PLUS (.cp, 1)) EQL %CHAR (9)) DO
+    	    	BEGIN
+    	    	    cp = CH$PLUS (.cp, 1);
+    	    	END;
+    	    END;
+        END
+    	ELSE IF .ch EQL %C' ' OR .ch EQL %CHAR (9) THEN
+    	BEGIN
+    	    lastp = .cp;
+    	    WHILE CH$PLUS (.cp, 1) LSSA .endp AND (CH$RCHAR (CH$PLUS (.cp, 1)) EQL %C' ' OR
+    	    	    	    	    	    	   CH$RCHAR (CH$PLUS (.cp, 1)) EQL %CHAR (9)) DO
+    	    BEGIN
+    	    	cp = CH$PLUS (.cp, 1);
+    	    END;
+    	END;
+    	cp = CH$PLUS (.cp, 1);
+    END;
+    
+    .lastp
+
+END; ! find_break
+
+END
+ELUDOM

@@ -1,0 +1,530 @@
+%TITLE 'SP_MGR'
+MODULE SP_MGR (IDENT = 'V1.0-5') =
+BEGIN
+!++
+! FACILITY: 	SP_MGR Subprocess management routines
+!
+! MODULE DESCRIPTION:
+!
+!   This module contains routines for creating, deleting, and
+!   communicating with long-term subprocesses -- subprocesses
+!   which are created and remain active for more than one command.
+!
+! AUTHOR:   	    M. Madison
+!
+! Copyright (c) 2008, Matthew Madison.
+! 
+! All rights reserved.
+! 
+! Redistribution and use in source and binary forms, with or without
+! modification, are permitted provided that the following conditions
+! are met:
+! 
+!     * Redistributions of source code must retain the above
+!       copyright notice, this list of conditions and the following
+!       disclaimer.
+!     * Redistributions in binary form must reproduce the above
+!       copyright notice, this list of conditions and the following
+!       disclaimer in the documentation and/or other materials provided
+!       with the distribution.
+!     * Neither the name of the copyright owner nor the names of any
+!       other contributors may be used to endorse or promote products
+!       derived from this software without specific prior written
+!       permission.
+! 
+! THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
+! "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
+! LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
+! A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
+! OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
+! SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
+! LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
+! DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
+! THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
+! (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
+! OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+!
+! CREATION DATE:    21-JUL-1988
+!
+! MODIFICATION HISTORY:
+!
+!   21-JUL-1988	V1.0-1  Madison	    Initial coding.
+!   15-DEC-1989	V1.0-2	Madison	    Added exit handler.
+!   19-MAR-1990	V1.0-3	Madison	    Ditch logicals, symbols for use with MX.
+!   28-NOV-1998	V1.0-4	Madison	    Fix protection on $CREMBX calls.
+!   31-DEC-2004 V1.0-5  Madison     Fix exit handling.
+!--
+
+    LIBRARY 'SYS$LIBRARY:STARLET';
+    LIBRARY 'FIELDS';
+    LIBRARY 'MX';
+
+    EXTERNAL ROUTINE
+    	G_HAT (LIB$ANALYZE_SDESC, LIB$FREE_EF, LIB$FREE_VM, LIB$GETDVI,
+    	    LIB$GET_EF, LIB$GET_VM, LIB$SPAWN, STR$COPY_DX, STR$COPY_R,
+    	    STR$FREE1_DX);
+
+    FORWARD ROUTINE
+    	SP_OPEN,
+    	SP_CLOSE,
+    	SP_SEND,
+    	SP_RECEIVE,
+    	SP_WRTATTN_AST,
+    	EXIT_HANDLER;
+
+    _DEF (SPB)
+    	SPB_L_FLINK 	= _LONG,
+    	SPB_L_BLINK 	= _LONG,
+    	SPB_Q_IOSB  	= _QUAD,
+    	_OVERLAY (SPB_Q_IOSB)
+    	    SPB_W_IOSTAT	= _WORD,
+    	    SPB_W_IOCOUNT	= _WORD,
+    	    SPB_L_IOLONG	= _LONG,
+    	_ENDOVERLAY
+    	SPB_W_INCHN 	= _WORD,
+    	SPB_W_OUTCHN	= _WORD,
+    	SPB_L_RCVAST	= _LONG,
+    	SPB_L_ASTPRM	= _LONG,
+    	SPB_L_PID   	= _LONG,
+    	SPB_L_BUFSIZ	= _LONG,
+    	SPB_L_BUFPTR	= _LONG,
+    	SPB_L_TERMEFN   = _LONG
+    _ENDDEF (SPB);
+
+    _DEF (EXH)
+    	EXH_L_FLINK 	= _LONG,
+    	EXH_L_HANDLER	= _LONG,
+    	EXH_L_ARGCNT	= _LONG,
+    	EXH_L_P1    	= _LONG,
+    	EXH_L_P2    	= _LONG
+    _ENDDEF (EXH);
+
+    OWN
+    	SPQUE	: QUEDEF PRESET (
+    	    	    [QUE_L_HEAD] = SPQUE,
+    	    	    [QUE_L_TAIL] = SPQUE),
+    	EXIT_STATUS,
+    	EXH_DECLARED : INITIAL (0),
+    	EXHBLK	: EXHDEF PRESET (
+    	    	    [EXH_L_HANDLER] = EXIT_HANDLER,
+    	    	    [EXH_L_ARGCNT]  = 2,
+    	    	    [EXH_L_P1]	    = EXIT_STATUS,
+    	    	    [EXH_L_P2]	    = SPQUE);
+
+%SBTTL 'SP_OPEN'
+GLOBAL ROUTINE SP_OPEN (SPBLK_A_A, INICMD_A, RCVAST_A, RCVASTPRM) =
+BEGIN
+!++
+! FUNCTIONAL DESCRIPTION:
+!
+!   This routine creates a subprocess tracking structure, creates
+!   an input and an output mailbox, and spawns a subprocess.  If
+!   an initial command is specified, that command string is passed
+!   as the first command to the subprocess.  If a receive AST address
+!   is specified, that routine is invoked when a write-attention AST
+!   is delivered to the output mailbox.
+!
+! RETURNS:  	cond_value, longword (unsigned), write only, by value
+!
+!
+! PROTOTYPE:
+!
+!   SP_OPEN  handle [,inicmd] [,rcvast] [,astprm]
+!
+! handle:   unsigned_longword, longword (unsigned), write only, by reference
+! inicmd:   char_string, character string, read only, by descriptor
+! rcvast:   procedure, procedure entry mask, call, by reference
+! astprm:   user_arg, unspecified, read only, by value
+!
+! IMPLICIT INPUTS:  None.
+!
+! IMPLICIT OUTPUTS: None.
+!
+! COMPLETION CODES:
+!
+!   SS$_NORMAL:	    	normal successful completion.
+!
+! SIDE EFFECTS:
+!
+!   None.
+!--
+
+    BIND
+    	SPBLK = .SPBLK_A_A : REF SPBDEF,
+    	INICMD = .INICMD_A : $BBLOCK [DSC$K_S_BLN];
+
+    BUILTIN
+    	ACTUALCOUNT, NULLPARAMETER;
+
+    LOCAL
+    	STATUS,
+    	INBOX  : $BBLOCK [DSC$K_S_BLN],
+    	OUTBOX : $BBLOCK [DSC$K_S_BLN],
+    	TMPSTR : $BBLOCK [DSC$K_S_BLN];
+
+    IF NOT (STATUS = LIB$GET_VM (%REF (SPB_S_SPBDEF), SPBLK)) THEN
+    	RETURN .STATUS;
+
+    IF NOT (STATUS = $CREMBX (CHAN = SPBLK [SPB_W_INCHN], PROMSK = %X'FF00')) THEN
+    BEGIN
+    	LIB$FREE_VM (%REF (SPB_S_SPBDEF), SPBLK);
+    	RETURN .STATUS;
+    END;
+
+    IF NOT (STATUS = $CREMBX (CHAN = SPBLK [SPB_W_OUTCHN], PROMSK = %X'FF00')) THEN
+    BEGIN
+    	$DASSGN (CHAN = .SPBLK [SPB_W_INCHN]);
+    	LIB$FREE_VM (%REF (SPB_S_SPBDEF), SPBLK);
+    	RETURN .STATUS;
+    END;
+
+    $INIT_DYNDESC (INBOX);
+    $INIT_DYNDESC (OUTBOX);
+    LIB$GETDVI (%REF (DVI$_DEVNAM), SPBLK [SPB_W_INCHN],0,0, INBOX);
+    LIB$GETDVI (%REF (DVI$_DEVNAM), SPBLK [SPB_W_OUTCHN],0,0, OUTBOX);
+    LIB$GETDVI (%REF (DVI$_DEVBUFSIZ), SPBLK [SPB_W_OUTCHN],0,
+    	SPBLK [SPB_L_BUFSIZ]);
+    IF NOT (STATUS = LIB$GET_VM (SPBLK [SPB_L_BUFSIZ], SPBLK [SPB_L_BUFPTR]))
+    THEN BEGIN
+    	$DASSGN (CHAN = .SPBLK [SPB_W_OUTCHN]);
+    	$DASSGN (CHAN = .SPBLK [SPB_W_INCHN]);
+    	LIB$FREE_VM (%REF (SPB_S_SPBDEF), SPBLK);
+    	RETURN .STATUS;
+    END;
+
+
+    SPBLK [SPB_L_RCVAST] = 0;
+
+    IF ACTUALCOUNT () GTR 2 THEN
+    	IF NOT NULLPARAMETER (RCVAST_A) THEN
+    	BEGIN
+    	    SPBLK [SPB_L_RCVAST] = .RCVAST_A;
+    	    $QIOW (CHAN = .SPBLK [SPB_W_OUTCHN],
+    	    	FUNC = IO$_SETMODE OR IO$M_WRTATTN,
+    	    	P1 = SP_WRTATTN_AST, P2 = .SPBLK);
+    	    SPBLK [SPB_L_ASTPRM] =
+    	    	(IF ACTUALCOUNT () GTR 3 THEN .RCVASTPRM ELSE 0);
+    	END;
+
+    $INIT_DYNDESC (TMPSTR);
+    IF ACTUALCOUNT () GTR 1 THEN 
+    	STR$COPY_DX (TMPSTR, INICMD);
+
+    IF NOT (STATUS = LIB$GET_EF (SPBLK [SPB_L_TERMEFN])) THEN
+    BEGIN
+    	$DASSGN (CHAN = .SPBLK [SPB_W_INCHN]);
+    	$DASSGN (CHAN = .SPBLK [SPB_W_OUTCHN]);
+    	LIB$FREE_VM (SPBLK [SPB_L_BUFSIZ], SPBLK [SPB_L_BUFPTR]);
+    	LIB$FREE_VM (%REF (SPB_S_SPBDEF), SPBLK);
+    	RETURN .STATUS;
+    END;
+    IF NOT (STATUS = LIB$SPAWN (TMPSTR, INBOX, OUTBOX,
+    	%REF (CLI$M_NOWAIT OR CLI$M_NOKEYPAD OR CLI$M_NOCLISYM OR
+    	    	CLI$M_NOLOGNAM), 0, SPBLK [SPB_L_PID],
+    	0, SPBLK [SPB_L_TERMEFN])) THEN
+    BEGIN
+    	LIB$FREE_EF (SPBLK [SPB_L_TERMEFN]);
+    	$DASSGN (CHAN = .SPBLK [SPB_W_INCHN]);
+    	$DASSGN (CHAN = .SPBLK [SPB_W_OUTCHN]);
+    	LIB$FREE_VM (SPBLK [SPB_L_BUFSIZ], SPBLK [SPB_L_BUFPTR]);
+    	LIB$FREE_VM (%REF (SPB_S_SPBDEF), SPBLK);
+    	RETURN .STATUS;
+    END;
+
+    $SETAST (ENBFLG=0);
+    IF NOT .EXH_DECLARED THEN
+    BEGIN
+    	$DCLEXH (DESBLK=EXHBLK);
+    	EXH_DECLARED = 1;
+    END;
+    $SETAST (ENBFLG=1);
+
+    INSQUE (.SPBLK, .SPQUE [QUE_L_TAIL]);
+
+    STR$FREE1_DX (INBOX);
+    STR$FREE1_DX (OUTBOX);
+    STR$FREE1_DX (TMPSTR);
+
+    .STATUS
+
+END; ! SP_OPEN
+
+%SBTTL 'SP_CLOSE'
+GLOBAL ROUTINE SP_CLOSE (SPBLK_A_A) = 
+BEGIN
+!++
+! FUNCTIONAL DESCRIPTION:
+!
+!   This routine deletes a subprocess created by SP_OPEN, deassigns
+!   the mailbox channels used to communicate with that subprocess,
+!   
+!
+! RETURNS:  	cond_value, longword (unsigned), write only, by value
+!
+!
+! PROTOTYPE:
+!
+!   SP_CLOSE handle
+!
+! handle:   unsigned_longword, longword (unsigned), modify, by reference
+!
+! IMPLICIT INPUTS:  None.
+!
+! IMPLICIT OUTPUTS: None.
+!
+! COMPLETION CODES:
+!
+!   SS$_NORMAL:	    	normal successful completion.
+!
+! SIDE EFFECTS:
+!
+!   None.
+!--
+
+    BIND
+    	spblk = .spblk_a_a : REF SPBDEF;
+
+    LOCAL
+    	sp  : REF SPBDEF,
+        efn;
+
+    $SETAST (ENBFLG=0);
+    REMQUE (.spblk, sp);
+    efn = .spblk [SPB_L_TERMEFN];
+    spblk [SPB_L_TERMEFN] = 0;
+    $SETAST (ENBFLG=1);
+    $FORCEX (PIDADR=spblk [SPB_L_PID], CODE=SS$_NORMAL);
+    $DELPRC (PIDADR=spblk [SPB_L_PID]);
+    $WAITFR (EFN=.efn);
+    LIB$FREE_EF (efn);
+    $DASSGN (CHAN=.spblk [SPB_W_INCHN]);
+    $DASSGN (CHAN=.spblk [SPB_W_OUTCHN]);
+    LIB$FREE_VM (%REF (SPB_S_SPBDEF), spblk);
+    spblk = 0;
+
+    SS$_NORMAL
+
+END; ! SP_CLOSE
+
+%SBTTL 'SP_SEND'
+GLOBAL ROUTINE SP_SEND (SPBLK_A_A, CMDSTR_A) = 
+BEGIN
+!++
+! FUNCTIONAL DESCRIPTION:
+!
+!   This routine sends a command to a subprocess created with SP_OPEN.
+!
+! RETURNS:  	cond_value, longword (unsigned), write only, by value
+!
+!
+! PROTOTYPE:
+!
+!   SP_SEND handle, cmdstr
+!
+! handle:   unsigned_longword, longword (unsigned), read only, by reference
+! cmdstr:   char_string, character string, read only, by descriptor
+!
+! IMPLICIT INPUTS:  None.
+!
+! IMPLICIT OUTPUTS: None.
+!
+! COMPLETION CODES:
+!
+!   SS$_NORMAL:	    	normal successful completion.
+!
+! SIDE EFFECTS:
+!
+!   None.
+!--
+
+    BIND
+    	spblk = .spblk_a_a : REF SPBDEF,
+    	cmdstr = .cmdstr_a : BLOCK [DSC$K_S_BLN,BYTE];
+
+    LOCAL
+    	status,
+    	efstate,
+    	cmdadr,
+    	cmdlen : WORD;
+
+    IF .spblk [SPB_L_TERMEFN] EQLU 0 OR
+        $READEF (EFN=.spblk [SPB_L_TERMEFN], STATE=efstate) NEQU SS$_WASCLR THEN
+    	RETURN SS$_NONEXPR;
+
+    IF NOT (status = LIB$ANALYZE_SDESC (cmdstr, cmdlen, cmdadr)) THEN
+    	RETURN .status;
+
+    status = $QIOW (CHAN=.spblk [SPB_W_INCHN], FUNC=IO$_WRITEVBLK,
+                    IOSB=spblk [SPB_Q_IOSB], P1=.cmdadr, P2=.cmdlen);
+    IF .status THEN
+        status = .spblk [SPB_W_IOSTAT];
+
+    .status
+
+END; ! SP_SEND;
+
+%SBTTL 'SP_RECEIVE'
+GLOBAL ROUTINE SP_RECEIVE (SPBLK_A_A, RCVSTR_A, RCVLEN_A) = 
+BEGIN
+!++
+! FUNCTIONAL DESCRIPTION:
+!
+!   This routine reads the output generated by a subprocess created
+!   with SP_OPEN.  The read is carried out IO$M_NOW, so if no output
+!   is available to be read, SS$_ENDOFFILE is returned.
+!
+! RETURNS:  	cond_value, longword (unsigned), write only, by value
+!
+!
+! PROTOTYPE:
+!
+!   SP_RECEIVE  handle, rcvstr [,rcvlen]
+!
+! handle:   unsigned_longword, longword (unsigned), read only, by reference
+! rcvstr:   char_string, character string, write only, by descriptor
+! rcvlen:   unsigned_word, word (unsigned), write only, by reference
+!
+! IMPLICIT INPUTS:  None.
+!
+! IMPLICIT OUTPUTS: None.
+!
+! COMPLETION CODES:
+!
+!   SS$_NORMAL:	    	normal successful completion.
+!   any from $QIO.
+!
+! SIDE EFFECTS:
+!
+!   None.
+!--
+
+    BIND
+    	spblk = .spblk_a_a : REF SPBDEF,
+    	rcvstr = .rcvstr_a : BLOCK [DSC$K_S_BLN,BYTE];
+
+    BUILTIN
+    	ACTUALCOUNT, NULLPARAMETER;
+
+    LOCAL
+    	status,
+    	efstate;
+
+    IF .spblk [SPB_L_TERMEFN] EQL 0 OR
+        $READEF (EFN=.spblk [SPB_L_TERMEFN], STATE=efstate) NEQU SS$_WASCLR THEN
+    	RETURN SS$_NONEXPR;
+
+    status = $QIOW (CHAN=.spblk [SPB_W_OUTCHN],
+    	FUNC=IO$_READVBLK OR IO$M_NOW, IOSB=spblk [SPB_Q_IOSB],
+    	P1=.spblk [SPB_L_BUFPTR], P2=.spblk [SPB_L_BUFSIZ]);
+    IF .status THEN
+    BEGIN
+    	IF NOT .spblk [SPB_W_IOSTAT] THEN
+            RETURN .spblk [SPB_W_IOSTAT];
+    	STR$COPY_R (rcvstr, spblk [SPB_W_IOCOUNT], .spblk [SPB_L_BUFPTR]);
+    	IF ACTUALCOUNT () GTR 2 THEN
+    	    IF NOT NULLPARAMETER (rcvlen_a) THEN
+    	    	.rcvlen_a = .spblk [SPB_W_IOCOUNT];
+    END;
+
+    .STATUS
+
+END; ! SP_RECEIVE
+
+%SBTTL 'SP_WRTATTN_AST'
+ROUTINE SP_WRTATTN_AST (SPBLK : REF SPBDEF) = 
+BEGIN
+!++
+! FUNCTIONAL DESCRIPTION:
+!
+!   This routine is the write-attention AST routine used when a
+!   receive-AST is specified on a call to SP_OPEN.  It invokes
+!   the user's receive-AST routine and resets the write-attention
+!   AST for the subprocess output mailbox.
+!
+! RETURNS:  	cond_value, longword (unsigned), write only, by value
+!
+!
+! PROTOTYPE:
+!
+!   SP_WRTATTN_AST spblk   (AST routine)
+!
+! spblk:    spb, longword (unsigned), modify, by reference
+!
+! IMPLICIT INPUTS:  None.
+!
+! IMPLICIT OUTPUTS: None.
+!
+! COMPLETION CODES:
+!
+!   SS$_NORMAL:	    	normal successful completion.
+!
+! SIDE EFFECTS:
+!
+!   None.
+!--
+
+    LOCAL
+    	status;
+
+    IF .spblk [SPB_L_TERMEFN] EQLU 0 THEN
+        RETURN SS$_NORMAL;
+
+    status = (.spblk [SPB_L_RCVAST]) (.spblk [SPB_L_ASTPRM]);
+    $QIOW (CHAN=.spblk [SPB_W_OUTCHN],
+    	FUNC=IO$_SETMODE OR IO$M_WRTATTN,
+    	P1=SP_WRTATTN_AST, P2=.spblk);
+
+    .status
+
+END; ! SP_WRTATTN_AST
+
+%SBTTL 'EXIT_HANDLER'
+ROUTINE EXIT_HANDLER (STAT_A, QUE_A) = 
+BEGIN
+!++
+! FUNCTIONAL DESCRIPTION:
+!
+!   description
+!
+! RETURNS:  	cond_value, longword (unsigned), write only, by value
+!
+! PROTOTYPE:
+!
+!   EXIT_HANDLER
+!
+! IMPLICIT INPUTS:  None.
+!
+! IMPLICIT OUTPUTS: None.
+!
+! COMPLETION CODES:
+!
+!   SS$_NORMAL:	    	normal successful completion.
+!
+! SIDE EFFECTS:
+!
+!   None.
+!--
+    BIND
+    	que 	= .que_a : QUEDEF;
+
+    LOCAL
+    	spblk	: REF SPBDEF,
+        efn;
+    
+    WHILE NOT REMQUE (.que [QUE_L_HEAD], spblk) DO
+    BEGIN
+        efn = .spblk [SPB_L_TERMEFN];
+        spblk [SPB_L_TERMEFN] = 0;
+    	$DELPRC (PIDADR=spblk [SPB_L_PID]);
+    	LIB$FREE_EF (efn);
+    	$DASSGN (CHAN=.spblk [SPB_W_OUTCHN]);
+    	$DASSGN (CHAN=.spblk [SPB_W_INCHN]);
+    	LIB$FREE_VM (%REF (SPB_S_SPBDEF), spblk);
+    END;
+
+    SS$_NORMAL
+
+END; ! EXIT_HANDLER
+
+END
+ELUDOM

@@ -1,0 +1,249 @@
+%TITLE 'MAKEDATE'
+MODULE MAKEDATE (IDENT='V1.0-2',
+    ADDRESSING_MODE (EXTERNAL=GENERAL, NONEXTERNAL=LONG_RELATIVE)) =
+BEGIN
+!++
+! FACILITY: 	    MX
+!
+! ABSTRACT:
+!
+!   This module contains routine MX_MKDATE.
+!
+! MODULE DESCRIPTION:
+!
+!   This module contains MX_MKDATE, a routine for forming
+!   RFC1123-compliant date/time strings from a VMS date/time stamp.
+!
+! AUTHOR:   	    M. Madison
+!
+! Copyright (c) 2008, Matthew Madison.
+! 
+! All rights reserved.
+! 
+! Redistribution and use in source and binary forms, with or without
+! modification, are permitted provided that the following conditions
+! are met:
+! 
+!     * Redistributions of source code must retain the above
+!       copyright notice, this list of conditions and the following
+!       disclaimer.
+!     * Redistributions in binary form must reproduce the above
+!       copyright notice, this list of conditions and the following
+!       disclaimer in the documentation and/or other materials provided
+!       with the distribution.
+!     * Neither the name of the copyright owner nor the names of any
+!       other contributors may be used to endorse or promote products
+!       derived from this software without specific prior written
+!       permission.
+! 
+! THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
+! "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
+! LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
+! A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
+! OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
+! SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
+! LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
+! DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
+! THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
+! (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
+! OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+!
+! CREATION DATE:    30-DEC-1996
+!
+! MODIFICATION HISTORY:
+!
+!   30-DEC-1996	V1.0	Madison	    Initial coding (from MDM_MKDATE).
+!   18-FEB-1997	V1.0-1	Madison	    TDF of zero == GMT.
+!   22-AUG-1997	V1.0-2	Madison	    Use +0000 in place of GMT, per DRUMS spec.
+!--
+
+    LIBRARY 'SYS$LIBRARY:STARLET';
+    LIBRARY 'MX';
+
+    EXTERNAL ROUTINE
+    	LIB$DAY_OF_WEEK, LIB$SYS_FAO, LIB$CVT_DTB;
+
+    LITERAL
+    	YEAR = 0,
+    	MONTH = 1,
+    	DAY = 2,
+    	HOUR = 3,
+    	MINUTE = 4,
+    	SECOND = 5;
+
+MACRO
+	tz_defined (log, equiv, len) =
+    	    BEGIN
+    	    	LOCAL
+    	    	    LNMLST : $ITMLST_DECL (ITEMS=1);
+    	    	$ITMLST_INIT (ITMLST=LNMLST,
+    	    	    (BUFSIZ=%ALLOCATION (equiv), ITMCOD=LNM$_STRING,
+    	    	    	BUFADR=equiv, RETLEN=len));
+    	    	$TRNLNM (LOGNAM=%ASCID log, TABNAM=%ASCID'LNM$SYSTEM',
+    	    	    	    ACMODE=%REF(PSL$C_EXEC), ITMLST=LNMLST)
+    	    END
+	%;
+
+
+%SBTTL 'MX_MKDATE'
+GLOBAL ROUTINE MX_MKDATE (TIMADR, FMT_DATE, FD_LEN) =
+BEGIN
+!++
+! FUNCTIONAL DESCRIPTION:
+!
+!   TIME ZONE SUPPORT:
+!
+!	This routine looks for any of the following logicals; the value
+!	is used with no time-zone calculations.
+!
+!   	    	SYS$TIMEZONE_DIFFERENTIAL (VMS/DECdts)
+!		MX_TIMEZONE		(MX)
+!		MULTINET_TIMEZONE	(MultiNet from TGV)
+!		JAN_TIME_ZONE		(Jnet from Wingra)
+!		UUCP_TIME_ZONE		(DECUS UUCP)
+!		WIN$TIME_ZONE		(Wollongong)
+!   	    	UCX$TZ	    	    	(UCX)
+!
+!	If none of those are defined, it'll check the following logicals,
+!	which should have the value P, M, C, or E.  The time zone will
+!	begin with the specified letter.
+!
+!		MX_TZ_PREFIX
+!		MX_TZ_PREFIX
+!
+!	If none of them are defined, US Eastern standard time is assumed.
+!
+! RETURNS:  	cond_value, longword (unsigned), write only, by value
+!
+! PROTOTYPE:
+!
+!   MX_MKDATE  [timbuf], fmtdate [,fdlen]
+!
+! timbuf:   vms_date_time, quadword (signed), read only, by reference
+! fmt_date: char_string, character string, write only, by descriptor
+! fd_len:   word_unsigned, word (unsigned), write only, by reference
+!
+! IMPLICIT INPUTS:  None.
+!
+! IMPLICIT OUTPUTS: None.
+!
+! COMPLETION CODES:
+!
+!   SS$_NORMAL:	    	normal successful completion.
+!
+! SIDE EFFECTS:
+!
+!   None.
+!--
+    MAP
+    	TIMADR	    : REF BLOCK [8,BYTE],
+    	FMT_DATE    : REF BLOCK [DSC$K_S_BLN,BYTE];
+
+    BUILTIN
+    	ACTUALCOUNT;
+
+    LOCAL
+    	XTIME	: BLOCK [8,BYTE],
+    	TIMBUF	: VECTOR [7,WORD],
+    	TZBUF	: VECTOR [256, BYTE],
+    	TZLEN	: WORD,
+    	STATUS,
+    	DST,
+    	DOW,
+    	DID_TDF,
+    	LEN : WORD;
+
+    IF .TIMADR EQL 0 THEN $GETTIM (TIMADR=XTIME)
+    ELSE BEGIN
+    	XTIME [0,0,32,0] = .TIMADR [0,0,32,0];
+    	XTIME [4,0,32,0] = .TIMADR [4,0,32,0];
+    END;
+
+    IF NOT (STATUS = $NUMTIM (TIMBUF=TIMBUF, TIMADR=XTIME)) THEN
+    	RETURN .STATUS;
+    IF NOT (STATUS = LIB$DAY_OF_WEEK (XTIME, DOW)) THEN RETURN .STATUS;
+    DOW = .DOW MOD 7;
+
+    DID_TDF = 0;
+
+    IF tz_defined ('SYS$TIMEZONE_DIFFERENTIAL', tzbuf, tzlen) THEN
+    BEGIN
+    	LOCAL
+    	    SDSC : BLOCK [DSC$K_S_BLN,BYTE],
+    	    HOURS, MINUTES, TDF;
+
+    	LIB$CVT_DTB (.TZLEN, TZBUF, TDF);
+    	TDF = .TDF / 60;  ! convert to minutes
+    	HOURS = .TDF / 60;
+    	MINUTES = ABS (.TDF) MOD 60;
+    	INIT_SDESC (SDSC, %ALLOCATION (TZBUF), TZBUF);
+    	$FAO (%ASCID'!AD!2ZL!2ZL', TZLEN, SDSC, 1,
+    	    	(IF .HOURS LSS 0 THEN UPLIT('-') ELSE UPLIT('+')), 
+    	    	ABS(.HOURS), .MINUTES);
+    	DID_TDF = 1;
+    END
+    ELSE IF NOT tz_defined ('MX_TIMEZONE',	tzbuf, tzlen) THEN
+    IF NOT tz_defined ('MULTINET_TIMEZONE',	tzbuf, tzlen) THEN
+    IF NOT tz_defined ('JAN_TIME_ZONE',		tzbuf, tzlen) THEN
+    IF NOT tz_defined ('UUCP_TIME_ZONE',	tzbuf, tzlen) THEN
+    IF NOT tz_defined ('WIN$TIME_ZONE',		tzbuf, tzlen) THEN
+    IF NOT tz_defined ('UCX$TZ',		tzbuf, tzlen) THEN
+    BEGIN
+    	IF NOT tz_defined ('MX_TZ_PREFIX', tzbuf, tzlen) THEN
+    	BEGIN
+    	    tzbuf [0] = %C'E';
+    	    tzlen = 1;
+    	END;
+    END;
+
+    IF NOT .DID_TDF AND (.tzlen EQL 1 OR .tzlen GEQ 7) THEN
+    BEGIN
+    	DST = 0;
+    	CASE .TIMBUF [MONTH] FROM 1 TO 12 OF
+    	SET
+    	    [4] :
+    	    IF .TIMBUF [DAY] - .DOW GTR 0 THEN
+    	    	IF .DOW EQL 0 THEN DST = (.TIMBUF [HOUR] GEQ 3)
+    	    	ELSE DST = 1
+    	    ELSE DST = 0;
+
+    	    [10] :
+    	    IF .TIMBUF [DAY] - .DOW GTR 24 THEN
+    	    	IF .DOW EQL 0 THEN DST = (.TIMBUF [HOUR] EQL 0)
+    	    	ELSE DST = 0
+    	    ELSE DST = 1;
+
+    	    [5,6,7,8,9] : DST = 1;
+    	    [INRANGE] : DST = 0;
+    	TES;
+    	IF .tzlen EQL 1 THEN   ! just the prefix
+    	BEGIN
+    	    tzbuf [1] = (IF .DST THEN %C'D' ELSE %C'S');
+    	    tzbuf [2] = %C'T';
+    	END
+    	ELSE IF .DST THEN  ! format of 'PST8PDT' and so forth
+    	BEGIN
+    	    tzbuf [0] = .tzbuf [4];
+    	    tzbuf [1] = .tzbuf [5];
+    	    tzbuf [2] = .tzbuf [6];
+    	END;
+    	tzlen = 3;
+    END;
+
+    STATUS = LIB$SYS_FAO (%ASCID'!AD, !ZW !AD !ZW !2ZW:!2ZW:!2ZW !AD',
+    	LEN, .FMT_DATE,
+    	3, CH$PLUS (UPLIT ('Sun Mon Tue Wed Thu Fri Sat '), .DOW^2),
+    	.TIMBUF [DAY], 3,
+    	CH$PLUS (UPLIT ('    Jan Feb Mar Apr May Jun Jul Aug Sep Oct Nov Dec '),
+    	.TIMBUF [MONTH]^2), .TIMBUF [YEAR], .TIMBUF [HOUR],
+    	.TIMBUF [MINUTE], .TIMBUF [SECOND], .TZLEN, TZBUF);
+
+    IF .STATUS AND (ACTUALCOUNT () GTR 2) THEN
+    	IF .FD_LEN NEQ 0 THEN .FD_LEN = .LEN;
+
+    .STATUS
+
+END; ! MX_MKDATE
+
+END
+ELUDOM

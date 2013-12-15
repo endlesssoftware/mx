@@ -1,0 +1,727 @@
+!++
+! MX.R32
+!
+! Copyright (c) 2008, Matthew Madison.
+! Copyright (c) 2011, Endless Software Solutions.
+! 
+! All rights reserved.
+! 
+! Redistribution and use in source and binary forms, with or without
+! modification, are permitted provided that the following conditions
+! are met:
+! 
+!     * Redistributions of source code must retain the above
+!       copyright notice, this list of conditions and the following
+!       disclaimer.
+!     * Redistributions in binary form must reproduce the above
+!       copyright notice, this list of conditions and the following
+!       disclaimer in the documentation and/or other materials provided
+!       with the distribution.
+!     * Neither the name of the copyright owner nor the names of any
+!       other contributors may be used to endorse or promote products
+!       derived from this software without specific prior written
+!       permission.
+! 
+! THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
+! "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
+! LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
+! A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
+! OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
+! SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
+! LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
+! DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
+! THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
+! (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
+! OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+!
+! General declarations for MX things.
+!--
+
+    LIBRARY 'FIELDS';
+    LIBRARY 'SYS$LIBRARY:STARLET';
+
+    BUILTIN
+    	INSQUE, REMQUE;
+
+%IF NOT %BLISS(BLISS32V)
+%THEN
+    FIELD
+    	QUE_FIELDS =
+    	SET
+    	    QUE_L_HEAD	= [0,0,32,0],
+    	    QUE_L_TAIL	= [4,0,32,0]
+    	TES;
+
+    LITERAL
+    	QUE_S_QUEDEF = 8;
+
+    MACRO
+    	QUEDEF = VOLATILE BLOCK [QUE_S_QUEDEF,BYTE] FIELD (QUE_FIELDS)%;
+%ELSE
+    _DEF (QUE)
+	    QUE_L_HEAD = _LONG,
+	    QUE_L_TAIL = _LONG
+    _ENDDEF (QUE);
+%FI
+
+    MACRO
+    	PROTECTED_INSQUE (ent_, pred_) =
+    	BEGIN
+    	    LOCAL aststat;
+    	    aststat = $SETAST (ENBFLG=0);
+    	    INSQUE (ent_, pred_);
+    	    IF .aststat EQL SS$_WASSET THEN
+    	    	$SETAST (ENBFLG=1);
+    	END%,
+    	PROTECTED_REMQUE (ent_, entp_) =
+    	BEGIN
+    	    LOCAL aststat, retval;
+    	    aststat = $SETAST (ENBFLG=0);
+    	    retval = REMQUE (ent_, entp_);
+    	    IF .aststat EQL SS$_WASSET THEN
+    	    	$SETAST (ENBFLG=1);
+    	    .retval
+    	END%;
+
+    _DEF (TXT)
+    	TXT_L_FLINK = _LONG,
+    	TXT_L_BLINK = _LONG,
+    	TXT_W_COUNT = _WORD,
+    	_OVERLAY (TXT_W_COUNT)
+    	    TXT_W_CODE	= _WORD,
+    	_ENDOVERLAY
+    	TXT_W_LEN   = _WORD,
+    	TXT_T_TEXT  = _BYTES (0)
+    _ENDDEF (TXT);
+
+    !
+    !	Envelope information structure,
+    !	used by READ_ENVELOPE, WRITE_ENVELOPE,
+    !	and DSN routines.
+    !
+    _DEF (ENVL)
+    	ENVL_L_FLINK	    = _LONG,
+    	ENVL_L_BLINK	    = _LONG,
+    	ENVL_L_FLDFLAGS	    = _LONG,
+    	_OVERLAY (ENVL_L_FLDFLAGS)
+    	    ENVL_V_ORIGIN   	= _BIT,
+    	    ENVL_V_ORGSENDER	= _BIT,
+    	    ENVL_V_FROMADR  	= _BIT,
+    	    ENVL_V_FLAGS    	= _BIT,
+    	    ENVL_V_ENVFROMHOST	= _BIT,
+    	    ENVL_V_RCVDFROM 	= _BIT,
+    	    ENVL_V_DSN_ENVID	= _BIT,
+    	    ENVL_V_DSN_SENTDT	= _BIT,
+    	_ENDOVERLAY
+    	ENVL_L_ORIGIN	    = _LONG,
+    	ENVL_L_RCPTCOUNT    = _LONG,
+    	ENVL_L_FLAGS	    = _LONG,
+    	_OVERLAY (ENVL_L_FLAGS)
+    	    ENVL_V_CONTAINS8BIT	= _BIT,
+    	    ENVL_V_DSN_HDRSONLY	= _BIT,
+    	    ENVL_V_DSN_FULL 	= _BIT,
+            ENVL_V_NO_ENCODE    = _BIT,
+    	_ENDOVERLAY
+    	ENVL_A_ORGSENDER    = _LONG,  ! REF TXTDEF
+    	ENVL_A_FROMADR	    = _LONG,  ! REF TXTDEF
+    	ENVL_A_ENVFROMHOST  = _LONG,  ! REF TXTDEF
+    	ENVL_A_DSN_ENVID    = _LONG,  ! REF TXTDEF
+    	ENVL_A_RCVDFROM	    = _LONG,  ! REF TXTDEF
+    	_ALIGN (QUAD)
+    	ENVL_Q_RCPTQUE	    = _QUAD,
+    	ENVL_Q_DSN_SENTDT   = _QUAD
+    _ENDDEF (ENVL);
+
+    MACRO
+    	BIND_ENVL_FIELDS (__e) =
+    	    BIND
+    	    	orgsender   = __e [ENVL_A_ORGSENDER] 	: REF TXTDEF,
+    	    	fromadr	    = __e [ENVL_A_FROMADR]  	: REF TXTDEF,
+    	    	envfromhost = __e [ENVL_A_ENVFROMHOST]	: REF TXTDEF,
+    	    	dsn_envid   = __e [ENVL_A_DSN_ENVID]	: REF TXTDEF,
+    	    	rcvdfrom    = __e [ENVL_A_RCVDFROM] 	: REF TXTDEF,
+    	    	rcptque	    = __e [ENVL_Q_RCPTQUE]  	: QUEDEF
+    	    %;
+
+
+    !
+    !  The RCPT structure changed in MX V5.1 to add
+    !  further DSN-related information.
+    !
+    _DEF (RCPT)
+    	RCPT_L_FLINK	= _LONG,
+    	RCPT_L_BLINK	= _LONG,
+    	RCPT_L_LASTERR	= _LONG,
+    	_OVERLAY (RCPT_L_LASTERR)
+    	    RCPT_L_STATUS   = _LONG,
+    	_ENDOVERLAY
+    	RCPT_W_CNT1 	= _WORD,
+    	RCPT_W_CNT2 	= _WORD,
+    	RCPT_L_FLAGS	= _LONG,
+    	_OVERLAY (RCPT_L_FLAGS)
+    	    RCPT_V_FORCEDROUTE	= _BIT,
+    	    RCPT_V_DSN_SUCCESS	= _BIT,
+    	    RCPT_V_DSN_FAILURE	= _BIT,
+    	    RCPT_V_DSN_DELAY	= _BIT,
+    	    RCPT_V_DSN_NEVER	= _BIT,
+    	_ENDOVERLAY
+    	RCPT_A_ADDR 	    = _LONG,
+    	RCPT_A_ROUTE	    = _LONG,
+    	RCPT_A_ORTYPE	    = _LONG,
+    	RCPT_A_ORADDR	    = _LONG,
+    	RCPT_L_DSN_ACTION   = _LONG,
+    	RCPT_L_DSN_STATUS   = _LONG,
+    	RCPT_A_REMOTEMTA    = _LONG,
+    	_ALIGN (QUAD)
+    	RCPT_Q_DIAGTXTQUE   = _QUAD,
+    	_OVERLAY (RCPT_Q_DIAGTXTQUE)
+    	    RCPT_L_DIAGTXTCNT	= _LONG,
+    	_ENDOVERLAY
+    	RCPT_Q_ATTEMPTDT    = _QUAD
+    _ENDDEF (RCPT);
+
+    LITERAL
+    	DSN__LOACTION	    = 1,
+    	DSN__DELIVERED	    = 1,
+    	DSN__DELAYED	    = 2,
+    	DSN__RELAYED	    = 3,
+    	DSN__EXPANDED	    = 4,
+    	DSN__FAILED 	    = 5,
+    	DSN__HIACTION	    = 5;
+
+    MACRO
+    	BIND_RCPT_FIELDS (__r) =
+    	    BIND
+    	    	addr	    = __r [RCPT_A_ADDR]	    : REF TXTDEF,
+    	    	route	    = __r [RCPT_A_ROUTE]    : REF TXTDEF,
+    	    	ortype	    = __r [RCPT_A_ORTYPE]   : REF TXTDEF,
+    	    	oraddr	    = __r [RCPT_A_ORADDR]   : REF TXTDEF,
+    	    	remotemta   = __r [RCPT_A_REMOTEMTA]: REF TXTDEF,
+    	    	diagtxtque  = __r [RCPT_Q_DIAGTXTQUE] : QUEDEF;
+    	    %;
+    !
+    !  The RCPT structure changed in MX v5.0 to eliminate
+    !  the fixed-length ROUTE and ADDR fields.
+    !
+    _DEF (RCPT50)
+    	RCPT50_L_FLINK	    = _LONG,
+    	RCPT50_L_BLINK	    = _LONG,
+    	RCPT50_L_LASTERR    = _LONG,
+    	RCPT50_W_CNT1 	    = _WORD,
+    	RCPT50_W_CNT2 	    = _WORD,
+    	RCPT50_L_FLAGS	    = _LONG,
+    	_OVERLAY (RCPT50_L_FLAGS)
+    	    RCPT50_V_FORCEDROUTE    = _BIT,
+    	    RCPT50_V_DSN_SUCCESS    = _BIT,
+    	    RCPT50_V_DSN_FAILURE    = _BIT,
+    	    RCPT50_V_DSN_DELAY	    = _BIT,
+    	    RCPT50_V_DSN_NEVER	    = _BIT,
+    	_ENDOVERLAY
+    	RCPT50_A_ADDR 	    	    = _LONG,
+    	RCPT50_A_ROUTE	    	    = _LONG
+    _ENDDEF (RCPT50);
+
+    LITERAL
+    	RCPT32_S_ROUTE	= 255;
+
+    _DEF (RCPT32)
+    	RCPT32_L_FLINK	    = _LONG,
+    	RCPT32_L_BLINK	    = _LONG,
+    	RCPT32_L_LASTERR    = _LONG,
+    	RCPT32_W_CNT1 	    = _WORD,
+    	RCPT32_W_CNT2 	    = _WORD,
+    	RCPT32_W_ROUTE 	    = _WORD,
+    	RCPT32_T_ROUTE	    = _BYTES (RCPT32_S_ROUTE),
+    	RCPT32_W_ADDR	    = _WORD,
+    	RCPT32_T_ADDR	    = _BYTES (0)
+    _ENDDEF (RCPT32);
+
+		    !
+		    !  The RCPT structure changed in MX v3.3.  The ROUTE
+		    !  length grew from 255 to 256, so we need to handle
+		    !  that here when reading old .*_INFO files.  Start
+		    !  by moving everything up to RCPT_W_ADDR - 1, then
+		    !  do the RCPT_W_ADDR and RCPT_T_ADDR.
+		    !
+    LITERAL
+    	RCPT33_S_ROUTE	= 256;
+
+    _DEF (RCPT33)
+    	RCPT33_L_FLINK	    = _LONG,
+    	RCPT33_L_BLINK	    = _LONG,
+    	RCPT33_L_LASTERR    = _LONG,
+    	RCPT33_W_CNT1 	    = _WORD,
+    	RCPT33_W_CNT2 	    = _WORD,
+    	RCPT33_W_ROUTE 	    = _WORD,
+    	RCPT33_T_ROUTE	    = _BYTES (RCPT33_S_ROUTE),
+    	RCPT33_W_ADDR	    = _WORD,
+    	RCPT33_T_ADDR	    = _BYTES (0)
+    _ENDDEF (RCPT33);
+
+		    !
+		    !  The RCPT structure changed in MX v4.4 to accommodate
+    	    	    !  an extra FLAGS field, a longword that is now placed
+    	    	    !  just before RCPT_W_ROUTE.
+		    !
+    LITERAL
+    	RCPT44_S_ROUTE	= 256;
+
+    _DEF (RCPT44)
+    	RCPT44_L_FLINK	    = _LONG,
+    	RCPT44_L_BLINK	    = _LONG,
+    	RCPT44_L_LASTERR    = _LONG,
+    	RCPT44_W_CNT1 	    = _WORD,
+    	RCPT44_W_CNT2 	    = _WORD,
+    	RCPT44_L_FLAGS	    = _LONG,
+    	RCPT44_W_ROUTE 	    = _WORD,
+    	RCPT44_T_ROUTE	    = _BYTES (RCPT44_S_ROUTE),
+    	RCPT44_W_ADDR	    = _WORD,
+    	RCPT44_T_ADDR	    = _BYTES (0)
+    _ENDDEF (RCPT44);
+!++
+! QENTDEF user data overlay
+!--
+    LITERAL
+    	MXQ_S_FILEID	= 28;
+
+    MACRO
+    	MXQ_L_BACKREF   = %FIELDEXPAND (QENT_T_USRDAT,0),0,32,0%,
+    	MXQ_L_SMTPREF   = %FIELDEXPAND (QENT_T_USRDAT,0)+4,0,32,0%,
+    	MXQ_L_LOCALREF  = %FIELDEXPAND (QENT_T_USRDAT,0)+8,0,32,0%,
+    	MXQ_L_JNETREF   = %FIELDEXPAND (QENT_T_USRDAT,0)+12,0,32,0%,
+    	MXQ_L_XSMTPREF	= %FIELDEXPAND (QENT_T_USRDAT,0)+16,0,32,0%,
+    	MXQ_L_UUCPREF	= %FIELDEXPAND (QENT_T_USRDAT,0)+20,0,32,0%,
+    	MXQ_L_MLFREF	= %FIELDEXPAND (QENT_T_USRDAT,0)+24,0,32,0%,
+    	MXQ_L_X400REF	= %FIELDEXPAND (QENT_T_USRDAT,0)+28,0,32,0%,
+    	MXQ_L_SITEREF	= %FIELDEXPAND (QENT_T_USRDAT,0)+32,0,32,0%,
+    	MXQ_L_DNSMTPREF	= %FIELDEXPAND (QENT_T_USRDAT,0)+36,0,32,0%,
+    	MXQ_L_JNETYP	= %FIELDEXPAND (QENT_T_USRDAT,0)+40,0,32,0%,
+    	MXQ_X_FILEID	= %FIELDEXPAND (QENT_T_USRDAT,0)+44,0, 0,0%,
+    	MXQ_L_LSVREF	= %FIELDEXPAND (QENT_T_USRDAT,0)+72,0,32,0%,
+    	MXQ_L_HOLDQREF_BASE = %FIELDEXPAND (QENT_T_USRDAT,0)+76,0,32,0%;
+    	! Uses [76,0,32,0] through [76+(4*MX_K_HOLDQ_MAX),0,32,0]
+
+!++
+! Useful constants
+!--
+
+    LITERAL
+    	MX__FILE_READ   = 1,
+    	MX__FILE_WRITE  = 2,
+    	MX__FILE_EXISTS = 3,
+    	MX__FILE_APPEND = 4,
+    	MX_M_FILE_FIDOPEN = %X'100',
+    	MX_M_CIF    	=   %X'200',
+    	MX_M_SHARE  	=   %X'400',
+    	MX_M_FILE_ASY  	=   %X'800',
+
+    	MX_M_PARSE_NODE	= 1,
+    	MX_M_PARSE_DEV	= 2,
+    	MX_M_PARSE_DIR	= 4,
+    	MX_M_PARSE_NAME	= 8,
+    	MX_M_PARSE_TYPE	= 16,
+    	MX_M_PARSE_VER	= 32,
+    	MX_M_PARSE_ALL	= 63,  ! sum of the above
+    	MX_M_PARSE_SYNCHK = 256,
+    	MX_M_PARSE_PWD	= 512,
+    	MX_M_PARSE_NOCONCEAL = 1024;
+
+!
+!   Constants used with MX_FMT_LCL_ADDR
+!
+    MACRO
+    	FMT_V_TYPE  	    	= 0,0,16,0%,
+    	FMT_V_LOWERCASE   	= 0,16,1,0%;
+
+    LITERAL
+    	MX__FMT_FROM	    	= 1,
+    	MX__FMT_ENVFROM	    	= 2,
+    	MX__FMT_TO  	    	= 3,
+    	FMT_M_LOWERCASE  	= %X'10000',
+
+    	MX_M_FMT_DECNET	    = 1,
+    	MX_M_FMT_NON_LOCAL  = 2;
+
+    !+
+    ! Maximum number of holding queues.
+    ! 45 would be the absolute limit for this
+    ! number; after that, we run out of room
+    ! in the USRDAT portion of QENTDEF.
+    !-
+    LITERAL
+    	MX_K_HOLDQ_MAX    = 32;
+
+    LITERAL
+    	MX_K_PATH_LOCAL = 1,
+    	MX_K_PATH_SMTP  = 2,
+    	MX_K_PATH_JNET  = 3,
+    	MX_K_PATH_UUCP	= 4,
+    	MX_K_PATH_MLF	= 5,
+    	MX_K_PATH_X400	= 6,
+    	MX_K_PATH_SITE	= 7,
+    	MX_K_PATH_DNSMTP= 8,
+    	MX_K_PATH_XSMTP	= 9,
+	MX_K_PATH_LSV   = 10,
+    	MX_K_PATH_HOLDQ_BASE = 11,
+    	! Through (MX_K_PATH_HOLDQ_BASE + MX_K_HOLDQ_MAX - 1) reserved
+    	MX_K_ORG_LOCAL  = 51,
+    	MX_K_ORG_SMTP   = 93,
+    	MX_K_ORG_UUCP	= 82,
+    	MX_K_ORG_X400	= 43,
+    	MX_K_ORG_SITE	= 79,
+    	MX_K_ORG_VMSMAIL= 24,
+    	MX_K_ORG_DNSMTP	= 38,
+    	MX_K_ORG_XSMTP	= 18;
+
+!++
+! RFC822 header codes
+!
+! N.B.  WHEN ADDING NEW CODES, BE SURE YOU ALSO MODIFY FORMAT_HDR.B32
+!	(and PARSE822.B32, if you want them parsed).
+!--
+
+    LITERAL
+    	MX_K_HDR_FIRSTCODE  	= 1,
+    	MX_K_HDR_FROM	    	= 1,		!From:
+    	MX_K_HDR_SENDER	    	= 2,		!Sender:
+    	MX_K_HDR_TO   	    	= 3,		!To:
+    	MX_K_HDR_R_TO	    	= 4,		!Resent-To:
+    	MX_K_HDR_CC   	    	= 5,		!CC:
+    	MX_K_HDR_R_CC	    	= 6,		!Resent-CC:
+    	MX_K_HDR_BCC  	    	= 7,		!BCC:
+    	MX_K_HDR_R_BCC	    	= 8,		!Resent-BCC:
+    	MX_K_HDR_MESSAGE_ID 	= 9,		!Message-ID:
+    	MX_K_HDR_R_MESSAGE_ID	= 10,		!Resent-Message-ID:
+    	MX_K_HDR_IN_REPLY_TO	= 11,		!In-Reply-To:
+    	MX_K_HDR_REFERENCES 	= 12,		!References:
+    	MX_K_HDR_KEYWORDS   	= 13,		!Keywords:
+    	MX_K_HDR_SUBJECT    	= 14,		!Subject:
+    	MX_K_HDR_ENCRYPTED  	= 15,		!Encrypted:
+    	MX_K_HDR_DATE	    	= 16,		!Date:
+    	MX_K_HDR_REPLY_TO   	= 17,		!Reply-To:
+    	MX_K_HDR_RECEIVED   	= 18,		!Received:
+    	MX_K_HDR_R_REPLY_TO 	= 19,		!Resent-Reply-To:
+    	MX_K_HDR_R_FROM	    	= 20,		!Resent-From:
+    	MX_K_HDR_R_SENDER   	= 21,		!Resent-Sender:
+    	MX_K_HDR_R_DATE	    	= 22,		!Resent-Date:
+    	MX_K_HDR_RETURN_PATH	= 23,		!Return-Path:
+    	MX_K_HDR_OTHER	    	= 24,		!Various other headers
+    	MX_K_HDR_X_WARNING  	= 25,		!X-Warning:
+    	MX_K_HDR_X_TO	    	= 26,		!X-To:
+    	MX_K_HDR_X_R_TO	    	= 27,		!X-Resent-To:
+    	MX_K_HDR_X_CC	    	= 28,		!X-CC:
+    	MX_K_HDR_X_R_CC	    	= 29,		!X-Resent-CC:
+    	MX_K_HDR_X_BCC	    	= 30,		!X-BCC:
+    	MX_K_HDR_X_R_BCC    	= 31,		!X-Resent-BCC:
+	MX_K_HDR_MIME_VERSION	= 32,		!MIME-Version:
+	MX_K_HDR_MIME_C_T_E	= 33,		!Content-Transfer-Encoding:
+	MX_K_HDR_MIME_C_TYPE	= 34,		!Content-Type:
+	MX_K_HDR_LIST_SUB	= 35,		!(X-)List-Subscribe:
+	MX_K_HDR_LIST_UNSUB	= 36,		!(X-)List-Unsubscribe:
+	MX_K_HDR_LIST_HELP	= 37,		!(X-)List-Help:
+	MX_K_HDR_LIST_OTHER	= 38,		!(X-)List-*:
+	MX_K_HDR_CONTENT_LENGTH	= 39,		!Content-Length:
+	MX_K_HDR_ERRORS_TO	= 40,		!Errors-To:
+	MX_K_HDR_WARNINGS_TO	= 41,		!Warnings-To:
+	MX_K_HDR_PRECEDENCE	= 42,		!Precedence:
+	MX_K_HDR_DISP_NOTIF_TO	= 43,		!Disposition-Notification-To:
+	MX_K_HDR_RTNRECPT_TO	= 44,		!Return-Receipt-To:
+	MX_K_HDR_CONFIRM_READ_TO= 45,		!X-Confirm-Reading-To:   (eh?!)
+	MX_K_HDR_MIME_C_DISP	= 46,		!Content-Dispostion: (MIME)
+	MX_K_HDR_MIME_C_DESC	= 47,		!Content-Description: (MIME)
+	MX_K_HDR_X_LISTNAME	= 48,		!X-Listname: (MX)
+    	MX_K_HDR_X_JUNK_MAIL_RATING = 49,   	!X-Junk-Mail-Rating: (MX)
+    	MX_K_HDR_X_JUNK_MAIL_REASON = 50,   	!X-Junk-Mail-Reason: (MX)
+        MX_K_HDR_ORIG_RECIP     = 51,
+    	MX_K_HDR_LASTCODE   	= 51;
+
+!++
+! Useful macros
+!--
+
+    MACRO
+    	INIT_DYNDESC (STR) [] =
+    	    BEGIN
+    	    	__INIT_DYNDESC1 (STR
+    	    	    %IF NOT %NULL (%REMAINING) %THEN , %REMAINING %FI)
+    	    END%,
+    	__INIT_DYNDESC1 (STR) [] =
+    	    BLOCK [STR, DSC$W_LENGTH;   DSC$K_S_BLN,BYTE] = 0;
+    	    BLOCK [STR, DSC$B_CLASS;    DSC$K_S_BLN,BYTE] = DSC$K_CLASS_D;
+    	    BLOCK [STR, DSC$B_DTYPE;    DSC$K_S_BLN,BYTE] = DSC$K_DTYPE_T;
+    	    BLOCK [STR, DSC$A_POINTER;  DSC$K_S_BLN,BYTE] = 0;
+    	    %IF NOT %NULL (%REMAINING) %THEN ; __INIT_DYNDESC1 (%REMAINING) %FI%,
+
+    	FREE_STRINGS (STR) [] =
+    	    BEGIN
+    	    	EXTERNAL ROUTINE STR$FREE1_DX : BLISS ADDRESSING_MODE (GENERAL);
+    	    	__FREE_STRING1 (STR
+    	    	    %IF NOT %NULL (%REMAINING) %THEN , %REMAINING %FI);
+    	    END%,
+    	__FREE_STRING1 (STR) [] =
+    	    BEGIN
+    	    	BIND __s = STR : BLOCK [,BYTE];
+                IF .__s [DSC$B_CLASS] EQL DSC$K_CLASS_D THEN STR$FREE1_DX (STR);
+    	    END
+    	    %IF NOT %NULL (%REMAINING) %THEN ; __FREE_STRING1 (%REMAINING) %FI%,
+
+    	INSTXT (STR, QUE, COUNT) =
+    	    BEGIN
+    	    	LOCAL TXT : REF TXTDEF;
+    	    	BIND __INSTXT_S = STR : BLOCK [,BYTE];
+    	    	EXTERNAL ROUTINE MEM_GETTXT : BLISS ADDRESSING_MODE (GENERAL);
+    	    	TXT = MEM_GETTXT (.__INSTXT_S [DSC$W_LENGTH], .__INSTXT_S [DSC$A_POINTER]);
+    	    	TXT [TXT_W_COUNT] = %IF %NULL (COUNT) %THEN 0 %ELSE COUNT %FI;
+    	    	INSQUE (.TXT, QUE);
+    	    END%,
+
+    	__FREETXT1 (TXT) [] =
+    	    BEGIN
+    	    	BIND __FREETXT_T = TXT : REF TXTDEF;
+    	    	IF .__FREETXT_T NEQA 0 THEN MEM_FREETXT (__FREETXT_T);
+    	    	__FREETXT_T = 0;
+    	    END
+    	    %IF NOT %NULL (%REMAINING) %THEN ; __FREETXT1 (%REMAINING) %FI%,
+
+    	FREETXT (TXT) [] =
+    	    BEGIN
+    	    	EXTERNAL ROUTINE MEM_FREETXT : BLISS ADDRESSING_MODE (GENERAL);
+    	    	__FREETXT1 (TXT %IF NOT %NULL (%REMANING) %THEN , %REMAINING %FI);
+    	    END%,
+
+    	G_HAT (RTN) [] =
+    	    RTN : BLISS ADDRESSING_MODE (GENERAL)
+    	    %IF NOT %NULL (%REMAINING) %THEN , G_HAT (%REMAINING) %FI%,
+
+    	TRACE_DECLARATIONS (_type) =
+    	    _type
+    	    	debug	    %IF NOT %IDENTICAL (_type, EXTERNAL) %THEN : INITIAL (0) %FI,
+    	    	trace_unit  %IF NOT %IDENTICAL (_type, EXTERNAL) %THEN : INITIAL (0) %FI
+    	%,
+
+    	TRACE_INIT (_id, _dir) =
+    	BEGIN
+    	    EXTERNAL ROUTINE MX_FILE_OPEN : BLISS ADDRESSING_MODE (GENERAL);
+    	    LOCAL
+    	    	tmp 	: VECTOR [128,BYTE],
+    	    	tmpdsc	: BLOCK [DSC$K_S_BLN,BYTE],
+    	    	jpilst	: $ITMLST_DECL (ITEMS=1),
+    	    	pid;
+    	    IF $TRNLNM (LOGNAM=%ASCID %STRING ('MX_', _id, '_DEBUG'),
+    	    	    	     TABNAM=%ASCID'LNM$FILE_DEV', ATTR=%REF (LNM$M_CASE_BLIND)) THEN
+    	    BEGIN
+    	    	$ITMLST_INIT (ITMLST=jpilst, (ITMCOD=JPI$_PID, BUFSIZ=%ALLOCATION (pid),
+    	    	    	    	    	      BUFADR=pid, RETLEN=0));
+    	    	$GETJPIW (ITMLST=jpilst);
+    	    	INIT_SDESC (tmpdsc, %ALLOCATION (tmp), tmp);
+    	    	$FAO (%ASCID %STRING ('MX_', _dir, '_DIR:.LOG_!XL'), tmpdsc [DSC$W_LENGTH], tmpdsc, .pid);
+    	    	debug = MX_FILE_OPEN (MX__FILE_APPEND OR MX_M_CIF OR MX_M_SHARE,
+    	    	    	    %ASCID %STRING ('MX_', _id, '_LOG'), trace_unit, tmpdsc);
+    	    END;
+    	END%,
+
+    	TRACE (CTRSTR) [] =
+    	BEGIN
+    	IF .debug THEN
+    	BEGIN
+    	    EXTERNAL ROUTINE
+    	    	MX_FILE_WRITE : ADDRESSING_MODE (GENERAL);
+    	    LOCAL
+    	    	_buf : VECTOR [1024,BYTE],
+    	    	_dsc : BLOCK [DSC$K_S_BLN,BYTE];
+    	    INIT_SDESC (_dsc, %ALLOCATION (_buf), _buf);
+    	    IF $FAO (%ASCID %STRING ('!%D ', ctrstr), _dsc [DSC$W_LENGTH],
+    	    	    	_dsc, 0 %IF NOT %NULL (%REMAINING) %THEN , %REMAINING %FI)
+    	    THEN MX_FILE_WRITE (.trace_unit, _dsc);
+    	END;
+    	END%,
+
+    	TRACE_PUTMSG (_ctrstr, _status) [] =
+    	BEGIN
+    	    IF .debug THEN
+    	    BEGIN
+    	    	LOCAL
+    	    	    _msgbuf : VECTOR [512,BYTE],
+    	    	    _msgdsc : BLOCK [DSC$K_S_BLN,BYTE];
+    	    	INIT_SDESC (_msgdsc, %ALLOCATION (_msgbuf), _msgbuf);
+    	    	IF $GETMSG (MSGID=_status, MSGLEN=_msgdsc [DSC$W_LENGTH],
+    	    	    	    BUFADR=_msgdsc) THEN
+    	    	    TRACE (_ctrstr, _msgdsc);
+    	    END;
+    	END%,
+
+    	TRACE_CLOSE =
+    	BEGIN
+    	    IF .debug THEN
+    	    BEGIN
+    	    	EXTERNAL ROUTINE MX_FILE_CLOSE : BLISS ADDRESSING_MODE (GENERAL);
+    	    	MX_FILE_CLOSE (.trace_unit);
+    	    	debug = 0;
+    	    END
+    	END%,
+
+    	ALARM (CTRSTR) [] =
+    	BEGIN
+    	    EXTERNAL ROUTINE
+    	    	LOG_EVENT : ADDRESSING_MODE (GENERAL);
+    	    LOCAL
+    	    	_buf : VECTOR [1024,BYTE],
+    	    	_dsc : BLOCK [DSC$K_S_BLN,BYTE];
+    	    INIT_SDESC (_dsc, %ALLOCATION (_buf), _buf);
+    	    IF $FAO (%ASCID %STRING ('!%D ', ctrstr), _dsc [DSC$W_LENGTH],
+    	    	    	_dsc, 0 %IF NOT %NULL (%REMAINING) %THEN , %REMAINING %FI)
+    	    THEN LOG_EVENT (_dsc);
+    	END%,
+
+    	__INIT_QUEUE1 [_Q] =
+    	    BEGIN
+    	    	BIND __Q = _Q : QUEDEF;
+    	    	__Q [QUE_L_TAIL] = __Q [QUE_L_HEAD] = __Q [QUE_L_HEAD];
+    	    END%,
+    	INIT_QUEUE [] =
+    	    BEGIN
+    	    	%IF NOT %NULL (%REMAINING) %THEN ; __init_queue1 (%REMAINING) %FI
+    	    END%,
+    	INSQUE_TAIL (_entry, _queue) =
+    	    BEGIN
+    	    	BIND __queue = _queue : QUEDEF;
+    	    	INSQUE (_entry, .__queue [QUE_L_TAIL])
+    	    END%,
+    	REMQUE_HEAD (_queue, _entry) =
+    	    BEGIN
+    	    	BIND __queue = _queue : QUEDEF;
+    	    	REMQUE (.__queue [QUE_L_HEAD], _entry)
+    	    END%,
+    	QUEUE_EMPTY (_queue) =
+    	    BEGIN
+    	    	BIND __queue = _queue : QUEDEF;
+    	    	.__queue [QUE_L_HEAD] EQLA __QUEUE [QUE_L_HEAD]
+    	    END%,
+    	INIT_SDESC (STR, LEN, PTR) =
+    	    BEGIN
+    	    	BIND __D = STR : BLOCK [DSC$K_S_BLN,BYTE];
+    	    	__D [DSC$B_DTYPE] = DSC$K_DTYPE_T;
+    	    	__D [DSC$B_CLASS] = DSC$K_CLASS_S;
+    	    	__D [DSC$W_LENGTH] = LEN;
+    	    	__D [DSC$A_POINTER] = PTR;
+    	    END%,
+    	txt_case_blind_compare (_txt1, _txt2) =
+    	    BEGIN
+    	    	BIND
+    	    	    __txt1 = _txt1 : REF TXTDEF,
+    	    	    __txt2 = _txt2 : REF TXTDEF;
+    	    	EXTERNAL ROUTINE STR$CASE_BLIND_COMPARE : BLISS ADDRESSING_MODE (GENERAL);
+    	    	LOCAL
+    	    	    __dsc1  : BLOCK [DSC$K_S_BLN,BYTE],
+    	    	    __dsc2  : BLOCK [DSC$K_S_BLN,BYTE];
+    	    	INIT_SDESC (__dsc1, .__txt1 [TXT_W_LEN], __txt1 [TXT_T_TEXT]);
+    	    	INIT_SDESC (__dsc2, .__txt2 [TXT_W_LEN], __txt2 [TXT_T_TEXT]);
+    	    	STR$CASE_BLIND_COMPARE (__dsc1, __dsc2)
+    	    END%,
+    	txt_append (_dsc, _txt) =
+    	    BEGIN
+    	    	BIND __txt = _txt : REF TXTDEF;
+    	    	LOCAL __txtdsc	  : BLOCK [DSC$K_S_BLN,BYTE];
+    	    	EXTERNAL ROUTINE STR$APPEND : BLISS ADDRESSING_MODE (GENERAL);
+    	    	INIT_SDESC (__txtdsc, .__txt [TXT_W_LEN], __txt [TXT_T_TEXT]);
+    	    	STR$APPEND (_dsc, __txtdsc)
+    	    END
+    	%;
+
+%IF NOT %BLISS(BLISS32V) %THEN
+    MACRO LIB$TPARSE = LIB$TABLE_PARSE%;
+%FI
+
+    	MACRO
+    	    TPA_ROUTINE (NAME, ARGLST) =
+    	    %IF NOT %BLISS(BLISS32V) %THEN
+    	    	%IF NOT %DECLARED (TPA_ARGCNT) %THEN
+    	    	    COMPILETIME TPA_ARGCNT=0; %FI
+    	    	%ASSIGN(TPA_ARGCNT, 0)
+    	    	ROUTINE NAME (STATE : REF VECTOR [,LONG]) =
+    	    	BEGIN
+    	    	    BIND
+    	    	    	TPA_ROUTINE_ARGS (%REMOVE (ARGLST));
+    	    %ELSE
+    	    	ROUTINE NAME (%REMOVE (ARGLST)) =
+    	    	BEGIN
+    	    %FI%,
+    	    TPA_ROUTINE_ARGS [ARG] =
+    	    	%ASSIGN (TPA_ARGCNT, TPA_ARGCNT+1)
+    	    	ARG = STATE [TPA_ARGCNT]
+    	    %;
+
+    EXTERNAL LITERAL
+    	MX__DSN_S__OTHER,
+    	MX__DSN_W__OTHER,
+    	MX__DSN_F__OTHER,
+    	MX__DSN_SA_OTHER ,
+    	MX__DSN_WA_OTHER ,
+    	MX__DSN_FA_OTHER ,
+    	MX__DSN_FA_BADMBX,
+    	MX__DSN_FA_BADSYS,
+    	MX__DSN_FA_DSTSYN,
+    	MX__DSN_WA_DSTAMB,
+    	MX__DSN_SA_DSTVAL,
+    	MX__DSN_WA_MBXMOV,
+    	MX__DSN_FA_SNDSYN,
+    	MX__DSN_FA_SNDSYS,
+    	MX__DSN_SM_OTHER,
+    	MX__DSN_WM_OTHER,
+    	MX__DSN_FM_OTHER,
+    	MX__DSN_WM_DISABL,
+    	MX__DSN_FM_DISABL,
+    	MX__DSN_WM_MBXFUL,
+    	MX__DSN_FM_ADMLIM,
+    	MX__DSN_WM_EXPANS,
+    	MX__DSN_FM_EXPANS,
+    	MX__DSN_SS_OTHER,
+    	MX__DSN_WS_OTHER,
+    	MX__DSN_FS_OTHER,
+    	MX__DSN_WS_SYSFUL,
+    	MX__DSN_WS_NOTACC,
+    	MX__DSN_FS_NOTACC,
+    	MX__DSN_FS_CAPABL,
+    	MX__DSN_FS_TOOBIG,
+    	MX__DSN_FS_CONFIG,
+    	MX__DSN_SR_OTHER,
+    	MX__DSN_WR_OTHER,
+    	MX__DSN_FR_OTHER,
+    	MX__DSN_WR_NOANSR,
+    	MX__DSN_WR_BADCON,
+    	MX__DSN_WR_DSFAIL,
+    	MX__DSN_WR_UNARTE,
+    	MX__DSN_FR_UNARTE,
+    	MX__DSN_WR_CONGES,
+    	MX__DSN_WR_RTLOOP,
+    	MX__DSN_WR_EXPIRE,
+    	MX__DSN_SP_OTHER,
+    	MX__DSN_WP_OTHER,
+    	MX__DSN_FP_OTHER,
+    	MX__DSN_FP_INVCMD,
+    	MX__DSN_FP_SYNERR,
+    	MX__DSN_FP_TOMANY,
+    	MX__DSN_FP_INVARG,
+    	MX__DSN_FP_MISMAT,
+    	MX__DSN_SC_OTHER,
+    	MX__DSN_WC_OTHER,
+    	MX__DSN_FC_OTHER,
+    	MX__DSN_FC_MNOSUP,
+    	MX__DSN_FC_CNVPRO,
+    	MX__DSN_FC_CNVUNS,
+    	MX__DSN_SC_CNVLOS,
+    	MX__DSN_FC_CNVLOS,
+    	MX__DSN_WC_CNVFAI,
+    	MX__DSN_SY_OTHER,
+    	MX__DSN_WY_OTHER,
+    	MX__DSN_FY_OTHER,
+    	MX__DSN_FY_NOAUTH,
+    	MX__DSN_FY_NOEXPN,
+    	MX__DSN_FY_NOCONV,
+    	MX__DSN_FY_NOSUPP,
+    	MX__DSN_WY_CRPFAI,
+    	MX__DSN_FY_CRPFAI,
+    	MX__DSN_FY_ALGUNS,
+    	MX__DSN_SY_INTFAI,
+    	MX__DSN_WY_INTFAI,
+    	MX__DSN_FY_INTFAI;

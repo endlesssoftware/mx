@@ -1,0 +1,359 @@
+%TITLE 'VERIFY_PHRASE'
+MODULE VERIFY_PHRASE (IDENT='V1.3-1',
+    	ADDRESSING_MODE (EXTERNAL=LONG_RELATIVE,NONEXTERNAL=LONG_RELATIVE)) =
+BEGIN
+!++
+! FACILITY: 	    Message Exchange
+!
+! ABSTRACT: 	    Makes sure that a phrase is valid.
+!
+! MODULE DESCRIPTION:
+!
+!
+! AUTHOR:   	    M. Madison
+!
+! Copyright (c) 2008, Matthew Madison.
+! 
+! All rights reserved.
+! 
+! Redistribution and use in source and binary forms, with or without
+! modification, are permitted provided that the following conditions
+! are met:
+! 
+!     * Redistributions of source code must retain the above
+!       copyright notice, this list of conditions and the following
+!       disclaimer.
+!     * Redistributions in binary form must reproduce the above
+!       copyright notice, this list of conditions and the following
+!       disclaimer in the documentation and/or other materials provided
+!       with the distribution.
+!     * Neither the name of the copyright owner nor the names of any
+!       other contributors may be used to endorse or promote products
+!       derived from this software without specific prior written
+!       permission.
+! 
+! THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
+! "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
+! LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
+! A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
+! OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
+! SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
+! LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
+! DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
+! THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
+! (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
+! OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+!
+! CREATION DATE:    13-FEB-1991
+!
+! MODIFICATION HISTORY:
+!
+!   13-FEB-1991 V1.0	Madison	    Initial coding.
+!   03-APR-1991	V1.1	Madison	    Second try.
+!   12-MAR-1993 V1.2	Goatley     Modified for AXP.
+!   24-DEC-1996	V1.3	Madison	    Use our quote_string routine.
+!   25-AUG-1998	V1.3-1	Madison	    Quotes should be treated like other specials.
+!--
+
+    LIBRARY 'SYS$LIBRARY:STARLET';
+    LIBRARY 'SYS$LIBRARY:TPAMAC';
+    LIBRARY 'MX_SRC_COMMON:MX';
+    LIBRARY 'MX_SRC_COMMON:QP';
+    LIBRARY 'MX_SRC_COMMON:CHARCONV';
+
+    FORWARD ROUTINE
+    	VERIFY_PHRASE,
+    	VP_STORE,
+    	encode_string	: NOVALUE;
+
+    EXTERNAL ROUTINE
+    	CHARCONV_BEGIN,
+    	CHARCONV_CONVERT,
+    	CHARCONV_GET_CHARSET_NAME,
+    	CHARCONV_END,
+    	QP_ENCODE_STRING,
+    	QUOTE_STRING,
+    	G_HAT (LIB$TPARSE, LIB$SCOPY_R_DX, LIB$SCOPY_DXDX, LIB$SYS_FAO);
+
+    MACRO
+    	TPA_A_P1    	=   TPA$C_LENGTH0+00,0,32,0%,
+    	TPA_A_P2    	=   TPA$C_LENGTH0+04,0,32,0%,
+    	TPA_A_P3    	=   TPA$C_LENGTH0+08,0,32,0%,
+    	TPA_A_P4    	=   TPA$C_LENGTH0+12,0,32,0%,
+    	TPA_A_P5    	=   TPA$C_LENGTH0+16,0,32,0%,
+    	TPA_A_P6    	=   TPA$C_LENGTH0+20,0,32,0%,
+    	TPA_A_P7    	=   TPA$C_LENGTH0+24,0,32,0%,
+    	TPA_A_P8    	=   TPA$C_LENGTH0+28,0,32,0%;
+
+%SBTTL 'State table for VERIFY_PHRASE'
+
+    $INIT_STATE (VP_STATE, VP_KEY);
+
+    $STATE (VPSTART,
+    	(TPA$_EOS, TPA$_EXIT),
+    	(TPA$_BLANK, VPSTART, VP_STORE,,, 6),
+    	((_COMMENT), VPSTART, VP_STORE,,, 7),
+    	((_QPHRASE), VPSTART, VP_STORE,,, 7),
+    	((_EQ), VPINWRD, VP_STORE,,, 1),
+    	(TPA$_LAMBDA, VPINWRD));
+
+    $STATE (VPINWRD,
+    	(TPA$_EOS, TPA$_EXIT),
+    	('"', VPINWRD, VP_STORE,,, 2),
+    	('(', VPINWRD, VP_STORE,,, 2),
+    	(')', VPINWRD, VP_STORE,,, 2),
+    	('.', VPINWRD, VP_STORE,,, 2),
+    	('<', VPINWRD, VP_STORE,,, 2),
+    	('>', VPINWRD, VP_STORE,,, 2),
+    	('@', VPINWRD, VP_STORE,,, 2),
+    	(',', VPINWRD, VP_STORE,,, 2),
+    	(';', VPINWRD, VP_STORE,,, 2),
+    	(':', VPINWRD, VP_STORE,,, 2),
+    	('\', LITNEXT, VP_STORE,,, 0),
+    	('[', VPINWRD, VP_STORE,,, 2),
+    	(']', VPINWRD, VP_STORE,,, 2),
+    	(TPA$_BLANK, VPSTART, VP_STORE,,,6),
+    	(TPA$_ANY, VPINWRD, VP_STORE,,, 0));
+    $STATE (LITNEXT,
+    	(TPA$_EOS, TPA$_EXIT, VP_STORE,,, 4),
+    	(TPA$_ANY, VPINWRD, VP_STORE,,, 0));
+
+    $STATE (_EQ,
+    	    ('=', _EQ2));
+    $STATE (_EQ2,
+    	    ('?', TPA$_EXIT));
+
+    $STATE (_COMMENT,
+    	('(', _C2));
+    $STATE (_C2,
+    	(')', TPA$_EXIT),
+    	('\', _C2LIT),
+    	(TPA$_ANY, _C2));
+    $STATE (_C2LIT,
+    	(TPA$_EOS, TPA$_FAIL),
+    	(TPA$_ANY, _C2));
+
+    $STATE (_QPHRASE,
+    	('"', _Q2));
+    $STATE (_Q2,
+    	('"', TPA$_EXIT),
+    	('\', _Q2LIT),
+    	(TPA$_ANY, _Q2));
+    $STATE (_Q2LIT,
+    	(TPA$_EOS, TPA$_FAIL),
+    	(TPA$_ANY, _Q2));
+
+
+%SBTTL 'VERIFY_PHRASE'
+GLOBAL ROUTINE VERIFY_PHRASE (IN_A, OUT_A) =
+BEGIN
+!++
+! FUNCTIONAL DESCRIPTION:
+!
+!   Takes an input string and ensures that it is a valid RFC822
+!   "phrase".  If it is a comment, the comment is converted into
+!   a phrase.  If the phrase contains no-no characters, it is quoted.
+!
+! RETURNS:  	cond_value, longword (unsigned), write only, by value
+!
+! PROTOTYPE:
+!
+!   VERIFY_PHRASE in, out
+!
+! IMPLICIT INPUTS:  None.
+!
+! IMPLICIT OUTPUTS: None.
+!
+! COMPLETION CODES:
+!
+!   SS$_NORMAL:	    	normal successful completion.
+!
+! SIDE EFFECTS:
+!
+!   None.
+!--
+    BIND
+    	IN  	= .IN_A	    : BLOCK [DSC$K_S_BLN,BYTE];
+
+    LITERAL
+    	TPA_C_LENGTH	= TPA$C_LENGTH0 + 12,
+    	TPA_K_COUNT 	= TPA$K_COUNT0 + 3;
+
+    LOCAL
+    	TPABLK	: BLOCK [TPA_C_LENGTH,BYTE],
+    	BUF	: VOLATILE VECTOR [1024,BYTE],
+    	LEN	: VOLATILE WORD,
+    	MUSTQ	: VOLATILE,
+    	csnbuf	: VECTOR [64,BYTE],
+    	csname	: BLOCK [DSC$K_S_BLN,BYTE],
+    	tmp 	: BLOCK [DSC$K_S_BLN,BYTE],
+    	converted,
+    	cc_ctx,
+    	STATUS;
+
+    	INIT_DYNDESC (tmp);
+    	INIT_SDESC (csname, %ALLOCATION (csnbuf), csnbuf);
+    	converted = 0;
+    	status = CHARCONV_BEGIN (CHARCONV__LOCAL_TO_NETWORK, cc_ctx, csname [DSC$W_LENGTH], csname);
+    	IF .status THEN
+    	BEGIN
+    	    status = CHARCONV_CONVERT (cc_ctx, in, 0, tmp, converted);
+    	    IF .status AND .converted THEN
+    	    BEGIN
+    	    	csname [DSC$W_LENGTH] = %ALLOCATION (csnbuf);
+    	    	CHARCONV_GET_CHARSET_NAME (cc_ctx, CHARCONV__NETWORK_CHARSET,
+    	    	    	    	    	   csname [DSC$W_LENGTH], csname);
+    	    END
+    	    ELSE
+    	    	LIB$SCOPY_DXDX (in, tmp);
+    	    CHARCONV_END (cc_ctx);
+    	END
+    	ELSE
+    	    LIB$SCOPY_DXDX (in, tmp);
+
+    	TPABLK [TPA$L_COUNT] = TPA_K_COUNT;
+    	TPABLK [TPA$L_OPTIONS] = 0;
+    	TPABLK [TPA$V_BLANKS] = 1;
+    	TPABLK [TPA$L_STRINGCNT] = .tmp [DSC$W_LENGTH];
+    	TPABLK [TPA$L_STRINGPTR] = .tmp [DSC$A_POINTER];
+    	TPABLK [TPA_A_P1] = LEN;
+    	TPABLK [TPA_A_P2] = BUF;
+    	TPABLK [TPA_A_P3] = MUSTQ;
+
+    	MUSTQ = LEN = 0;
+    	STATUS = LIB$TPARSE (TPABLK, VP_STATE, VP_KEY);
+    	IF .STATUS THEN
+    	    IF (.MUSTQ AND 6) NEQU 0 OR .converted THEN
+    	    	encode_string (.out_a, .len, buf, (IF .converted OR (.MUSTQ AND 2) NEQU 0 THEN csname ELSE 0))
+    	    ELSE IF .MUSTQ THEN
+    	    	QUOTE_STRING (.OUT_A, .LEN, BUF, 1)
+    	    ELSE
+    	    	LIB$SCOPY_R_DX (LEN, BUF, .OUT_A);
+
+    SS$_NORMAL
+
+END; ! VERIFY_PHRASE;
+
+%SBTTL 'VP_STORE'
+TPA_ROUTINE (VP_STORE, (OPTIONS, STRLEN, STRPTR, TOKLEN, TOKPTR, XCHAR,
+    	    NUMBER, PARAM, LEN_A, BUF_A, MUSTQ_A))
+!++
+! FUNCTIONAL DESCRIPTION:
+!
+!   Stores values for VERIFY_PHRASE.
+!
+! RETURNS:  	cond_value, longword (unsigned), write only, by value
+!
+! PROTOTYPE:
+!
+!   VP_STORE blah
+!
+! IMPLICIT INPUTS:  None.
+!
+! IMPLICIT OUTPUTS: None.
+!
+! COMPLETION CODES:
+!
+!   SS$_NORMAL:	    	normal successful completion.
+!
+! SIDE EFFECTS:
+!
+!   None.
+!--
+    BIND
+	CHAR	    = XCHAR	: BYTE,
+    	LEN	    = .LEN_A   : WORD,
+    	BUF	    = .BUF_A   : VECTOR [,BYTE],
+    	MUST_QUOTE  = .MUSTQ_A;
+
+    CASE .PARAM FROM 0 TO 7 OF
+    SET
+    	[0] :  ! normal append
+    	    	IF .LEN LSS 1024 THEN
+    	    	BEGIN
+    	    	    BUF [.len] = .CHAR;   ! literal
+    	    	    IF .char LSSU %C' ' OR .char GEQU %X'7F' THEN
+    	    	    	MUST_QUOTE = .MUST_QUOTE OR 2;
+    	    	    len = .len + 1;
+    	    	END;
+
+    	[1] :  ! =? at beginning of a 'word'
+    	    	IF .len LSS 1024-.TOKLEN THEN
+    	    	BEGIN
+    	    	    CH$MOVE (.toklen, .tokptr, buf [.len]);
+    	    	    len = .len + .toklen;
+    	    	    must_quote = .must_quote OR 4;
+    	    	END;
+
+    	[2] : ! special found
+    	    	IF .LEN LSS 1024 THEN
+    	    	BEGIN
+    	    	    BUF [.LEN] = .CHAR;
+    	    	    LEN = .LEN + 1;
+    	    	    MUST_QUOTE = .MUST_QUOTE OR 1;
+    	    	END;
+
+    	[4] : ! litnext
+    	    	IF .LEN LSS 1024 THEN
+    	    	    BUF [(LEN = .LEN+1)-1] = '\';
+    	[6] : ! blank
+    	    	IF .LEN LSS 1024 THEN
+    	    	    BUF [(LEN = .LEN+1)-1] = %C' ';
+
+    	[7] : ! comment or quoted string
+    	    	IF .LEN LSS 1024-.TOKLEN THEN
+    	    	BEGIN
+    	    	    CH$MOVE (.TOKLEN, .TOKPTR, BUF [.LEN]);
+    	    	    LEN = .LEN + .TOKLEN;
+    	    	END;
+    	[INRANGE] : ;
+    TES;
+
+    SS$_NORMAL
+
+END; ! VP_STORE
+
+%SBTTL 'encode_string'
+ROUTINE encode_string (out_a, len, buf_a, csname_a) : NOVALUE = 
+BEGIN
+!++
+! FUNCTIONAL DESCRIPTION:
+!
+!   description
+!
+! RETURNS:  	cond_value, longword (unsigned), write only, by value
+!
+! PROTOTYPE:
+!
+!   x
+!
+! IMPLICIT INPUTS:  None.
+!
+! IMPLICIT OUTPUTS: None.
+!
+! COMPLETION CODES:
+!
+!   SS$_NORMAL:	    	normal successful completion.
+!
+! SIDE EFFECTS:	    None.
+!--
+
+    LOCAL
+    	qpbuf	: VECTOR [1024,BYTE],
+    	qpdsc	: BLOCK [DSC$K_S_BLN,BYTE],
+    	indsc	: BLOCK [DSC$K_S_BLN,BYTE],
+    	status;
+
+    INIT_SDESC (qpdsc, %ALLOCATION (qpbuf), qpbuf);
+    INIT_SDESC (indsc, .len, .buf_a);
+    status = QP_ENCODE_STRING (QP__HDR_WORD, indsc, qpdsc [DSC$W_LENGTH], qpdsc);
+    IF .status THEN
+    	status = LIB$SYS_FAO (%ASCID'=?!AS?Q?!AS?=', 0, .out_a,
+    	    	    (IF .csname_a EQLA 0 THEN %ASCID'US-ASCII' ELSE .csname_a), qpdsc);
+    IF NOT .status THEN  ! just go for it if we fail
+    	LIB$SCOPY_DXDX (indsc, .out_a);
+
+END; ! encode_string
+
+END
+ELUDOM

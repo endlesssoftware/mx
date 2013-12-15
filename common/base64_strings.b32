@@ -1,0 +1,279 @@
+%TITLE 'BASE64_STRINGS'
+MODULE BASE64_STRINGS (IDENT='V1.0', ADDRESSING_MODE (EXTERNAL=LONG_RELATIVE, NONEXTERNAL=LONG_RELATIVE)) =
+BEGIN
+!++
+! FACILITY: 	    MX
+!
+! ABSTRACT: 	    Base64 string buffer encode/decode routines.
+!
+! MODULE DESCRIPTION:
+!
+!   description
+!
+! AUTHOR:   	    M. Madison
+!
+! Copyright (c) 2008, Matthew Madison.
+! 
+! All rights reserved.
+! 
+! Redistribution and use in source and binary forms, with or without
+! modification, are permitted provided that the following conditions
+! are met:
+! 
+!     * Redistributions of source code must retain the above
+!       copyright notice, this list of conditions and the following
+!       disclaimer.
+!     * Redistributions in binary form must reproduce the above
+!       copyright notice, this list of conditions and the following
+!       disclaimer in the documentation and/or other materials provided
+!       with the distribution.
+!     * Neither the name of the copyright owner nor the names of any
+!       other contributors may be used to endorse or promote products
+!       derived from this software without specific prior written
+!       permission.
+! 
+! THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
+! "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
+! LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
+! A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
+! OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
+! SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
+! LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
+! DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
+! THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
+! (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
+! OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+! CREATION DATE:    26-NOV-2000
+!
+! MODIFICATION HISTORY:
+!
+!   26-NOV-2000	V1.0	Madison	    Initial coding.
+!--
+
+    LIBRARY 'SYS$LIBRARY:STARLET';
+
+    FORWARD ROUTINE
+    	base64_encode_string,
+    	base64_decode_string;
+
+    EXTERNAL ROUTINE
+    	STR$GET1_DX 	: BLISS ADDRESSING_MODE (GENERAL),
+    	STR$FREE1_DX	: BLISS ADDRESSING_MODE (GENERAL);
+
+
+
+%SBTTL 'base64_encode_string'
+GLOBAL ROUTINE base64_encode_string (in_a, len_a, out_a) = 
+BEGIN
+!++
+! FUNCTIONAL DESCRIPTION:
+!
+!   Encodes a buffer using base64.
+!
+! RETURNS:  	cond_value, longword (unsigned), write only, by value
+!
+! PROTOTYPE:
+!
+!   	base64_encode_string  in, [len], out
+!
+!   in:	    character_string, read only, by descriptor
+!   len:    word (unsigned), write only, by reference
+!   out:    character_string, write only, by descriptor
+!
+! IMPLICIT INPUTS:  None.
+!
+! IMPLICIT OUTPUTS: None.
+!
+! COMPLETION CODES:
+!
+!   SS$_NORMAL:	    	normal successful completion.
+!
+! SIDE EFFECTS:	    None.
+!--
+    BIND
+    	indsc  	= .in_a	    : BLOCK [DSC$K_S_BLN,BYTE],
+    	len 	= .len_a    : WORD,
+    	outdsc	= .out_a    : BLOCK [DSC$K_S_BLN,BYTE],
+	table	= UPLIT('ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/') : VECTOR [,BYTE];
+
+    LOCAL
+    	inp 	: REF VECTOR [,BYTE],
+    	outp,
+    	inremain,
+    	outlen;
+
+    IF .outdsc [DSC$B_CLASS] EQL DSC$K_CLASS_D THEN
+    	STR$GET1_DX (%REF (4 * ((.indsc [DSC$W_LENGTH] + 2) / 3)), outdsc)
+    ELSE IF .outdsc [DSC$W_LENGTH] LSSU 4 * ((.indsc [DSC$W_LENGTH] + 2) / 3) THEN
+    	RETURN SS$_BADPARAM;
+
+    outp = .outdsc [DSC$A_POINTER];
+    outlen = 0;
+
+    inp = .indsc [DSC$A_POINTER];
+    inremain = .indsc [DSC$W_LENGTH];
+
+    WHILE .inremain GEQU 3 DO
+    BEGIN
+    	CH$WCHAR_A (.table [.inp [0] ^ -2], outp);
+    	CH$WCHAR_A (.table [((.inp [0] ^ 4) + (.inp [1] ^ -4)) AND %X'3F'], outp);
+    	CH$WCHAR_A (.table [((.inp [1] ^ 2) + (.inp [2] ^ -6)) AND %X'3F'], outp);
+    	CH$WCHAR_A (.table [.inp [2] AND %X'3F'], outp);
+    	outlen = .outlen + 4;
+    	inremain = .inremain - 3;
+    	inp = CH$PLUS (.inp, 3);
+    END;
+
+    !+
+    ! Add padding, if needed
+    !-
+    CASE .inremain FROM 0 TO 2 OF
+    SET
+    	[0] : ;  ! nothing left over
+
+    	[1] : 
+    	BEGIN
+    	    CH$WCHAR_A (.table [.inp [0] ^ -2], outp);
+    	    CH$WCHAR_A (.table [(.inp [0] ^ 4) AND %X'3F'], outp);
+    	    CH$WCHAR_A (%C'=', outp);
+    	    CH$WCHAR_A (%C'=', outp);
+    	    outlen = .outlen + 4;
+    	END;
+
+    	[2] : 
+    	BEGIN
+    	    CH$WCHAR_A (.table[.inp [0] ^ -2], outp);
+    	    CH$WCHAR_A (.table [((.inp [0] ^ 4) + (.inp [1] ^ -4)) AND %X'3F'], outp);
+    	    CH$WCHAR_A (.table [(.inp [1] ^ 2) AND %X'3F'], outp);
+    	    CH$WCHAR_A (%C'=', outp);
+    	    outlen = .outlen + 4;
+    	END;
+    TES;
+
+    IF .len_a NEQA 0 THEN
+    	len = .outlen;
+
+    SS$_NORMAL
+
+END; ! base64_encode_string    	
+    	
+
+%SBTTL 'base64_decode_string'
+GLOBAL ROUTINE base64_decode_string (in_a, len_a, out_a) = 
+BEGIN
+!++
+! FUNCTIONAL DESCRIPTION:
+!
+!   Decodes a buffer using base64.
+!
+! RETURNS:  	cond_value, longword (unsigned), write only, by value
+!
+! PROTOTYPE:
+!
+!   	base64_decode_string  in, [len], out
+!
+!   in:	    character_string, read only, by descriptor
+!   len:    word (unsigned), write only, by reference
+!   out:    character_string, write only, by descriptor
+!
+! IMPLICIT INPUTS:  None.
+!
+! IMPLICIT OUTPUTS: None.
+!
+! COMPLETION CODES:
+!
+!   SS$_NORMAL:	    	normal successful completion.
+!
+! SIDE EFFECTS:	    None.
+!--
+    BIND
+    	indsc  	= .in_a	    : BLOCK [DSC$K_S_BLN,BYTE],
+    	len 	= .len_a    : WORD,
+    	outdsc	= .out_a    : BLOCK [DSC$K_S_BLN,BYTE];
+
+    BIND
+    	table	= UPLIT (
+    	    	    REP 43 OF BYTE (-1), %STRING (%CHAR (62), %CHAR (-1), %CHAR (-1), %CHAR (-1),
+    	    	    %CHAR (63), %CHAR (52), %CHAR (53), %CHAR (54), %CHAR (55), %CHAR (56),
+    	    	    %CHAR (57), %CHAR (58), %CHAR (59), %CHAR (60), %CHAR (61),
+    	    	    %CHAR (-1), %CHAR (-1), %CHAR (-1), %CHAR (-2), %CHAR (-1), %CHAR (-1), %CHAR (-1),
+    	    	    %CHAR (0), %CHAR (1), %CHAR (2), %CHAR (3), %CHAR (4), %CHAR (5), %CHAR (6),
+    	    	    %CHAR (7), %CHAR (8), %CHAR (9), %CHAR (10), %CHAR (11), %CHAR (12), %CHAR (13),
+    	    	    %CHAR (14), %CHAR (15), %CHAR (16), %CHAR (17), %CHAR (18), %CHAR (19), %CHAR (20),
+    	    	    %CHAR (21), %CHAR (22), %CHAR (23), %CHAR (24), %CHAR (25)),
+    	    	    REP 6 OF BYTE (-1), %STRING (
+    	    	    %CHAR (26), %CHAR (27), %CHAR (28), %CHAR (29), %CHAR (30), %CHAR (31), %CHAR (32),
+    	    	    %CHAR (33), %CHAR (34), %CHAR (35), %CHAR (36), %CHAR (37), %CHAR (38),
+    	    	    %CHAR (39), %CHAR (40), %CHAR (41), %CHAR (42), %CHAR (43), %CHAR (44), %CHAR (45),
+    	    	    %CHAR (46), %CHAR (47), %CHAR (48), %CHAR (49), %CHAR (50), %CHAR (51),
+    	    	    %CHAR (-1), %CHAR (-1), %CHAR (-1), %CHAR (-1), %CHAR (-1), %CHAR (-1)),
+    	    	    REP 127 OF BYTE (-1)) : VECTOR [256,BYTE];
+
+    LOCAL
+    	c   	: VECTOR [4,LONG],
+    	inp,
+    	outp,
+    	inremain,
+    	outlen,
+    	required;
+
+    IF .indsc [DSC$W_LENGTH] EQLU 0 OR (.indsc [DSC$W_LENGTH] AND 3) NEQU 0 THEN
+    	RETURN SS$_BADPARAM;
+
+    required = (.indsc [DSC$W_LENGTH] * 3) / 4;
+    inp = CH$PLUS (.indsc [DSC$A_POINTER], .indsc [DSC$W_LENGTH]-1);
+    IF CH$RCHAR (.inp) EQLU %C'=' THEN
+    	required = .required - 1;
+    IF CH$RCHAR (.inp-1) EQLU %C'=' THEN
+    	required = .required - 1;
+
+    IF .outdsc [DSC$B_CLASS] EQL DSC$K_CLASS_D THEN
+    	STR$GET1_DX (required, outdsc)
+    ELSE IF .outdsc [DSC$W_LENGTH] LSSU .required THEN
+    	RETURN SS$_BADPARAM;
+
+    outp = .outdsc [DSC$A_POINTER];
+    outlen = 0;
+
+    inp = .indsc [DSC$A_POINTER];
+    inremain = .indsc [DSC$W_LENGTH];
+
+    WHILE .inremain GTRU 0 DO
+    BEGIN
+    	c [0] = .table [CH$RCHAR_A (inp)];
+    	c [1] = .table [CH$RCHAR_A (inp)];
+    	c [2] = .table [CH$RCHAR_A (inp)];
+    	c [3] = .table [CH$RCHAR_A (inp)];
+    	inremain = .inremain - 4;
+
+    	IF .c [0] LSS 0 OR .c [1] LSS 0 OR 
+    	    (.c [2] EQLU %X'FE' AND (.inremain NEQ 0 OR .c [3] NEQU %X'FE')) OR
+    	    (.c [3] EQLU %X'FE' AND .inremain NEQ 0) THEN
+    	BEGIN
+    	    IF .outdsc [DSC$B_CLASS] EQL DSC$K_CLASS_D THEN
+    	    	STR$FREE1_DX (outdsc);
+    	    RETURN SS$_ABORT;
+    	END;
+    	CH$WCHAR_A ((.c [0] ^ 2) OR (.c [1] ^ -4), outp);
+    	outlen = .outlen + 1;
+    	IF .c [2] NEQU %X'FE' THEN
+    	BEGIN
+    	    CH$WCHAR_A ((.c [1] ^ 4) OR (.c [2] ^ -2), outp);
+    	    outlen = .outlen + 1;
+    	END;
+    	IF .c [3] NEQU %X'FE' THEN
+    	BEGIN
+    	    CH$WCHAR_A ((.c [2] ^ 6) OR .c [3], outp);
+    	    outlen = .outlen + 1;
+    	END;
+    END;
+
+    IF .len_a NEQA 0 THEN
+    	len = .outlen;
+
+    SS$_NORMAL
+
+END; ! base64_decode_string    	
+    
+END
+ELUDOM

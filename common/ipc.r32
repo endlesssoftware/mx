@@ -1,0 +1,88 @@
+!++
+!  IPC.R32
+!
+! Copyright (c) 2008, Matthew Madison.
+! 
+! All rights reserved.
+! 
+! Redistribution and use in source and binary forms, with or without
+! modification, are permitted provided that the following conditions
+! are met:
+! 
+!     * Redistributions of source code must retain the above
+!       copyright notice, this list of conditions and the following
+!       disclaimer.
+!     * Redistributions in binary form must reproduce the above
+!       copyright notice, this list of conditions and the following
+!       disclaimer in the documentation and/or other materials provided
+!       with the distribution.
+!     * Neither the name of the copyright owner nor the names of any
+!       other contributors may be used to endorse or promote products
+!       derived from this software without specific prior written
+!       permission.
+! 
+! THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
+! "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
+! LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
+! A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
+! OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
+! SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
+! LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
+! DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
+! THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
+! (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
+! OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+!
+!   Definitions for inter-process communication (specifically,
+!   MCP user to agent processes).
+!
+!   24-SEP-1990	V1.0	Madison	    Initial coding.
+!   16-APR-1994 V1.1	Altmayer    Entry update & Delay Time update commands
+!    6-MAY-1994 V1.2	Altmayer    Re-structure lock value block
+!    9-MAY-1994 V1.3	Altmayer    Add DELENT command
+!   27-MAY-1994 V1.3-1	Goatley     Add LSB_V_DELAY
+!--
+
+LIBRARY 'MX_SRC_COMMON:FIELDS';
+
+    _DEF (LSB)
+    	LSB_W_STATUS	= _WORD,
+    	LSB_W_RESERVED	= _WORD,
+    	LSB_L_LKID  	= _LONG,
+    	LSB_X_VALBLK	= _BYTES (16),
+    	_OVERLAY (LSB_X_VALBLK)
+    	    LSB_B_CMD		= _BYTE,	    ! Command code
+    	    LSB_X_RES		= _BYTES(3),	    ! Reserved
+	    LSB_L_ENTNUM	= _LONG,	    ! Entry number
+	    LSB_X_CMDPAR	= _BYTES (8),
+	    _OVERLAY (LSB_X_CMDPAR)
+		LSB_L_CSID	= _LONG,	    ! target CSID
+		LSB_L_RMASK	= _LONG,	    ! reset mask
+	    _ENDOVERLAY
+	    _OVERLAY (LSB_X_CMDPAR)
+		LSB_L_SIZE	= _LONG,	    ! entry size
+		LSB_L_FLAGS	= _LONG,
+		_OVERLAY (LSB_L_FLAGS)
+		    LSB_V_DELAY = _BIT,		!Indicate that it's delayed
+		_ENDOVERLAY
+	    _ENDOVERLAY
+	    _OVERLAY (LSB_X_CMDPAR)
+		LSB_Q_DLYDT	= _QUAD,	    ! new delay time
+	    _ENDOVERLAY
+	    _OVERLAY (LSB_X_CMDPAR)
+		LSB_L_STCODE	= _LONG,	    ! status code
+		LSB_L_STPAR	= _LONG		    ! status parameter
+	    _ENDOVERLAY
+    	_ENDOVERLAY
+    _ENDDEF (LSB);
+    
+    LITERAL
+	MX_K_CMD_NOOP	    = 0,    ! No operation   (CMD)
+	MX_K_CMD_SHUTDOWN   = 1,    ! Shutdown       (CMD, CSID)
+	MX_K_CMD_RESET	    = 2,    ! Reset	     (CMD, CSID, RMASK)
+	MX_K_CMD_NEWENT	    = 3,    ! New entry      (CMD, ENTNUM, SIZE)
+	MX_K_CMD_UPDENT	    = 4,    ! Update entry   (CMD, ENTNUM)
+	MX_K_CMD_UPDDLY	    = 5,    ! Up. delay time (CMD, ENTNUM, DLYDT)
+	MX_K_CMD_DELENT	    = 6,    ! Delete entry   (CMD, ENTNUM)
+	MX_K_CMD_UPDSIZ	    = 7;    ! Up. entry size (CMD, ENTNUM, SIZE)
+

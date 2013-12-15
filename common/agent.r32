@@ -1,0 +1,102 @@
+!++
+! AGENT.R32
+!
+! Declarations used throughout by all MX processing agents.
+!
+! UPDATE HISTORY:
+!
+!   19-SEP-1990	V1.1	Madison	    Add shutdown & reset handling.
+!   11-OCT-1990	V1.2	Madison	    Add backup capability.
+!   11-FEB-1991	V1.3	Madison	    Add size-based ordering.
+!   13-FEB-1991	V1.3-1	Madison	    If we're notified, check delay date.
+!   27-FEB-1991	V2.0	Madison	    First crack at multiple simult. agents.
+!   04-MAR-1991	V2.0-1	Madison	    Eliminate extraneous SYNCLK.
+!   17-OCT-1991	V2.1	Madison	    Better RESET_MASK support in INIT routines.
+!   14-FEB-1992	V2.2	Madison	    Log startup, shutdown, reset events.
+!    6-FEB-1993 V2.3	Goatley     Added final status to LOG_EVENT messages.
+!   10-FEB-1994 V2.4	Goatley     Modify to work with FLQ V2.
+!   22-MAR-1994 V2.4-1	Goatley     Ignore invalid entry numbers in GRP3_AST.
+!   22-MAR-1994 V2.4-2	Goatley     Fix problem with entries left INPROG!!!
+!   10-APR-1994	V2.5	Altmayer    Include agent status codes for MCP STATUS
+!   16-APR-1994	V2.6	Altmayer    Rewrite main loop to keep entries in memory
+!   28-APR-1994	V2.6-1	Altmayer    Reorganize for Single Process Commands
+!    6-MAY-1994	V2.7	Altmayer    Re-structure lock value block
+!    9-MAY-1994 V2.8	Altmayer    Rewrite with GET_WORK(), etc.
+!   11-MAY-1994 V2.8-1	Altmayer    Add UPDSIZ command
+!   11-MAY-1994 V2.9	Altmayer    Add GRPW lock
+!   12-MAY-1994 V2.9-1	Altmayer    Add counters
+!   13-MAY-1994 V2.9-2	Altmayer    Include MX_JNET agent and FLQ_CLEANUP(,etc.)
+!   16-MAY-1994 V2.9-3	Altmayer    Message gone if status NEQU MX_K_STRDY
+!   27-MAY-1994 V2.9-4	Goatley     Handle entries added with an initial delay.
+!    7-JUN-1994 V2.9-5	Goatley     Updated DBGPRT macro.
+!    4-DEC-1995 V2.10	Goatley     Fix accvios by initing UPD entries and
+!				    by not freeing requeued UPDs in UPDATE!
+!    6-MAR-1996 V2.11	Goatley     Added support for processing entries FIFO.
+!   04-JAN-1997	V3.0	Madison	    Eliminate MDMLIB.
+!   26-AUG-1997	V3.1	Madison	    Add license check.
+!   30-AUG-1997	V3.2	Madison	    Move code to a separate module, making
+!   	    	    	    	    this MUCH shorter!
+!   27-APR-1998	V3.2-1	Madison	    Add SERNAM.
+!   16-JUL-1998	V3.3	Madison	    Move ident string creation to macros
+!   	    	    	    	    here.
+!--
+
+    LIBRARY 'SYS$LIBRARY:STARLET';
+    LIBRARY 'FIELDS';
+
+    _DEF (CFG)
+    	CFG_Q_MXNODE	= _QUAD,
+    	CFG_Q_FLQNODE	= _QUAD,
+    	CFG_Q_LOCKNAM	= _QUAD,
+	CFG_Q_LCK2NAM	= _QUAD,
+	CFG_Q_GRPWNAM	= _QUAD,
+    	CFG_Q_SERNAM	= _QUAD,
+    	CFG_Q_INTERVAL	= _QUAD
+    _ENDDEF (CFG);
+
+    _DEF (RST)
+    	RST_L_FLAGS 	= _LONG,
+    	_OVERLAY (RST_L_FLAGS)
+    	    RST_V_CONFIG    = _BIT,
+    	    RST_V_ACCTG	    = _BIT
+    	_ENDOVERLAY
+    _ENDDEF (RST);
+
+! Exit handler control block
+
+    _DEF (EXH)
+    	EXH_L_FLINK 	= _LONG,
+    	EXH_L_HANDLER	= _LONG,
+    	EXH_L_ARGCNT	= _LONG,
+    	EXH_L_P1    	= _LONG,
+    	_OVERLAY (EXH_L_P1)
+    	    EXH_L_STATADR   = _LONG,
+    	_ENDOVERLAY
+    	EXH_L_P2    	= _LONG,
+    	EXH_L_P3    	= _LONG,
+    	EXH_L_P4    	= _LONG,
+    	EXH_L_P5    	= _LONG,
+    	EXH_L_P6    	= _LONG
+    _ENDDEF (EXH);
+
+    MACRO
+    	IDENT_DECLARATIONS (_type) =
+    	_type
+    	    MX_IDENT_BUFFER : VECTOR [64,BYTE],
+    	    MX_IDENT_STRING : BLOCK [DSC$K_S_BLN,BYTE] PRESET (
+    	    	    	    	    [DSC$B_DTYPE] = DSC$K_DTYPE_T,
+    	    	    	    	    [DSC$B_CLASS] = DSC$K_CLASS_S,
+    	    	    	    	    [DSC$W_LENGTH] = %ALLOCATION (MX_IDENT_BUFFER),
+    	    	    	    	    [DSC$A_POINTER] = MX_IDENT_BUFFER)
+    	%,
+        SET_IDENT_STRING =
+        BEGIN
+            EXTERNAL ROUTINE MX_VERSION : BLISS ADDRESSING_MODE (GENERAL);
+            mx_ident_string [DSC$W_LENGTH] = %ALLOCATION (mx_ident_buffer);
+            $FAO (%ASCID %STRING ('!AS ',
+                %IF %BLISS (BLISS32E) %THEN 'AXP'
+                %ELSE %IF %BLISS (BLISS32I) %THEN 'I64'
+                      %ELSE 'VAX'
+                      %FI
+                %FI), mx_ident_string [DSC$W_LENGTH], mx_ident_string, MX_VERSION ())
+        END%;

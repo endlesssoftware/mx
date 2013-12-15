@@ -1,0 +1,214 @@
+%TITLE 'COPY_FILE'
+MODULE COPY_FILE (IDENT='V1.1') =
+BEGIN
+!++
+! FACILITY: 	    MX
+!
+! ABSTRACT: 	    Routine to copy a file.
+!
+! MODULE DESCRIPTION:
+!
+!   This module contains a routine that copies, record-by-record,
+!   one file to another.
+!
+! AUTHOR:   	    M. Madison
+!
+! Copyright (c) 2008, Matthew Madison.
+! 
+! All rights reserved.
+! 
+! Redistribution and use in source and binary forms, with or without
+! modification, are permitted provided that the following conditions
+! are met:
+! 
+!     * Redistributions of source code must retain the above
+!       copyright notice, this list of conditions and the following
+!       disclaimer.
+!     * Redistributions in binary form must reproduce the above
+!       copyright notice, this list of conditions and the following
+!       disclaimer in the documentation and/or other materials provided
+!       with the distribution.
+!     * Neither the name of the copyright owner nor the names of any
+!       other contributors may be used to endorse or promote products
+!       derived from this software without specific prior written
+!       permission.
+! 
+! THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
+! "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
+! LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
+! A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
+! OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
+! SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
+! LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
+! DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
+! THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
+! (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
+! OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+! CREATION DATE:    07-FEB-1991
+!
+! MODIFICATION HISTORY:
+!
+!   07-FEB-1991	V1.0	Madison	    Initial coding.
+!   01-SEP-1997	V1.1	Madison	    Use LIB$GET_VM_PAGE.
+!--
+    LIBRARY 'SYS$LIBRARY:STARLET';
+    LIBRARY 'MX';
+
+    EXTERNAL ROUTINE
+    	G_HAT (LIB$GET_VM_PAGE, LIB$FREE_VM_PAGE, STR$COPY_R);
+
+%SBTTL 'COPY_FILE'
+GLOBAL ROUTINE COPY_FILE (INFILE_A, OUTFILE_A, OUTRES_A, XAPPEND, COUNT_A,
+    	    	    	   INFID_A) = 
+BEGIN
+!++
+! FUNCTIONAL DESCRIPTION:
+!
+!   Copies infile to outfile.  If APPEND is set, outfile is assumed
+!   to be extant.  If OUTRES is specified, result-spec for output file
+!   is passed back. If COUNT is specified, the number of bytes copied
+!   is returned.  If INFILE is null, INFID is assumed to be address of
+!   a full FID (DVI,DID,FID).
+!
+! RETURNS:  	cond_value, longword (unsigned), write only, by value
+!
+! PROTOTYPE:
+!
+!   COPY_FILE   infile, outfile [,outres] [,append] [,count] [,infid]
+!
+! IMPLICIT INPUTS:  None.
+!
+! IMPLICIT OUTPUTS: None.
+!
+! COMPLETION CODES:
+!
+!   SS$_NORMAL:	    	normal successful completion.
+!
+! SIDE EFFECTS:
+!
+!   None.
+!--
+    BIND
+    	INFILE	= .INFILE_A 	: BLOCK [DSC$K_S_BLN,BYTE],
+    	OUTFILE	= .OUTFILE_A	: BLOCK [DSC$K_S_BLN,BYTE];
+
+    BUILTIN
+    	ACTUALCOUNT;
+
+    LOCAL
+    	INFAB	: $FAB_DECL,
+    	OUTFAB	: $FAB_DECL,
+    	INRAB	: $RAB_DECL,	
+    	INNAM	: $NAM_DECL,
+    	OUTRAB	: $RAB_DECL,
+    	INXAB	: $XABFHC_DECL,
+    	OUTNAM	: $NAM_DECL,
+    	OUTESP	: VECTOR [255,BYTE],
+    	OUTRSP	: VECTOR [255,BYTE],
+    	COUNT,
+    	APPEND,
+    	page_count,
+    	STATUS;
+
+    $FAB_INIT (FAB=INFAB, FAC=GET, SHR=SHRGET, XAB=INXAB);
+    IF INFILE EQLA 0 THEN
+    BEGIN
+    	IF ACTUALCOUNT () LSS 6 THEN RETURN SS$_BADPARAM;
+    	$NAM_INIT (NAM=INNAM);
+    	INFAB [FAB$L_NAM] = INNAM;
+    	INFAB [FAB$V_NAM] = 1;
+    	CH$MOVE (28, .INFID_A, INNAM [NAM$T_DVI]);
+    END
+    ELSE
+    BEGIN
+    	INFAB [FAB$L_FNA] = .INFILE [DSC$A_POINTER];
+    	INFAB [FAB$B_FNS] = .INFILE [DSC$W_LENGTH];
+    END;
+
+    $XABFHC_INIT (XAB=INXAB);
+
+    APPEND = (IF ACTUALCOUNT () GTR 3 THEN .XAPPEND ELSE 0);
+
+    STATUS = $OPEN (FAB=INFAB);
+    IF .STATUS THEN
+    BEGIN
+    	$RAB_INIT (RAB=INRAB, FAB=INFAB, ROP=RAH);
+    	INRAB [RAB$W_USZ] = (IF .INFAB [FAB$W_MRS] EQL 0 THEN
+    	    IF .INXAB [XAB$W_LRL] EQL 0 THEN 32765 ELSE
+    	    	.INXAB [XAB$W_LRL] ELSE .INFAB [FAB$W_MRS]);
+    	page_count = (.inrab [RAB$W_USZ] + 511) / 512;
+    	STATUS = LIB$GET_VM_PAGE (page_count, INRAB [RAB$L_UBF]);
+    	IF .STATUS THEN
+    	BEGIN
+    	    STATUS = $CONNECT (RAB=INRAB);
+    	    IF NOT .STATUS THEN
+    	    BEGIN
+    	    	LIB$FREE_VM_PAGE (page_count, INRAB [RAB$L_UBF]);
+    	    	$CLOSE (FAB=INFAB);
+    	    END;
+    	END;
+    END;
+    IF NOT .STATUS THEN RETURN .STATUS;
+
+    $NAM_INIT (NAM=OUTNAM, ESS=%ALLOCATION (OUTESP), ESA=OUTESP,
+    	RSS=%ALLOCATION (OUTRSP), RSA=OUTRSP);
+    $FAB_INIT (FAB=OUTFAB, NAM=OUTNAM, FNA=.OUTFILE [DSC$A_POINTER],
+    	FNS=.OUTFILE [DSC$W_LENGTH], FAC=PUT, RFM=VAR, RAT=CR, MRS=0,
+    	FOP=TEF);
+
+    IF .APPEND THEN
+    	STATUS = $OPEN (FAB=OUTFAB)
+    ELSE
+    	STATUS = $CREATE (FAB=OUTFAB);
+
+    IF .STATUS THEN
+    BEGIN
+    	$RAB_INIT (RAB=OUTRAB, FAB=OUTFAB, RBF=.INRAB [RAB$L_UBF], ROP=WBH);
+    	IF .APPEND THEN OUTRAB [RAB$V_EOF] = 1;
+    	STATUS = $CONNECT (RAB=OUTRAB);
+    	IF .APPEND AND .STATUS EQL RMS$_EOF THEN STATUS = SS$_NORMAL;
+    	IF NOT .STATUS THEN $CLOSE (FAB=OUTFAB);
+    END;
+
+    IF NOT .STATUS THEN
+    BEGIN
+    	$CLOSE (FAB=INFAB);
+    	LIB$FREE_VM_PAGE (page_count, INRAB [RAB$L_UBF]);
+    	RETURN .STATUS;
+    END;
+
+    IF ACTUALCOUNT () GTR 2 THEN
+    	IF .OUTRES_A NEQA 0 THEN
+    	    STR$COPY_R (.OUTRES_A, %REF (.OUTNAM [NAM$B_RSL]), OUTRSP);
+
+    COUNT = 0;
+    WHILE (STATUS = $GET (RAB=INRAB)) DO
+    BEGIN
+    	OUTRAB [RAB$W_RSZ] = .INRAB [RAB$W_RSZ];
+    	STATUS = $PUT (RAB=OUTRAB);
+    	IF NOT .STATUS THEN EXITLOOP;
+    	COUNT = .COUNT + .INRAB [RAB$W_RSZ];
+    END;
+
+    $DISCONNECT (RAB=OUTRAB);
+    $DISCONNECT (RAB=INRAB);
+    $CLOSE (FAB=INFAB);
+    IF NOT .STATUS AND .STATUS NEQ RMS$_EOF THEN
+    	OUTFAB [FAB$V_DLT] = 1;
+    $CLOSE (FAB=OUTFAB);
+    LIB$FREE_VM_PAGE (page_count, INRAB [RAB$L_UBF]);
+
+    IF .STATUS EQL RMS$_EOF THEN
+    BEGIN
+    	IF ACTUALCOUNT () GTR 4 THEN
+    	    IF .COUNT_A NEQA 0 THEN
+    	    	.COUNT_A = .COUNT;
+    	SS$_NORMAL
+    END
+    ELSE
+    	.STATUS
+
+END; ! COPY_FILE
+
+END
+ELUDOM

@@ -1,0 +1,2310 @@
+%TITLE 'AGENT'
+MODULE AGENT (IDENT='V1.6-1',
+    	      ADDRESSING_MODE (EXTERNAL=LONG_RELATIVE, NONEXTERNAL=LONG_RELATIVE)) =
+BEGIN
+!++
+! FACILITY: 	    MX
+!
+! ABSTRACT: 	    Main processing routines for agents.
+!
+! MODULE DESCRIPTION:
+!
+!   This module contains the processing routines for MX agents.
+!   The routines were previously defined via macros in AGENT.R32
+!   and SINGLE_AGENT.R32.
+!
+! AUTHOR:   	    M. Madison
+!
+! Copyright (c) 2008, Matthew Madison.
+! Copyright (c) 2011, Endless Software Solutions.
+! 
+! All rights reserved.
+! 
+! Redistribution and use in source and binary forms, with or without
+! modification, are permitted provided that the following conditions
+! are met:
+! 
+!     * Redistributions of source code must retain the above
+!       copyright notice, this list of conditions and the following
+!       disclaimer.
+!     * Redistributions in binary form must reproduce the above
+!       copyright notice, this list of conditions and the following
+!       disclaimer in the documentation and/or other materials provided
+!       with the distribution.
+!     * Neither the name of the copyright owner nor the names of any
+!       other contributors may be used to endorse or promote products
+!       derived from this software without specific prior written
+!       permission.
+! 
+! THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
+! "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
+! LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
+! A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
+! OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
+! SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
+! LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
+! DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
+! THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
+! (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
+! OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+! CREATION DATE:    30-AUG-1997
+!
+! MODIFICATION HISTORY:
+!
+!   30-AUG-1997	V1.0	Madison	    Initial coding.
+!   01-SEP-1997	V1.0-1	Madison	    Fix update problem for single agents.
+!   04-SEP-1997	V1.0-2	Madison	    Fix explicit PRMODE reference.
+!   22-NOV-1997	V1.1	Madison	    Periodically search the queue directly.
+!   21-APR-1998	V1.1-1	Madison	    Allow 5.1 to operate under 5.0 license.
+!   27-APR-1998	V1.2	Madison	    Failover for single agents.
+!   07-JUN-1998	V1.3	Madison	    Add license info to identification string.
+!   20-JUN-1998	V1.3-1	Madison	    Shorten the ident string.
+!   16-JUL-1998	V1.4	Madison	    Move ident string creation to a macro.
+!   25-JUL-1998	V1.4-1	Madison	    Add extra GETTXT/FREETXT pair for mem debugging.
+!   26-AUG-1998	V1.5	Madison	    Add holding-agent support.
+!   02-SEP-1998	V1.5-1	Madison	    Fix single-agent REQUEST_UPDATE code.
+!   27-NOV-1999	V1.5-2	Madison	    Protect non-AST access to UPDQUE.
+!   29-JAN-2000	V1.5-3	Madison	    More holding queues.
+!   19-JAN-2001	V1.5-4	Madison	    Don't use NOQUEUE on lock requests at startup.
+!   14-NOV-2004 V1.6    Madison     Updates to handle FLQ_MGR.
+!   13-APR-2005 V1.6-1  Madison     FLQ_SEARCH_END.
+!--
+
+    LIBRARY 'SYS$LIBRARY:STARLET';
+    LIBRARY 'FLQ';
+    LIBRARY 'FIELDS';
+    LIBRARY 'MX';
+    LIBRARY 'AGENT';
+    LIBRARY 'IPC';
+    LIBRARY 'STATUS';
+
+    FORWARD ROUTINE
+    	AGENT_MAIN,
+    	EXIT_HANDLER,
+	FIND_ENTRY,
+	INSERT_ENTRY,
+    	READ_CONFIG,
+	REQUEST_UPDATE,
+	UPDATE,
+	GET_WORK,
+	COMMAND,
+    	GRP_AST,
+    	GRP1_AST,
+    	GRP2_AST,
+    	GRP3_AST,
+	CMD_AST,
+	CMD2_AST,
+	CMD3_AST,
+	DBG_SHOW_QUEUE,
+    	LOCATE_AST,
+    	SERIAL_AST;
+
+    _DEF (ENT)
+    	ENT_L_FLINK 	= _LONG,
+    	ENT_L_BLINK 	= _LONG,
+    	ENT_L_ENTNUM	= _LONG,
+    	ENT_L_SIZE  	= _LONG,
+    	ENT_L_FLAGS	= _LONG,
+	_OVERLAY (ENT_L_FLAGS)		! Different from QENT_L_FLAGS !!!
+	    ENT_V_DELAY	    = _BIT,	! Delay present
+	    ENT_V_IGNORE    = _BIT,	! Ignore until updated
+	_ENDOVERLAY
+	ENT_Q_DLYDT	= _QUAD
+    _ENDDEF (ENT);
+
+    _DEF (UPD)
+	UPD_L_FLINK	= _LONG,	! Forward link
+	UPD_L_BLINK	= _LONG,	! Backward link
+	UPD_L_CMD	= _LONG,	! Command (MX_K_CMD_...)
+	UPD_L_ENTNUM	= _LONG,	! Entry number
+	UPD_X_CMDPAR	= _QUAD,	! Command parameters:
+	_OVERLAY (UPD_X_CMDPAR)
+	    UPD_L_SIZE	    = _LONG,	! (new) Entry size
+	    UPD_L_FLAGS	    = _LONG,	! (new) flags
+	    _OVERLAY (UPD_L_FLAGS)	!
+		UPD_V_DELAY	= _BIT,	!Used to set ENT_V_DELAY
+	    _ENDOVERLAY
+	_ENDOVERLAY
+	_OVERLAY (UPD_X_CMDPAR)
+	    UPD_Q_DLYDT	    = _LONG	! (updated) Entry delay time
+	_ENDOVERLAY
+    _ENDDEF (UPD);
+
+    _DEF (CNT)
+	CNT_W_PRCCNT	= _WORD,	! New messages processed
+	CNT_W_RETRCNT	= _WORD,	! Retries processed
+	CNT_W_MSGDONE	= _WORD,	! Messages finished
+	CNT_W_UPDREQ	= _WORD,	! Updates requested
+	CNT_W_UPDCNT	= _WORD,	! Updates performed
+	CNT_W_UPDPEND	= _WORD,	! Updates pending
+	CNT_W_ENTCNT	= _WORD		! ENTs count
+    _ENDDEF (CNT);
+
+MACRO
+    DBGPRT (CTRSTR) [] =
+    BEGIN
+    	LOCAL __status;
+    	IF .agent_debug THEN
+    	BEGIN
+    	    __dbgfao [DSC$W_LENGTH] = %ALLOCATION (__dbgbuf);
+    	%IF %NULL (%REMAINING) %THEN
+    	    __status = $FAO (%ASCID'!%T !AS', __dbgfao, __dbgfao, 0, %ASCID ctrstr);
+    	%ELSE
+    	    __status = $FAO (%ASCID %STRING ('!%T ',CTRSTR),
+    	    	    	     __dbgfao, __dbgfao, 0, %REMAINING);
+    	%FI
+    	    IF .__status THEN LIB$PUT_OUTPUT (__dbgfao);
+    	END;
+    END%;
+
+    GLOBAL
+    	CONFIG	    	: CFGDEF,
+    	SHUTDOWN_FLAG,
+    	RESET_MASK  	: RSTDEF,
+	STATUS_CODE,
+	STATUS_PARAM	: LONG;
+
+    IDENT_DECLARATIONS (GLOBAL);
+
+    OWN
+    	EXHBLK	    	: EXHDEF,
+    	LOCKSB	    	: LSBDEF,
+	CMDSB	    	: LSBDEF,
+	WAITSB	    	: LSBDEF,
+	WORKSB      	: LSBDEF,
+    	ENTQUE	    	: QUEDEF,
+	UPDQUE	    	: QUEDEF,
+    	HDSKLSB     	: LSBDEF,
+    	SERLSB	    	: LSBDEF,
+    	PRCNAM	    	: BLOCK [DSC$K_S_BLN,BYTE],
+	CMDNAM	    	: BLOCK [DSC$K_S_BLN,BYTE],
+	WAITNAM	    	: BLOCK [DSC$K_S_BLN,BYTE],
+	WORKNAM     	: BLOCK [DSC$K_S_BLN,BYTE],
+    	agent_name  	: BLOCK [DSC$K_S_BLN,BYTE],
+	COUNT	    	: CNTDEF,
+    	LAST_LOCATE 	: VECTOR [2,LONG],
+    	LOCATE_INTERVAL	: VECTOR [2,LONG],
+    	LOCATE_FLAG,
+    	PID,
+    	MYCSID,
+    	ENQEF,
+	CMDEF,
+	WAITEF,
+	WORKEF,
+    	SEREF,
+	insert_entry_by_size,
+    	agent_number,
+    	agent_debug,
+    	queue_debug,
+    	single_agent,
+    	this_agent_running,
+    	EXIT_STATUS,
+    	__agnambuf  : VECTOR [16,BYTE],
+    	__dbgbuf    : VECTOR [512,BYTE],
+    	__dbgfao    : BLOCK [DSC$K_S_BLN,BYTE] PRESET (
+    	    	    	[DSC$B_CLASS] = DSC$K_CLASS_S,
+    	    	    	[DSC$B_DTYPE] = DSC$K_DTYPE_T,
+    	    	    	[DSC$W_LENGTH] = 0,
+    	    	    	[DSC$A_POINTER] = __dbgbuf),
+    	!+
+    	! Note that the order and placement of the names
+    	! in this table MUST match what's in FLQ_DEFS.R32
+    	! and FLQ___ROUTINES.B32.
+    	!-
+    	agnam_table : VECTOR [MX_K_PATH_HOLDQ_BASE,LONG] INITIAL (
+	    	  	%ASCID'MX_ROUTER',
+	    	    	%ASCID'MX_LOCAL',
+	    	    	%ASCID'MX_MLF',
+	    	    	%ASCID'MX_SITE',
+	    	    	%ASCID'MX_DNSMTP',
+	    	    	%ASCID'MX_SMTP',
+	    	    	%ASCID'MX_XSMTP',
+	    	    	%ASCID'MX_UUCP',
+	    	    	%ASCID'',
+	    	    	%ASCID'MX_LSV',
+    	    	    	%ASCID'MX_HOLD!UL');
+
+    !+
+    ! If these assumptions do not hold,
+    ! we've missed some changes somewhere.
+    !-
+    $ASSUME (FLQ_K_MX_HOLDQ_BASE, EQL, MX_K_PATH_HOLDQ_BASE-1)
+    $ASSUME (MX_K_HOLDQ_MAX, EQL, FLQ_K_MX_HOLDQ_MAX)
+
+    EXTERNAL ROUTINE
+    	G_HAT (LOG_EVENT, MEM_GETTXT),
+    	G_HAT (LIB$GET_VM, LIB$FREE_VM, LIB$GETSYI, LIB$PUT_OUTPUT, LIB$CVT_DTB),
+        G_HAT (FLQ_SEARCH_END);
+
+
+%SBTTL 'AGENT_MAIN'
+GLOBAL ROUTINE AGENT_MAIN (agent_num, is_single_agent, initrtn, procrtn,
+    	    	    	   special_init, special_process, idlertn,
+                           x_not_queue_agent, agname_a) = 
+BEGIN
+!++
+! FUNCTIONAL DESCRIPTION:
+!
+!   Main routine for an MX processing agent.
+!
+! RETURNS:  	cond_value, longword (unsigned), write only, by value
+!
+! PROTOTYPE:
+!
+!   AGENT_MAIN  agent_num, single, initrtn, procrtn
+!
+!   agent_num:	longword_unsigned, longword (unsigned), read only, by value
+!   single: 	longword_unsigned, longword (unsigned), read only, by value
+!   initrtn:	entry_mask, longword (unsigned), CALL, by reference
+!   procrtn:	entry_mask, longword (unsigned), CALL, by reference
+!
+! IMPLICIT INPUTS:  None.
+!
+! IMPLICIT OUTPUTS: None.
+!
+! COMPLETION CODES:
+!
+!   SS$_NORMAL:	    	normal successful completion.
+!
+! SIDE EFFECTS:
+!
+!   None.
+!--
+    BUILTIN
+    	ACTUALCOUNT;
+
+    BIND
+    	FLQ_NODE    = CONFIG [CFG_Q_FLQNODE] : BLOCK [,BYTE];
+
+    LOCAL
+    	SRCHLST	    : _FLQSRCHLST_DECL (ITEMS=2),
+    	ENT 	    : REF ENTDEF,
+	UPD	    : REF UPDDEF,
+    	QENT	    : QENTDEF,
+	ORIG_DLYDT  : BLOCK [8,BYTE],
+	ORIG_DELAY,
+	ORIG_SIZE,
+	WAITDT	    : BLOCK [8,BYTE],
+	ENTNUM,
+    	QCTX,
+    	SRCHCTX,
+    	TIMEREF,
+        not_queue_agent,
+    	STATUS;
+
+    EXTERNAL ROUTINE
+    	G_HAT (LIB$GET_EF, LIB$SUB_TIMES, LIB$ADD_TIMES);
+
+    EXTERNAL LITERAL
+    	MX__AGENTALRDY;
+
+    SET_IDENT_STRING;
+
+    IF ACTUALCOUNT () GTRU 7 THEN
+        not_queue_agent = .x_not_queue_agent
+    ELSE
+        not_queue_agent = 0;
+
+    single_agent = .is_single_agent;
+
+    RESET_MASK [0,0,32,0] = SHUTDOWN_FLAG = 0;
+    LOCATE_FLAG  = 1;
+    insert_entry_by_size = 1;
+    agent_number = .agent_num;
+
+    IF .not_queue_agent THEN
+    BEGIN
+        INIT_SDESC (agent_name, %ALLOCATION (__agnambuf), __agnambuf);
+        $FAO (%ASCID'!AS', agent_name [DSC$W_LENGTH], agent_name, .agname_a);
+    END
+    ELSE
+    BEGIN
+        IF .agent_num GEQU FLQ_K_MX_HOLDQ_BASE + FLQ_K_MX_HOLDQ_MAX THEN
+    	    RETURN SS$_BADPARAM;
+
+        IF .agent_num LSSU FLQ_K_MX_HOLDQ_BASE THEN
+        BEGIN
+    	    BIND nam = .agnam_table [.agent_num] : BLOCK [,BYTE];
+    	    INIT_SDESC (agent_name, .nam [DSC$W_LENGTH], .nam [DSC$A_POINTER]);
+        END
+        ELSE
+        BEGIN
+    	    INIT_SDESC (agent_name, %ALLOCATION (__agnambuf), __agnambuf);
+    	    $FAO (.agnam_table [FLQ_K_MX_HOLDQ_BASE], agent_name [DSC$W_LENGTH],
+    	          agent_name, (.agent_num - FLQ_K_MX_HOLDQ_BASE) + 1);
+        END;
+    END;
+
+    STATUS = READ_CONFIG (0);
+    IF NOT .STATUS THEN SIGNAL_STOP (.STATUS);
+    STATUS = (.initrtn) (0);
+    IF NOT .STATUS THEN SIGNAL_STOP (.STATUS);
+    MYCSID = 0;
+    LIB$GETSYI (%REF (SYI$_NODE_CSID), MYCSID);
+
+    IF ACTUALCOUNT () GTR 4 THEN
+    	IF .special_init NEQA 0 THEN (.special_init)();
+
+    LIB$GET_EF (ENQEF);
+    LIB$GET_EF (TIMEREF);
+    LIB$GET_EF (CMDEF);
+    LIB$GET_EF (WAITEF);
+    LIB$GET_EF (WORKEF);
+
+    INIT_QUEUE (ENTQUE);
+    INIT_QUEUE (UPDQUE);
+
+    STATUS_CODE = MX_K_STATUS_RDCONFIG;
+
+    !  Initialize command lock & AST
+    STATUS = $ENQW (EFN=.CMDEF, LKMODE=LCK$K_EXMODE, LKSB=CMDSB,
+    	    	FLAGS=LCK$M_NOQUEUE OR LCK$M_SYSTEM OR LCK$M_NODLCKBLK OR LCK$M_NODLCKWT,
+    	    	RESNAM=CMDNAM, BLKAST=CMD_AST);
+    IF .status THEN status = .cmdsb [LSB_W_STATUS];
+    IF NOT .STATUS THEN
+    	SIGNAL_STOP (MX__AGENTALRDY, 1, agent_name, .status);
+
+    !	Initialize main IPC listener lock
+    !
+    !	    We used to specify NOQUEUE on this request.  That has
+    !	    been eliminated, since an IPC transaction could be in progress
+    !	    while the current agent is starting, which would cause the non-queued
+    !	    request to fail (race condition).  Don't want that.
+    !
+    STATUS = $ENQW (EFN=.ENQEF, LKMODE=LCK$K_PRMODE, LKSB=LOCKSB,
+    	    	FLAGS=LCK$M_SYSTEM OR LCK$M_NODLCKBLK OR LCK$M_NODLCKWT,
+    	    	RESNAM=CONFIG [CFG_Q_LOCKNAM], BLKAST=GRP_AST);
+    IF .status THEN status = .locksb [LSB_W_STATUS];
+    IF NOT .STATUS THEN
+    	SIGNAL_STOP (.status);
+
+    !	Initialize IPC handshake lock at NL mode
+    STATUS = $ENQW (EFN=.ENQEF, LKMODE=LCK$K_NLMODE, LKSB=HDSKLSB,
+	    FLAGS=LCK$M_SYSTEM OR LCK$M_NODLCKWT, RESNAM=CONFIG [CFG_Q_LCK2NAM]);
+    IF .status THEN status = .hdsklsb [LSB_W_STATUS];
+    IF NOT .status THEN
+    	SIGNAL_STOP (.status);    
+
+    ! 	Single agents: initialize serialization lock
+    IF .single_agent THEN
+    BEGIN
+    	LIB$GET_EF (SEREF);
+    	status = $ENQW (EFN=.SEREF, LKMODE=LCK$K_NLMODE, LKSB=SERLSB,
+    	    	    	FLAGS=LCK$M_SYSTEM OR LCK$M_NODLCKWT, RESNAM=CONFIG [CFG_Q_SERNAM]);
+    	IF .status THEN status = .serlsb [LSB_W_STATUS];
+    	IF NOT .status THEN SIGNAL_STOP (.status);
+    	this_agent_running = 0;
+    	!   Queue the conversion to EXMODE.  First one to grab it is the winner.
+    	!   For HOLDx agents, do not wait for the conversion -- if it doesn't
+        !   succeed, exit now.
+    	IF .agent_num GEQU FLQ_K_MX_HOLDQ_BASE AND
+    	   .agent_num LSSU FLQ_K_MX_HOLDQ_BASE+FLQ_K_MX_HOLDQ_MAX THEN
+    	BEGIN
+    	    status = $ENQ (EFN=.seref, LKMODE=LCK$K_EXMODE, LKSB=serlsb,
+    	    	       	   FLAGS=LCK$M_CONVERT OR LCK$M_NODLCKWT OR LCK$M_NOQUEUE);
+    	    IF .status THEN status = .serlsb [LSB_W_STATUS];
+    	    IF NOT .status THEN SIGNAL_STOP (MX__AGENTALRDY, 1, agent_name);
+    	    this_agent_running = 1;
+    	END
+    	ELSE
+    	BEGIN
+    	    status = $ENQ (EFN=.seref, LKMODE=LCK$K_EXMODE, LKSB=serlsb,
+    	    	       FLAGS=LCK$M_CONVERT OR LCK$M_NODLCKWT, ASTADR=SERIAL_AST);
+    	    IF NOT .status THEN SIGNAL_STOP (.status);
+    	END;
+    END
+    ELSE this_agent_running = 1;
+
+    EXHBLK [EXH_L_HANDLER]  = EXIT_HANDLER;
+    EXHBLK [EXH_L_ARGCNT]   = 5;
+    EXHBLK [EXH_L_P1]	    = EXIT_STATUS;
+    EXHBLK [EXH_L_P2]	    = .ENQEF;
+    EXHBLK [EXH_L_P3]	    = .TIMEREF;
+    EXHBLK [EXH_L_P4]	    = .LOCKSB [LSB_L_LKID];
+    EXHBLK [EXH_L_P5]	    = 0;
+
+    $DCLEXH (DESBLK=EXHBLK);
+
+    IF NOT .not_queue_agent THEN
+        IF .agent_num EQL FLQ_K_MX_ROUTER THEN
+        BEGIN
+    	    _FLQSRCHLST_INIT (SRCHLST=SRCHLST,
+	        (CODE=FLQS__STATUS, COUNT=1, STATUS=FLQ_K_STRDY),
+    	        (CODE=FLQS__DSTPRC, COUNT=1, DSTPRC=.agent_num));
+        END
+        ELSE
+        BEGIN
+    	    _FLQSRCHLST_INIT (SRCHLST=SRCHLST,
+	        (CODE=FLQS__STATUS, COUNT=2, STATUS=(FLQ_K_STRDY,FLQ_K_STINP)),
+    	        (CODE=FLQS__DSTPRC, COUNT=1, DSTPRC=.agent_num));
+        END;
+
+    ENTNUM = 0;  ! make sure this is initialized
+
+    WHILE 1 DO
+    BEGIN
+    	LOCAL
+    	    running;
+
+    	IF .SHUTDOWN_FLAG THEN $EXIT ();
+
+    	IF .RESET_MASK [0,0,32,0] NEQ 0 THEN
+    	BEGIN
+	    STATUS_CODE = MX_K_STATUS_RDCONFIG;
+
+    	    IF .RESET_MASK [RST_V_CONFIG] THEN
+    	    BEGIN
+    	    	STATUS = READ_CONFIG (1, .agent_num);
+    	    	IF NOT .STATUS THEN SIGNAL_STOP (.STATUS);
+    	    END;
+    	    STATUS = (.initrtn) (.RESET_MASK [0,0,32,0]);
+    	    IF NOT .STATUS THEN SIGNAL_STOP (.STATUS);
+    	    RESET_MASK [0,0,32,0] = 0;
+    	END;
+
+    	!
+    	IF .single_agent THEN
+    	BEGIN
+    	    LOCAL aststat;
+    	    aststat = $SETAST (ENBFLG=0);
+    	    running = .this_agent_running;
+    	    IF .aststat EQL SS$_WASSET THEN $SETAST (ENBFLG=1);
+    	END
+    	ELSE running = 1;
+    	    
+    	IF .running THEN
+    	BEGIN
+    	    IF ACTUALCOUNT () GTR 5 THEN
+    	    	IF .special_process NEQA 0 THEN
+    	    	BEGIN
+    	    	    (.special_process)();
+    	    	    IF .shutdown_flag THEN $EXIT ();
+                    STATUS_CODE = MX_K_STATUS_IDLE;
+    	    	END;
+
+            IF NOT .not_queue_agent THEN
+            BEGIN
+    	        STATUS = $SETAST (ENBFLG=0);
+	        IF .LOCATE_FLAG THEN
+	        BEGIN
+    	    	    $CANTIM (REQIDT=LAST_LOCATE);
+    	    	    IF .STATUS EQL SS$_WASSET THEN $SETAST (ENBFLG=1);
+    	    	    $GETTIM (TIMADR=LAST_LOCATE);
+	    	    STATUS_CODE = MX_K_STATUS_LOCATING;
+	    	    STATUS_PARAM = 0;
+
+	    	    DBGPRT ('locating entries');
+
+	    	    ! Release any old entries
+	    	    WHILE NOT REMQUE (.ENTQUE [QUE_L_HEAD], ENT) DO
+	    	    BEGIN
+		        STATUS = LIB$FREE_VM (%REF (ENT_S_ENTDEF), ENT);
+		        IF NOT .STATUS THEN $EXIT(CODE=.STATUS);
+		        COUNT [CNT_W_ENTCNT] = .COUNT [CNT_W_ENTCNT] - 1;
+	    	    END;
+	    	    ! Release any pending updates
+	    	    WHILE NOT PROTECTED_REMQUE (.UPDQUE [QUE_L_HEAD], UPD) DO
+	    	    BEGIN
+		        STATUS = LIB$FREE_VM (%REF (UPD_S_UPDDEF), UPD);
+		        IF NOT .STATUS THEN $EXIT(CODE=.STATUS);
+		        COUNT [CNT_W_UPDPEND] = .COUNT [CNT_W_UPDPEND] - 1;
+	    	    END;
+
+	    	    ! Collect entries (from queue) to process
+	    	    STATUS_CODE = MX_K_STATUS_LOCATING;
+	    	    STATUS_PARAM = 0;
+
+	    	    STATUS = FLQ_OPEN (FLQ__FULL, QCTX);
+    	    	    IF NOT .STATUS THEN SIGNAL_STOP (.STATUS);
+    	    	    EXHBLK [EXH_L_P5] = .QCTX;
+
+    	    	    SRCHCTX = 0;
+    	    	    WHILE FLQ_SEARCH (QCTX, SRCHLST, SRCHCTX, QENT) DO
+    	    	    BEGIN
+		        IF .SHUTDOWN_FLAG THEN $EXIT ();
+
+		        STATUS_PARAM = .QENT [QENT_L_ENTNUM];
+
+		        DBGPRT ('found entry !UL, size !UL, delay !%D',
+		    	    .QENT [QENT_L_ENTNUM], .QENT [QENT_L_SIZE],
+		    	    QENT [QENT_Q_DLYDT]);
+
+		        IF .SHUTDOWN_FLAG THEN $EXIT ();
+		        STATUS = LIB$GET_VM (%REF (ENT_S_ENTDEF), ENT);
+		        IF NOT .STATUS THEN $EXIT(CODE=.STATUS);
+		        COUNT [CNT_W_ENTCNT]  = .COUNT [CNT_W_ENTCNT] + 1;
+		        CH$FILL (0, ENT_S_ENTDEF, .ent);
+		        ENT [ENT_L_ENTNUM] = .QENT [QENT_L_ENTNUM];
+		        ENT [ENT_L_SIZE]   = .QENT [QENT_L_SIZE];
+		        ENT [ENT_V_DELAY]  = .QENT [QENT_V_DELAY];
+		        ENT [ENT_V_IGNORE] = 0;
+		        CH$MOVE (8, QENT [QENT_Q_DLYDT], ENT [ENT_Q_DLYDT]);
+		        INSERT_ENTRY (ENT, ENTQUE);
+    	    	    END;
+
+                    FLQ_SEARCH_END (QCTX, SRCHCTX);
+    	    	    FLQ_CLOSE (QCTX);
+    	    	    EXHBLK [EXH_L_P5] = 0;
+
+    	    	    DBGPRT ('done locating entries.');
+	    	    LOCATE_FLAG = 0;
+    	    	    $SETIMR (DAYTIM=LOCATE_INTERVAL, ASTADR=LOCATE_AST, REQIDT=LAST_LOCATE);
+    	        END
+    	        ELSE IF .STATUS EQL SS$_WASSET THEN $SETAST (ENBFLG=1);
+
+    	        IF .SHUTDOWN_FLAG THEN $EXIT ();
+
+    	        IF .queue_debug  THEN
+    	        BEGIN
+	    	    DBGPRT ('ENTQUE (0):');
+	    	    DBG_SHOW_QUEUE (ENTQUE);
+    	        END;
+
+	        ! Search for something to process
+    	        STATUS = FLQ_OPEN (FLQ__FULL, QCTX);
+    	        IF .STATUS THEN
+    	        BEGIN
+    	    	    EXHBLK [EXH_L_P5] = .QCTX;
+
+    	    	    WHILE GET_WORK (ENTNUM, WAITDT, ent) DO
+    	    	    BEGIN
+		        STATUS_PARAM = .ENTNUM;
+		        STATUS_CODE  = MX_K_STATUS_FLQ_RWAIT;
+
+		        IF .SHUTDOWN_FLAG THEN $EXIT ();
+		        STATUS = FLQ_READ (QCTX, .ENTNUM, QENT);
+		        DBGPRT ('FLQ_READ1 status !XL for entry !UL', .status, .qent
+			        [QENT_L_ENTNUM]);
+
+		        DBGPRT ('ENT address for entry !UL is !XL', .entnum, .ent);
+
+		        !
+		        !  This is a special check for entries added to the queue
+		        !  with an initial delay date.  The lock block isn't big
+		        !  enough to send all the needed info, so check here to
+		        !  see if DELAY is set but the DLYDTs aren't equal.  If so,
+		        !  just request an update for the delay date, causing this
+		        !  entry to get rescheduled.
+		        !
+		        IF (.ent [ENT_V_DELAY] AND
+		    	    CH$NEQ (8, ent [ENT_Q_DLYDT], 8, qent [QENT_Q_DLYDT]))
+		        THEN
+		    	BEGIN
+		    	    DBGPRT ('-- entry #!4UL was to be delayed until !%D',
+				.entnum, qent [QENT_Q_DLYDT]);
+
+		    	    !The wait lock is held for this entry, so release it!
+		    	    $DEQ (LKID=.WAITSB [LSB_L_LKID]);
+
+		    	    ! Request the delay date update.
+		    	    REQUEST_UPDATE (MX_K_CMD_UPDDLY, .entnum,
+					qent [QENT_Q_DLYDT]);
+		    	    status = 0;		!Set error status to skip rest
+		    	END;		
+
+		        STATUS_CODE  = MX_K_STATUS_SEARCHING;
+		        !
+		        !  This one took many hours to debug, so I'm making a note
+		        !  of it here. 8-)  Since FLQ entries are re-used, check
+		        !  the DSTPRC to make sure this entry is the same entry
+		        !  of which we were originally notified.
+		        !
+		        !  It was the case were MX SMTP, for example, was notified
+		        !  that entry 64 was ready, but MX SMTP was busy for an
+		        !  extended period of time.  By the time it was finished
+		        !  and executed this code, entry 64 had been FINished by
+		        !  another agent, PURGEd by the Router, and re-used by
+		        !  something else!  Without this check, the agent would
+		        !  incorrectly try to process an entry that may have
+		        !  been targeted to a different agent!
+		        !
+		        IF (.status) THEN
+		    	    status = .qent [QENT_L_DSTPRC] EQLU .agent_num;
+
+		        IF .STATUS THEN
+		        BEGIN			! Entry valid for this agent
+		    	    IF .QENT [QENT_L_STATUS] EQLU FLQ_K_STRDY THEN
+		    	    BEGIN		! Eligible for processing
+    	    	    	        LOCAL dummytxt : REF TXTDEF;
+			        IF .QENT [QENT_V_DELAY] THEN
+			        BEGIN
+			    	    STATUS_CODE  = MX_K_STATUS_RETRYING;
+			    	    COUNT [CNT_W_RETRCNT] = .COUNT [CNT_W_RETRCNT] + 1;
+			        END
+			        ELSE
+			        BEGIN
+			    	    STATUS_CODE  = MX_K_STATUS_PROCESSING;
+			    	    COUNT [CNT_W_PRCCNT] = .COUNT [CNT_W_PRCCNT] + 1;
+			        END;
+
+			        ! Remember what entry looked like
+			        ORIG_SIZE  = .QENT [QENT_L_SIZE];
+			        ORIG_DELAY = .QENT [QENT_V_DELAY];
+			        CH$MOVE (8, QENT [QENT_Q_DLYDT], ORIG_DLYDT);
+
+			        QENT [QENT_L_STATUS] = FLQ_K_STINP;
+			        status = FLQ_UPDATE (QCTX, QENT);
+			        DBGPRT ('FLQ_UPDATE1 status !XL for entry !UL', .status, .qent
+			    	        [QENT_L_ENTNUM]);
+    	    	    	        dummytxt = MEM_GETTXT (1);
+			        status = (.procrtn) (.QCTX, QENT);
+    	    	    	        FREETXT (dummytxt);  ! triggers MEM module debug
+			        DBGPRT ('PROCESS status !XL for entry !UL', .status, .qent
+			    	        [QENT_L_ENTNUM]);
+
+			        ! Router entries stay in FLQ_K_STINP status
+			        ! after processing -- we fake a "finished" status
+			        ! here so that the logic below works.
+    	    	    	        IF .agent_num EQL FLQ_K_MX_ROUTER THEN
+			    	    QENT [QENT_L_STATUS] = FLQ_K_STFIN;
+
+			        IF .QENT [QENT_L_STATUS] NEQU FLQ_K_STRDY THEN
+			        BEGIN
+			    	    DBGPRT ('-- entry #!4UL gone.', .ENTNUM);
+			    	    REQUEST_UPDATE (MX_K_CMD_DELENT, .ENTNUM);
+			    	    COUNT [CNT_W_MSGDONE] = .COUNT [CNT_W_MSGDONE] + 1;
+			        END
+			        ELSE
+			        IF (.QENT [QENT_V_DELAY] AND NOT .ORIG_DELAY) OR
+			    	    CH$NEQ (8, QENT [QENT_Q_DLYDT], 8, ORIG_DLYDT) THEN
+			        BEGIN
+    	    	    	    	    IF .agent_debug THEN
+    	    	    	    	    BEGIN
+			    	        IF .ORIG_DELAY THEN
+				    	    DBGPRT ('-- entry #!4UL delay changed from !%D to !%D',
+				    	    	.ENTNUM, ORIG_DLYDT, QENT [QENT_Q_DLYDT])
+			    	        ELSE
+				    	    DBGPRT ('-- entry #!4UL delay !%D', .ENTNUM,
+				    	    	QENT [QENT_Q_DLYDT]);
+    	    	    	    	    END;
+			    	    REQUEST_UPDATE (MX_K_CMD_UPDDLY, .ENTNUM, 
+				    	    	    QENT [QENT_Q_DLYDT]);
+			        END
+			        ELSE
+			        IF (.QENT [QENT_L_SIZE] NEQU .ORIG_SIZE) THEN
+			        BEGIN
+			    	    DBGPRT ('-- entry #!4UL size changed from !UL to !UL',
+				            .ENTNUM, .ORIG_SIZE, .QENT [QENT_L_SIZE]);
+			    	    REQUEST_UPDATE (MX_K_CMD_UPDSIZ, .ENTNUM, 
+				    	    	    .QENT [QENT_L_SIZE]);
+			        END
+			        ELSE
+			        BEGIN
+			    	    DBGPRT ('-- entry #!4UL not changed', .ENTNUM);
+			    	    SS$_NORMAL
+			        END;
+		    	    END
+		    	    ELSE	! not eligible for processing
+		    	    BEGIN
+			        ! some other agent must have processed the entry
+			        ! and sent the updates, but this agent didn't
+			        ! call UPDATE yet...  so do nothing for now.
+
+			        DBGPRT ('** entry # !4UL not eligible **', .ENTNUM);
+			        SS$_NORMAL
+		    	    END;
+		        END	    ! entry valid for this agent
+		        ELSE
+		        BEGIN	    ! invalid entry
+		    	    ! this entry was probably reused since last call
+		    	    ! to UPDATE
+
+		    	    DBGPRT ('** entry # !4UL invalid **', .ENTNUM);
+		    	    SS$_NORMAL
+		        END;
+
+		        ! Release work lock.
+		        $DEQ (LKID=.WORKSB [LSB_L_LKID]);
+
+    	    	        IF .queue_debug THEN
+    	    	        BEGIN
+		    	    DBGPRT ('ENTQUE: (1)');
+		    	    DBG_SHOW_QUEUE (ENTQUE);
+    	    	        END;
+	    	    END; ! while get_work()
+
+    	    	    FLQ_CLOSE (QCTX);
+    	    	    EXHBLK [EXH_L_P5] = 0;
+    	        END;
+
+	        IF .SHUTDOWN_FLAG THEN $EXIT ();
+
+	        IF .ENTNUM NEQU 0 THEN
+	        BEGIN
+	    	    ! Wait for entry
+	    	    STATUS_CODE  = MX_K_STATUS_WAITING;
+	    	    STATUS_PARAM = .ENTNUM;
+	    	    $SCHDWK (DAYTIM=WAITDT);
+	    	    DBGPRT ('-- waiting for #!4UL (until !%D)', .ENTNUM, WAITDT);
+	        END
+	        ELSE
+	        BEGIN
+	    	    ! Nothing to do, sleep until there's something new
+	    	    ! MX_ROUTER: wake up and do FLQ_CLEANUP ()
+    	    	    ! If an idle routine has been provided, call it.
+
+    	    	    IF .agent_num EQL FLQ_K_MX_ROUTER
+    	    	    THEN
+	    	        $SCHDWK (DAYTIM=CONFIG [CFG_Q_INTERVAL]);
+	    	    STATUS_CODE  = MX_K_STATUS_IDLE;
+	    	    DBGPRT ('-- idle');
+	        END;
+
+            END; ! if a queue agent
+
+    	END  ! if running
+    	ELSE
+    	    STATUS_CODE = MX_K_STATUS_STANDBY;  ! waiting for single-agent serialization
+
+    	IF .running AND ACTUALCOUNT () GTR 6 AND .idlertn NEQA 0 THEN
+    	    (.idlertn) ();
+
+    	IF .shutdown_flag THEN $EXIT ();
+
+    	$HIBER;
+    	$CANWAK ();
+
+	! Release wait lock
+	IF NOT .not_queue_agent AND .ENTNUM NEQU 0 THEN
+	    $DEQ (LKID=.WAITSB [LSB_L_LKID]);
+
+    END; ! while 1
+
+    SS$_NORMAL
+
+END; ! AGENT
+
+
+%SBTTL 'EXIT_HANDLER'
+ROUTINE EXIT_HANDLER (STAT_A, EF1, EF2, LKID, QCTX_A) = 
+BEGIN
+!++
+! FUNCTIONAL DESCRIPTION:
+!
+!   description
+!
+! RETURNS:  	cond_value, longword (unsigned), write only, by value
+!
+! PROTOTYPE:
+!
+!   x
+!
+! IMPLICIT INPUTS:  None.
+!
+! IMPLICIT OUTPUTS: None.
+!
+! COMPLETION CODES:
+!
+!   SS$_NORMAL:	    	normal successful completion.
+!
+! SIDE EFFECTS:
+!
+!   None.
+!--
+    BIND
+	estatus = .stat_a;
+
+    EXTERNAL ROUTINE
+    	G_HAT (LIB$FREE_EF, LIB$SYS_FAO);
+
+    LOCAL
+    	STR : BLOCK [DSC$K_S_BLN,BYTE],
+	final_status;
+
+    $DEQ (LKID=.LKID);
+    $CANWAK ();
+    LIB$FREE_EF (EF1);
+    LIB$FREE_EF (EF2);
+    LIB$FREE_EF (CMDEF);
+    LIB$FREE_EF (WAITEF);
+    LIB$FREE_EF (WORKEF);
+    IF .QCTX_A NEQ 0 THEN
+    	FLQ_CLOSE (QCTX_A);
+
+    final_status = (IF (estatus EQLA 0) THEN SS$_ACCVIO ELSE .estatus);
+
+    $INIT_DYNDESC (STR);
+    LIB$SYS_FAO (%ASCID'!AS (pid !XL) exiting, status = !XL', 0,
+			STR, PRCNAM, .PID, .final_status);
+    LOG_EVENT (STR);
+
+    SS$_NORMAL
+
+END; ! EXIT_HANDLER
+
+%SBTTL 'FIND_ENTRY'
+ROUTINE FIND_ENTRY (ENTNUM, QUE_A, ENT_A) =
+BEGIN
+!++
+! FUNCTIONAL DESCRIPTION:
+!
+!   description
+!
+! RETURNS:  	cond_value, longword (unsigned), write only, by value
+!
+! PROTOTYPE:
+!
+!   x
+!
+! IMPLICIT INPUTS:  None.
+!
+! IMPLICIT OUTPUTS: None.
+!
+! COMPLETION CODES:
+!
+!   SS$_NORMAL:	    	normal successful completion.
+!
+! SIDE EFFECTS:
+!
+!   None.
+!--
+    BIND
+	QUE	    = .QUE_A : QUEDEF;
+
+    REGISTER
+	E	    : REF ENTDEF;
+
+    E = .QUE [QUE_L_HEAD];
+    WHILE .E NEQA QUE DO
+    BEGIN
+	IF .E [ENT_L_ENTNUM] EQLU .ENTNUM THEN
+	    EXITLOOP;
+	E = .E [ENT_L_FLINK];
+    END;
+
+    .ENT_A = .E;
+
+    RETURN (.E NEQA QUE)
+
+END; ! FIND_ENTRY
+
+%SBTTL 'INSERT_ENTRY'
+ROUTINE INSERT_ENTRY (ENT_A, QUE_A) =
+BEGIN
+!++
+! FUNCTIONAL DESCRIPTION:
+!
+!   description
+!
+! RETURNS:  	cond_value, longword (unsigned), write only, by value
+!
+! PROTOTYPE:
+!
+!   x
+!
+! IMPLICIT INPUTS:  None.
+!
+! IMPLICIT OUTPUTS: None.
+!
+! COMPLETION CODES:
+!
+!   SS$_NORMAL:	    	normal successful completion.
+!
+! SIDE EFFECTS:
+!
+!   None.
+!--
+    BIND
+	ENT	    = .ENT_A : REF ENTDEF,
+	QUE	    = .QUE_A : QUEDEF;
+
+    REGISTER
+	E2	    : REF ENTDEF;
+
+    LOCAL
+	JUNKDT	    : BLOCK [8,BYTE];
+
+    EXTERNAL ROUTINE
+	G_HAT (LIB$SUB_TIMES);
+
+    IF NOT .ENT [ENT_V_DELAY] THEN	! inserting entry without delay
+    BEGIN
+!	DBGPRT ('   inserting (by size) @!XL entry #!UL', .ENT,
+!		 .ENT [ENT_L_ENTNUM]);
+
+	E2 = .QUE [QUE_L_HEAD];
+	WHILE .E2 NEQA QUE DO
+	BEGIN
+	    IF (.E2 [ENT_V_DELAY]) OR
+		(.insert_entry_by_size AND
+	       (.E2 [ENT_L_SIZE] GTRU .ENT [ENT_L_SIZE])) THEN
+	    BEGIN
+!		DBGPRT ('   inserting ahead of #!UL', .E2 [ENT_L_ENTNUM]);
+		INSQUE (.ENT, .E2 [ENT_L_BLINK]);
+		EXITLOOP;
+	    END;
+	    E2 = .E2 [ENT_L_FLINK];
+	END;
+	IF .E2 EQLA QUE THEN
+	BEGIN
+!	    DBGPRT ('   inserting at end of queue.');
+	    INSQUE (.ENT, .QUE [QUE_L_TAIL]);
+	END;
+    END
+    ELSE				! inserting entry with delay
+    BEGIN
+!	DBGPRT ('   inserting (by time) @!XL entry #!UL (!%D)', .ENT,
+!	    .ENT [ENT_L_ENTNUM], ENT [ENT_Q_DLYDT]);
+
+	E2 = .QUE [QUE_L_TAIL];
+
+	WHILE .E2 NEQA QUE DO
+	BEGIN
+	    IF (NOT .E2 [ENT_V_DELAY]) OR
+	       LIB$SUB_TIMES (ENT [ENT_Q_DLYDT], E2 [ENT_Q_DLYDT], JUNKDT) THEN
+	    BEGIN
+!		DBGPRT ('   inserting after #!UL (!%D)', .E2 [ENT_L_ENTNUM],
+!			    E2 [ENT_Q_DLYDT]);
+		INSQUE (.ENT, .E2);
+		EXITLOOP;
+	    END;
+	    E2 = .E2 [ENT_L_BLINK];
+	END;
+	IF .E2 EQLA QUE THEN
+	BEGIN
+!	    DBGPRT ('   inserting at beginning of queue.');
+	    INSQUE (.ENT, QUE);
+	END;
+    END;
+
+    SS$_NORMAL
+
+END; ! INSERT_ENTRY
+
+%SBTTL 'READ_CONFIG'
+ROUTINE READ_CONFIG (REREAD) = 
+BEGIN
+!++
+! FUNCTIONAL DESCRIPTION:
+!
+!   description
+!
+! RETURNS:  	cond_value, longword (unsigned), write only, by value
+!
+! PROTOTYPE:
+!
+!   x
+!
+! IMPLICIT INPUTS:  None.
+!
+! IMPLICIT OUTPUTS: None.
+!
+! COMPLETION CODES:
+!
+!   SS$_NORMAL:	    	normal successful completion.
+!
+! SIDE EFFECTS:
+!
+!   None.
+!--
+
+    LOCAL
+    	STR 	: BLOCK [DSC$K_S_BLN,BYTE],
+    	lnmlst	: $ITMLST_DECL (ITEMS=1),
+    	LNMBUF	: VECTOR [1024,BYTE],
+    	LNMLEN	: WORD,
+    	STATUS;
+    EXTERNAL ROUTINE
+    	G_HAT (STR$COPY_DX, STR$COPY_R, STR$FREE1_DX, STR$CONCAT, LIB$GETJPI, LIB$SYS_FAO);
+
+    IF NOT .REREAD THEN
+    	INIT_DYNDESC (CONFIG [CFG_Q_MXNODE], CONFIG [CFG_Q_FLQNODE],
+    	    CONFIG [CFG_Q_LOCKNAM], CONFIG [CFG_Q_LCK2NAM], CONFIG [CFG_Q_SERNAM],
+	    CONFIG [CFG_Q_GRPWNAM], PRCNAM, CMDNAM, WAITNAM, WORKNAM);
+    INIT_DYNDESC (STR);
+
+    LIB$GETJPI (%REF (JPI$_PRCNAM), 0, 0, 0, PRCNAM);
+    LIB$GETJPI (%REF (JPI$_PID), 0, 0, PID);
+    !
+    !  Process entries in FIFO order if the logical "agent_FIFO" is defined.
+    !
+    INIT_SDESC (str, .agent_name [DSC$W_LENGTH]+5, lnmbuf);
+    CH$MOVE (.agent_name [DSC$W_LENGTH], .agent_name [DSC$A_POINTER], lnmbuf);
+    CH$MOVE (5, UPLIT ('_FIFO'), CH$PLUS (lnmbuf, .agent_name [DSC$W_LENGTH]));
+    insert_entry_by_size = NOT $TRNLNM (LOGNAM=str, TABNAM=%ASCID'LNM$FILE_DEV');
+    !
+    INIT_SDESC (str, .agent_name [DSC$W_LENGTH]+12, lnmbuf);
+    CH$MOVE (.agent_name [DSC$W_LENGTH], .agent_name [DSC$A_POINTER], lnmbuf);
+    CH$MOVE (12, UPLIT ('_AGENT_DEBUG'), CH$PLUS (lnmbuf, .agent_name [DSC$W_LENGTH]));
+    agent_debug = $TRNLNM (LOGNAM=str, TABNAM=%ASCID'LNM$FILE_DEV');
+    !
+    INIT_SDESC (str, .agent_name [DSC$W_LENGTH]+13, lnmbuf);
+    CH$MOVE (.agent_name [DSC$W_LENGTH], .agent_name [DSC$A_POINTER], lnmbuf);
+    CH$MOVE (13, UPLIT ('_AGENT_QDEBUG'), CH$PLUS (lnmbuf, .agent_name [DSC$W_LENGTH]));
+    queue_debug = $TRNLNM (LOGNAM=str, TABNAM=%ASCID'LNM$FILE_DEV');
+
+    INIT_SDESC (STR, %ALLOCATION (lnmbuf), lnmbuf);
+    $FAO (%ASCID'!AS (pid !XL) !AS', lnmlen, STR, PRCNAM, .PID,
+    	(IF .REREAD THEN %ASCID'resetting' ELSE %ASCID'starting'));
+    STR [DSC$W_LENGTH] = .lnmlen;
+    LOG_EVENT (STR);
+
+    IF NOT .REREAD THEN
+    BEGIN
+	COUNT [CNT_W_PRCCNT]  = 0;
+	COUNT [CNT_W_RETRCNT] = 0;
+	COUNT [CNT_W_MSGDONE] = 0;
+	COUNT [CNT_W_UPDREQ]  = 0;
+	COUNT [CNT_W_UPDCNT]  = 0;
+	COUNT [CNT_W_UPDPEND] = 0;
+	COUNT [CNT_W_ENTCNT]  = 0;
+    END;
+
+    $ITMLST_INIT (ITMLST=lnmlst,
+    	(ITMCOD=LNM$_STRING, BUFSIZ=%ALLOCATION (lnmbuf),
+    	    BUFADR=lnmbuf, RETLEN=lnmlen));
+    status = $TRNLNM (LOGNAM=%ASCID'MX_NODE_NAME', TABNAM=%ASCID'LNM$SYSTEM',
+    	    	    	ITMLST=lnmlst);
+    IF NOT .STATUS THEN RETURN .STATUS;
+    STR$COPY_R (CONFIG [CFG_Q_MXNODE], lnmlen, lnmbuf);
+    status = $TRNLNM (LOGNAM=%ASCID'MX_FLQ_NODE_NAME', TABNAM=%ASCID'LNM$SYSTEM',
+    	    	    	ITMLST=lnmlst);
+    IF NOT .STATUS THEN RETURN .STATUS;
+    STR$COPY_R (CONFIG [CFG_Q_FLQNODE], lnmlen, lnmbuf);
+
+    STR$CONCAT (CONFIG [CFG_Q_LOCKNAM], %ASCID'FLQ_LOCK_',
+    	CONFIG [CFG_Q_FLQNODE], %ASCID'_', agent_name);
+
+    STR$CONCAT (CONFIG [CFG_Q_LCK2NAM], %ASCID'FLQ_LCK2_',
+    	CONFIG [CFG_Q_FLQNODE], %ASCID'_', agent_name);
+
+    STR$CONCAT (CONFIG [CFG_Q_GRPWNAM], %ASCID'MX_',
+    	CONFIG [CFG_Q_FLQNODE], %ASCID'_GRPW_', agent_name);
+
+    IF .single_agent THEN
+    	STR$CONCAT (CONFIG [CFG_Q_SERNAM], %ASCID'MX_',
+    	    CONFIG [CFG_Q_FLQNODE], %ASCID'_SERL_', agent_name);
+
+    !  Name for command lock
+    LIB$SYS_FAO (%ASCID'MX_CMD_!XL', 0, CMDNAM, .PID);
+
+    INIT_SDESC (str, .agent_name [DSC$W_LENGTH]+16, lnmbuf);
+    CH$MOVE (.agent_name [DSC$W_LENGTH], .agent_name [DSC$A_POINTER], lnmbuf);
+    CH$MOVE (16, UPLIT ('_WAKEUP_INTERVAL'), CH$PLUS (lnmbuf, .agent_name [DSC$W_LENGTH]));
+    status = $TRNLNM (LOGNAM=str, TABNAM=%ASCID'LNM$FILE_DEV', ITMLST=lnmlst);
+    IF .STATUS THEN INIT_SDESC (str, .lnmlen, lnmbuf);
+    status = $BINTIM (TIMBUF=(IF .status THEN str ELSE %ASCID'0 00:10:00'), TIMADR=CONFIG [CFG_Q_INTERVAL]);
+    IF NOT .STATUS THEN RETURN .STATUS;
+
+    INIT_SDESC (str, .agent_name [DSC$W_LENGTH]+16, lnmbuf);
+    CH$MOVE (.agent_name [DSC$W_LENGTH], .agent_name [DSC$A_POINTER], lnmbuf);
+    CH$MOVE (16, UPLIT ('_LOCATE_INTERVAL'), CH$PLUS (lnmbuf, .agent_name [DSC$W_LENGTH]));
+    status = $TRNLNM (LOGNAM=str, TABNAM=%ASCID'LNM$FILE_DEV', ITMLST=lnmlst);
+    IF .STATUS THEN INIT_SDESC (str, .lnmlen, lnmbuf);
+    status = $BINTIM (TIMBUF=(IF .status THEN str ELSE %ASCID'0 00:30:00.00'), TIMADR=LOCATE_INTERVAL);
+    IF NOT .STATUS THEN RETURN .STATUS;
+
+    SS$_NORMAL
+
+END; ! READ_CONFIG
+
+%SBTTL 'REQUEST_UPDATE'
+ROUTINE REQUEST_UPDATE (CMD, ENTNUM, PAR_A) =
+BEGIN
+!++
+! FUNCTIONAL DESCRIPTION:
+!
+!   Transmits an update request to peer agents.  Note
+!   that this sequence is the same as that in FLQ___ROUTINES.B32,
+!   and that it use its own private LSBs here.
+!
+! RETURNS:  	cond_value, longword (unsigned), write only, by value
+!
+! PROTOTYPE:
+!
+!   REQUEST_UPDATE  cmd, entnum, par
+!
+! IMPLICIT INPUTS:  None.
+!
+! IMPLICIT OUTPUTS: None.
+!
+! COMPLETION CODES:
+!
+!   SS$_NORMAL:	    	normal successful completion.
+!
+! SIDE EFFECTS:
+!
+!   None.
+!--
+    BIND
+	DLYDT	    = .PAR_A,
+	SIZE	    = PAR_A;
+
+    LOCAL
+	GRPWSB	    : LSBDEF,
+	LOCKSB	    : LSBDEF,
+	LCK2SB	    : LSBDEF,
+	STATUS,
+	EF,
+	SAVE_STATUSP,
+	SAVE_STATUS;
+
+    EXTERNAL ROUTINE
+	G_HAT (LIB$GET_EF, LIB$FREE_EF);
+
+    EXTERNAL LITERAL
+	MX__AGENTALRDY;
+
+! If this is a single-process agent, there are no peers to
+! notify; just stick the update request on our own queue.
+
+    IF .single_agent THEN
+    BEGIN
+    	LOCAL upd : REF UPDDEF;
+    	status = LIB$GET_VM (%REF (UPD_S_UPDDEF), upd);
+    	IF NOT .status THEN $EXIT (CODE=.status);
+    	count [CNT_W_UPDPEND] = .count [CNT_W_UPDPEND] + 1;
+    	CH$FILL (%CHAR (0), UPD_S_UPDDEF, .upd);
+    	upd [UPD_L_CMD] = .cmd;
+    	upd [UPD_L_ENTNUM] = .entnum;
+    	IF .cmd EQL MX_K_CMD_UPDDLY THEN
+    	    CH$MOVE (8, DLYDT, upd [UPD_Q_DLYDT])
+    	ELSE IF .cmd EQL MX_K_CMD_UPDSIZ THEN
+    	    upd [UPD_L_SIZE] = .size;
+    	PROTECTED_INSQUE (.upd, .updque [QUE_L_TAIL]);
+    	RETURN SS$_NORMAL;
+    END;
+
+    DBGPRT ('REQUEST_UPDATE entry #!4UL', .ENTNUM);
+    LIB$GET_EF (EF);
+
+    SAVE_STATUS  = .STATUS_CODE;
+    SAVE_STATUSP = .STATUS_PARAM;
+    STATUS_CODE  = MX_K_STATUS_REQUPDATE;
+    STATUS_PARAM = 0;
+
+    ! Get GRPW in EX mode
+    !   (This evidently serializes update requests --mdm)
+    STATUS = $ENQW (EFN=.EF, LKMODE=LCK$K_EXMODE, LKSB=GRPWSB,
+		    FLAGS=LCK$M_SYSTEM OR LCK$M_NODLCKWT,
+    	    	    RESNAM=CONFIG [CFG_Q_GRPWNAM]);
+    IF .STATUS THEN STATUS = .GRPWSB [LSB_W_STATUS];
+    DBGPRT ('REQUEST_UPDATE grpw $ENQW to EXMODE status = !XL', .STATUS);
+    IF NOT .STATUS THEN BEGIN
+	DBGPRT ('Could not request notify');
+	RETURN SS$_NORMAL;
+    END;
+    STATUS_PARAM = 1;
+
+    ! Get LCK2 in EX mode
+    STATUS = $ENQW (EFN=.EF, LKMODE=LCK$K_EXMODE, LKSB=LCK2SB,
+		    FLAGS=LCK$M_SYSTEM, RESNAM=CONFIG [CFG_Q_LCK2NAM]);
+    IF .STATUS THEN STATUS = .LCK2SB [LSB_W_STATUS];
+    DBGPRT ('REQUEST_UPDATE lck2 $ENQW to EXMODE status = !XL', .STATUS);
+    STATUS_PARAM = 2;
+
+    IF .STATUS THEN
+    BEGIN
+	! Get LOCK in EX mode
+	STATUS = $ENQW (EFN=.EF, LKMODE=LCK$K_EXMODE, LKSB=LOCKSB,
+		    	FLAGS=LCK$M_SYSTEM OR LCK$M_NODLCKWT,
+		    	RESNAM=CONFIG [CFG_Q_LOCKNAM]);
+	IF .STATUS THEN STATUS = .LOCKSB [LSB_W_STATUS];
+	DBGPRT ('REQUEST_UPDATE Main lock $ENQW to EXMODE status = !XL', .STATUS);
+	STATUS_PARAM = 3;
+
+	IF .STATUS THEN
+	BEGIN
+	    ! Put stuff in
+	    LOCKSB [LSB_B_CMD]	    = .CMD;	    ! Command
+	    LOCKSB [LSB_L_ENTNUM]   = .ENTNUM;	    ! Entry #
+	    IF .CMD EQLU MX_K_CMD_UPDDLY THEN
+	    BEGIN
+		DBGPRT ('REQUEST_UPDATE New delay time: !%D', DLYDT);
+		CH$MOVE(8, DLYDT, LOCKSB [LSB_Q_DLYDT]);
+	    END ELSE
+	    IF .CMD EQLU MX_K_CMD_UPDSIZ THEN
+	    BEGIN
+		DBGPRT ('REQUEST_UPDATE New size: !UL', .SIZE);
+		LOCKSB [LSB_L_SIZE] = .SIZE;
+	    END
+	END;
+
+	! Release main lock (setting value block) and lck2
+	$DEQ (LKID=.LOCKSB [LSB_L_LKID], VALBLK=LOCKSB [LSB_X_VALBLK]);
+	$DEQ (LKID=.LCK2SB [LSB_L_LKID]);
+	STATUS_PARAM = 4;
+    END;
+
+    $DEQ (LKID=.GRPWSB [LSB_L_LKID]);
+    STATUS_PARAM = 5;
+
+    LIB$FREE_EF (EF);
+
+    COUNT [CNT_W_UPDREQ] = .COUNT [CNT_W_UPDREQ] + 1;
+
+    STATUS_CODE  = .SAVE_STATUS;
+    STATUS_PARAM = .SAVE_STATUSP;
+
+    SS$_NORMAL
+
+END; ! REQUEST_UPDATE
+
+%SBTTL 'UPDATE'
+ROUTINE UPDATE = 
+BEGIN
+!++
+! FUNCTIONAL DESCRIPTION:
+!
+!   Updates the pending-entry queue based on a notification
+!   from a client or a peer.
+!
+! RETURNS:  	cond_value, longword (unsigned), write only, by value
+!
+! PROTOTYPE:
+!
+!   UPDATE
+!
+! IMPLICIT INPUTS:  None.
+!
+! IMPLICIT OUTPUTS: None.
+!
+! COMPLETION CODES:
+!
+!   SS$_NORMAL:	    	normal successful completion.
+!
+! SIDE EFFECTS:
+!
+!   None.
+!--
+    LOCAL
+	ENT	: REF ENTDEF,
+	UPD	: REF UPDDEF,
+	QENT	: QENTDEF,
+	dealloc,
+	STATUS,
+	QCTX;
+
+    DBGPRT ('updating ENTQUE...');
+
+    WHILE NOT PROTECTED_REMQUE (.UPDQUE [QUE_L_HEAD], UPD) DO
+    BEGIN
+	COUNT [CNT_W_UPDCNT] = .COUNT [CNT_W_UPDCNT] + 1;
+	dealloc = 1;		!Assume we want to deallocate the UPD entry
+
+	IF .UPD [UPD_L_ENTNUM] EQLU 0 THEN
+	BEGIN
+	    DBGPRT ('UPDATE: Entry # 0 update request ignored');
+	    SS$_NORMAL
+	END
+	ELSE
+	BEGIN
+	    SELECTONE .UPD [UPD_L_CMD] OF
+	    SET
+	    [MX_K_CMD_UPDENT]   :
+		IF NOT FIND_ENTRY (.UPD [UPD_L_ENTNUM], ENTQUE, ENT) THEN
+		BEGIN
+		    DBGPRT ('UPDATE: Entry # !UL not found, UPD -> NEW',
+			    .UPD [UPD_L_ENTNUM]);
+		    UPD [UPD_L_CMD] = MX_K_CMD_NEWENT;
+		    PROTECTED_INSQUE (.UPD, .UPDQUE [QUE_L_TAIL]);
+		    dealloc = 0;	!Don't deallocate this entry!!
+		END
+		ELSE
+		BEGIN
+		    DBGPRT ('UPDATE: updent #!4UL', .UPD [UPD_L_ENTNUM]);
+		    STATUS = FLQ_OPEN (FLQ__RDONLY, QCTX);
+		    IF NOT .STATUS THEN
+		    BEGIN
+			DBGPRT ('UPDATE: FLQ_OPEN status !XL', .STATUS);
+			SIGNAL_STOP (.STATUS);
+		    END;
+		    EXHBLK [EXH_L_P5] = .QCTX;
+
+		    STATUS = FLQ_READ (QCTX, .UPD [UPD_L_ENTNUM], QENT);
+		    DBGPRT ('UPDATE: FLQ_READ status !XL', .STATUS);
+
+		    FLQ_CLOSE (QCTX);
+		    EXHBLK [EXH_L_P5] = 0;
+
+		    REMQUE (.ENT, ENT);
+
+		    IF (NOT .STATUS) OR
+		       (.QENT [QENT_L_DSTPRC] NEQU .agent_number)
+		    THEN BEGIN
+			DBGPRT ('UPDATE: invalid entry # !UL',
+				    .UPD [UPD_L_ENTNUM]);
+			STATUS = LIB$FREE_VM (%REF (ENT_S_ENTDEF), ENT);
+			IF NOT .STATUS THEN $EXIT(CODE=.STATUS);
+			COUNT [CNT_W_ENTCNT]  = .COUNT [CNT_W_ENTCNT] - 1;
+		    END
+		    ELSE IF (.QENT [QENT_L_STATUS] NEQU FLQ_K_STRDY)
+    	    	    	 AND (.agent_number EQL FLQ_K_MX_ROUTER OR
+                              .QENT [QENT_L_STATUS] NEQU FLQ_K_STINP)
+		    THEN BEGIN
+			DBGPRT ('UPDATE: finished entry # !UL', 
+				    .UPD [UPD_L_ENTNUM]);
+			STATUS = LIB$FREE_VM (%REF (ENT_S_ENTDEF), ENT);
+			IF NOT .STATUS THEN $EXIT(CODE=.STATUS);
+			COUNT [CNT_W_ENTCNT]  = .COUNT [CNT_W_ENTCNT] - 1;
+		    END
+		    ELSE
+		    BEGIN
+			ENT [ENT_L_ENTNUM] = .QENT [QENT_L_ENTNUM];
+			ENT [ENT_L_SIZE]   = .QENT [QENT_L_SIZE];
+			ENT [ENT_V_DELAY]  = .QENT [QENT_V_DELAY];
+			CH$MOVE (8, QENT [QENT_Q_DLYDT], ENT [ENT_Q_DLYDT]);
+
+			ENT [ENT_V_IGNORE] = 0;
+			INSERT_ENTRY (ENT, ENTQUE);
+		    END;
+		END;
+	    [MX_K_CMD_UPDDLY]   :
+		IF NOT FIND_ENTRY (.UPD [UPD_L_ENTNUM], ENTQUE, ENT) THEN
+		BEGIN
+		    DBGPRT ('UPDATE: Entry # !UL not found, DLY -> ENT',
+			    .UPD [UPD_L_ENTNUM]);
+
+		    ! Requeue update request as UPDENT and hope for best
+		    UPD [UPD_L_CMD] = MX_K_CMD_UPDENT;
+		    PROTECTED_INSQUE (.UPD, .UPDQUE [QUE_L_TAIL]);
+		    dealloc = 0;	!Don't deallocate this entry!!
+		END
+		ELSE
+		BEGIN
+		    DBGPRT ('UPDATE: upddly #!4UL', .UPD [UPD_L_ENTNUM]);
+
+		    REMQUE (.ENT, ENT);
+		    CH$MOVE (8, UPD [UPD_Q_DLYDT], ENT [ENT_Q_DLYDT]);
+		    ENT [ENT_V_DELAY]  = 1;
+		    ENT [ENT_V_IGNORE] = 0;
+		    INSERT_ENTRY (ENT, ENTQUE);
+		END;
+	    [MX_K_CMD_UPDSIZ]   :
+		IF NOT FIND_ENTRY (.UPD [UPD_L_ENTNUM], ENTQUE, ENT) THEN
+		BEGIN
+		    DBGPRT ('UPDATE: Entry # !UL not found, SIZ -> ENT',
+			    .UPD [UPD_L_ENTNUM]);
+
+		    ! Requeue update request as UPDENT and hope for best
+		    UPD [UPD_L_CMD] = MX_K_CMD_UPDENT;
+		    PROTECTED_INSQUE (.UPD, .UPDQUE [QUE_L_TAIL]);
+		    dealloc = 0;	!Don't deallocate this entry!!
+		END
+		ELSE
+		BEGIN
+		    DBGPRT ('UPDATE: updsiz #!4UL', .UPD [UPD_L_ENTNUM]);
+
+		    REMQUE (.ENT, ENT);
+		    ENT [ENT_L_SIZE]   = UPD [UPD_L_SIZE];
+		    ENT [ENT_V_DELAY]  = 0;
+		    ENT [ENT_V_IGNORE] = 0;
+		    INSERT_ENTRY (ENT, ENTQUE);
+		END;
+	    [MX_K_CMD_NEWENT]   :
+		BEGIN
+		    DBGPRT ('UPDATE: newent #!4UL', .UPD [UPD_L_ENTNUM]);
+
+		    IF FIND_ENTRY (.UPD [UPD_L_ENTNUM], ENTQUE, ENT) THEN
+		    BEGIN
+			DBGPRT ('UPDATE: Entry # !UL duplicated, recycling',
+				    .UPD [UPD_L_ENTNUM]);
+			REMQUE (.ENT, ENT);
+			COUNT [CNT_W_ENTCNT]  = .COUNT [CNT_W_ENTCNT] - 1;
+		    END
+		    ELSE
+		    BEGIN
+			STATUS = LIB$GET_VM (%REF (ENT_S_ENTDEF), ENT);
+			IF NOT .STATUS THEN $EXIT(CODE=.STATUS);
+		    END;
+
+		    CH$FILL (0, ENT_S_ENTDEF, .ent);
+		    ENT [ENT_L_ENTNUM] = .UPD [UPD_L_ENTNUM];
+		    ENT [ENT_L_SIZE]   = .UPD [UPD_L_SIZE];
+		    ENT [ENT_V_DELAY]  = .upd [UPD_V_DELAY];
+		    ENT [ENT_V_IGNORE] = 0;
+		    COUNT [CNT_W_ENTCNT]  = .COUNT [CNT_W_ENTCNT] + 1;
+		    INSERT_ENTRY (ENT, ENTQUE);
+		END;
+	    [MX_K_CMD_DELENT]   :
+		IF NOT FIND_ENTRY (.UPD [UPD_L_ENTNUM], ENTQUE, ENT) THEN
+		BEGIN
+		    DBGPRT ('UPDATE: Entry # !UL not found.',
+			    .UPD [UPD_L_ENTNUM]);
+		    SS$_NORMAL
+		END
+		ELSE
+		BEGIN
+		    DBGPRT ('UPDATE: delent #!4UL', .UPD [UPD_L_ENTNUM]);
+
+		    REMQUE (.ENT, ENT);
+		    STATUS = LIB$FREE_VM (%REF (ENT_S_ENTDEF), ENT);
+		    IF NOT .STATUS THEN $EXIT(CODE=.STATUS);
+		    COUNT [CNT_W_ENTCNT]  = .COUNT [CNT_W_ENTCNT] - 1;
+		END;
+	    [OTHERWISE] :
+		BEGIN
+		    DBGPRT ('UPDATE: CMD unknown (ignored)');
+		    SS$_NORMAL
+		END;
+	    TES
+	END;
+
+	IF (.dealloc)
+	THEN
+	    BEGIN
+	    status = LIB$FREE_VM (%REF (UPD_S_UPDDEF), upd);
+	    IF NOT .status THEN $EXIT(CODE=.status);
+	    END;
+	COUNT [CNT_W_UPDPEND] = .COUNT [CNT_W_UPDPEND] - 1;
+    END;
+
+    SS$_NORMAL
+
+END; ! UPDATE
+
+%SBTTL 'GET_WORK'
+ROUTINE GET_WORK (ENTNUM_A, WAITDT_A, ent_a) =
+BEGIN
+!++
+! FUNCTIONAL DESCRIPTION:
+!
+!   Gets the next entry to work on from the pending
+!   entry queue.
+!
+! RETURNS:  	cond_value, longword (unsigned), write only, by value
+!
+! PROTOTYPE:
+!
+!   GET_WORK  entnum, watdt, ent
+!
+! IMPLICIT INPUTS:  None.
+!
+! IMPLICIT OUTPUTS: None.
+!
+! COMPLETION CODES:
+!
+!   SS$_NORMAL:	    	normal successful completion.
+!
+! SIDE EFFECTS:
+!
+!   None.
+!--
+    BIND
+	ent	= .ent_a	: REF ENTDEF;
+
+    LOCAL
+	E	: REF ENTDEF,
+	JUNKDT	: BLOCK [8,BYTE],
+	NOWDT	: BLOCK [8,BYTE],
+	STATUS,
+	WORK_FLAG;
+
+    EXTERNAL ROUTINE
+	G_HAT (LIB$SUB_TIMES, LIB$SYS_FAO);
+
+    DBGPRT ('GET_WORK');
+
+    ! default: no work, no entry (idle)
+    WORK_FLAG = 0;
+    .ENTNUM_A = 0;
+    ent = 0;
+
+    ! If shutdown requested, there's nothing more to do
+    IF .SHUTDOWN_FLAG THEN RETURN 0;
+
+    ! Perform any pending updates
+    UPDATE ();
+
+    $GETTIM (TIMADR=NOWDT);
+
+    E = .ENTQUE [QUE_L_HEAD];
+    WHILE .E NEQA ENTQUE DO
+    BEGIN
+	IF .E [ENT_V_IGNORE] THEN
+	BEGIN
+	    DBGPRT ('** ignoring entry # !4UL **', .E [ENT_L_ENTNUM]);
+	    SS$_NORMAL
+	END
+	ELSE IF (NOT .E [ENT_V_DELAY]) OR LIB$SUB_TIMES (NOWDT, E [ENT_Q_DLYDT],
+								JUNKDT) THEN
+	BEGIN
+	    ! Try to lock entry for work
+	    LIB$SYS_FAO (%ASCID'MX_!AS_WORK_!UL', 0, WORKNAM,
+		CONFIG [CFG_Q_FLQNODE], .E [ENT_L_ENTNUM]);
+
+	    STATUS = $ENQW (EFN=.WORKEF, LKMODE=LCK$K_EXMODE, LKSB=WORKSB,
+			FLAGS=LCK$M_NOQUEUE+LCK$M_SYSTEM, RESNAM=WORKNAM);
+	    DBGPRT ('$ENQW status !XL for # !4UL work lock', .STATUS,
+			.E [ENT_L_ENTNUM]);
+
+	    IF .STATUS THEN	! got entry work lock
+	    BEGIN
+		! fill in work info
+		.ENTNUM_A = .E [ENT_L_ENTNUM];
+		E [ENT_V_IGNORE] = 1;
+		WORK_FLAG = 1;
+		ent = .e;
+		EXITLOOP;
+	    END;
+	END
+	ELSE
+	BEGIN
+	    ! Try to lock entry for wait
+	    LIB$SYS_FAO (%ASCID'MX_!AS_WAIT_!UL', 0, WAITNAM,
+		CONFIG [CFG_Q_FLQNODE], .E [ENT_L_ENTNUM]);
+
+	    STATUS = $ENQW (EFN=.WAITEF, LKMODE=LCK$K_EXMODE, LKSB=WAITSB,
+			FLAGS=LCK$M_NOQUEUE+LCK$M_SYSTEM, RESNAM=WAITNAM);
+	    DBGPRT ('$ENQW status !XL (!XL) for # !4UL wait lock', .STATUS,
+			.waitsb [LSB_W_STATUS],
+			.E [ENT_L_ENTNUM]);
+
+	    IF .STATUS THEN	! got entry wait lock
+	    BEGIN
+		! fill in wait info
+		.ENTNUM_A = .E [ENT_L_ENTNUM];
+		CH$MOVE (8, E [ENT_Q_DLYDT], .WAITDT_A);
+		!
+		!  We want the main routine to read the FLQ entry if the
+		!  delay date is 0!
+		!
+		BEGIN
+		    BIND x = e [ENT_Q_DLYDT] : VECTOR [2,LONG];
+		    IF (.x[0] EQLU 0) AND (.x[1] EQLU 0)
+		    THEN
+			BEGIN
+			work_flag = 1;		!Set work flag and return
+			END;
+		END;
+		ent = .e;
+		EXITLOOP;
+	    END;
+	END;
+
+	E = .E [ENT_L_FLINK];
+    END;
+
+    DBGPRT ('GET_WORK = !UL, entry #!4UL', .WORK_FLAG, ..ENTNUM_A);
+
+    ! return work/wait info
+    RETURN .WORK_FLAG;
+
+END; ! GET_WORK
+
+%SBTTL 'COMMAND'
+ROUTINE COMMAND (LSB_A) =
+BEGIN
+!++
+! FUNCTIONAL DESCRIPTION:
+!
+!   IPC command processing routine.  Executes at AST level.
+!
+! RETURNS:  	cond_value, longword (unsigned), write only, by value
+!
+! PROTOTYPE:
+!
+!   COMMAND  lsb
+!
+! IMPLICIT INPUTS:  None.
+!
+! IMPLICIT OUTPUTS: None.
+!
+! COMPLETION CODES:
+!
+!   SS$_NORMAL:	    	normal successful completion.
+!
+! SIDE EFFECTS:
+!
+!   None.
+!--
+    BIND
+	LSB = LSB_A : REF LSBDEF;
+
+    LOCAL
+	UPD	: REF UPDDEF,
+	STATUS;
+
+    SELECTONE .LSB [LSB_B_CMD] OF
+    SET
+    [MX_K_CMD_NOOP] :
+	    SS$_NORMAL;
+    [MX_K_CMD_SHUTDOWN]  :
+	IF .LSB [LSB_L_CSID] EQL 0 OR .LSB [LSB_L_CSID] EQL .MYCSID THEN
+	BEGIN
+	    DBGPRT ('CMD Shutdown');
+	    SHUTDOWN_FLAG = 1;
+	    $WAKE ();
+	END;
+    [MX_K_CMD_RESET]    :
+	IF .LSB [LSB_L_CSID] EQL 0 OR .LSB [LSB_L_CSID] EQL .MYCSID THEN
+	BEGIN
+	    DBGPRT ('CMD Reset');
+	    RESET_MASK [0,0,32,0] = .LSB [LSB_L_RMASK];
+	    LOCATE_FLAG = 1;
+	    $WAKE ();
+	END;
+    [MX_K_CMD_UPDENT]	:
+    	IF .this_agent_running THEN
+	BEGIN
+	    DBGPRT ('CMD Upd.Entry (# !UL)', .LSB [LSB_L_ENTNUM]);
+
+	    STATUS = LIB$GET_VM (%REF (UPD_S_UPDDEF), UPD);
+	    IF NOT .STATUS THEN $EXIT(CODE=.STATUS);
+	    COUNT [CNT_W_UPDPEND] = .COUNT [CNT_W_UPDPEND] + 1;
+
+	    CH$FILL (0, UPD_S_UPDDEF, .upd);
+	    UPD [UPD_L_CMD]    = .LSB [LSB_B_CMD];
+	    UPD [UPD_L_ENTNUM] = .LSB [LSB_L_ENTNUM];
+
+	    INSQUE (.UPD, .UPDQUE [QUE_L_TAIL]);
+	    $WAKE ();
+	END;
+    [MX_K_CMD_UPDDLY]	:
+    	IF .this_agent_running THEN
+	BEGIN
+	    DBGPRT ('CMD Upd. Delay (# !UL, !%D)', .LSB [LSB_L_ENTNUM],
+		    LSB [LSB_Q_DLYDT]);
+
+	    STATUS = LIB$GET_VM (%REF (UPD_S_UPDDEF), UPD);
+	    IF NOT .STATUS THEN $EXIT(CODE=.STATUS);
+	    COUNT [CNT_W_UPDPEND] = .COUNT [CNT_W_UPDPEND] + 1;
+
+	    CH$FILL (0, UPD_S_UPDDEF, .upd);
+	    UPD [UPD_L_CMD]    = .LSB [LSB_B_CMD];
+	    UPD [UPD_L_ENTNUM] = .LSB [LSB_L_ENTNUM];
+	    CH$MOVE (8, LSB [LSB_Q_DLYDT], UPD [UPD_Q_DLYDT]);
+
+	    INSQUE (.UPD, .UPDQUE [QUE_L_TAIL]);
+	    $WAKE ();
+	END;
+    [MX_K_CMD_UPDSIZ]	:
+    	IF .this_agent_running THEN
+	BEGIN
+	    DBGPRT ('CMD Upd. Size (# !UL, !UL bytes)', .LSB [LSB_L_ENTNUM],
+		    .LSB [LSB_L_SIZE]);
+
+	    STATUS = LIB$GET_VM (%REF (UPD_S_UPDDEF), UPD);
+	    IF NOT .STATUS THEN $EXIT(CODE=.STATUS);
+	    COUNT [CNT_W_UPDPEND] = .COUNT [CNT_W_UPDPEND] + 1;
+
+	    CH$FILL (0, UPD_S_UPDDEF, .upd);
+	    UPD [UPD_L_CMD]    = .LSB [LSB_B_CMD];
+	    UPD [UPD_L_ENTNUM] = .LSB [LSB_L_ENTNUM];
+	    UPD [UPD_L_SIZE]   = .LSB [LSB_L_SIZE];
+
+	    INSQUE (.UPD, .UPDQUE [QUE_L_TAIL]);
+	    $WAKE ();
+	END;
+    [MX_K_CMD_NEWENT]	:
+    	IF .this_agent_running THEN
+	BEGIN
+	    DBGPRT ('CMD New Entry (# !UL, !UL bytes)', .LSB [LSB_L_ENTNUM],
+		    .LSB [LSB_L_SIZE]);
+
+	    STATUS = LIB$GET_VM (%REF (UPD_S_UPDDEF), UPD);
+	    IF NOT .STATUS THEN $EXIT(CODE=.STATUS);
+	    COUNT [CNT_W_UPDPEND] = .COUNT [CNT_W_UPDPEND] + 1;
+
+	    CH$FILL (0, UPD_S_UPDDEF, .upd);
+	    UPD [UPD_L_CMD]	= .LSB [LSB_B_CMD];
+	    UPD [UPD_L_ENTNUM]	= .LSB [LSB_L_ENTNUM];
+	    UPD [UPD_L_SIZE]	= .LSB [LSB_L_SIZE];
+	    upd [UPD_V_DELAY]	= .lsb [LSB_V_DELAY];
+	    INSQUE (.UPD, .UPDQUE [QUE_L_TAIL]);
+	    $WAKE ();
+	END;
+    [MX_K_CMD_DELENT]	:
+    	IF .this_agent_running THEN
+	BEGIN
+	    DBGPRT ('CMD Del Entry (# !UL)', .LSB [LSB_L_ENTNUM]);
+
+	    STATUS = LIB$GET_VM (%REF (UPD_S_UPDDEF), UPD);
+	    IF NOT .STATUS THEN $EXIT(CODE=.STATUS);
+	    COUNT [CNT_W_UPDPEND] = .COUNT [CNT_W_UPDPEND] + 1;
+
+	    CH$FILL (0, UPD_S_UPDDEF, .upd);
+	    UPD [UPD_L_CMD]    = .LSB [LSB_B_CMD];
+	    UPD [UPD_L_ENTNUM] = .LSB [LSB_L_ENTNUM];
+
+	    INSQUE (.UPD, .UPDQUE [QUE_L_TAIL]);
+	    $WAKE ();
+	END;
+    [OTHERWISE] :
+	BEGIN
+	    DBGPRT ('CMD unknown (ignored)');
+	    SS$_NORMAL
+	END;
+    TES;
+
+    SS$_NORMAL
+
+END; ! COMMAND
+
+%SBTTL 'GRP_AST'
+ROUTINE GRP_AST = 
+BEGIN
+!++
+! FUNCTIONAL DESCRIPTION:
+!
+!   Blocking AST for FLQ IPC mechanism.
+!
+! N.B.: The VMS distributed lock manager completes lock conversions
+!       BEFORE initial lock grants.  This is key to serialization in
+!   	the IPC mechanism, which works like this:
+!
+!       LOCK          = main listener lock
+!       HDSK          = handshake lock
+!      [GRPW          = sender serialization lock]
+!
+!       Sender                        Receiver(s)
+!
+!                                     holds LOCK @ PR or EX
+!                                        with blocking AST
+!                                     holds HDSK @ NL
+!   [0. takes out GRPW @ EX to further serialize]
+!    1. takes out HDSK @ EX
+!    2. takes out LOCK @ EX  -->      blocking AST fires:
+!                                      - lowers LOCK to NL
+!                                      - raises HDSK to EX
+!    3. LOCK granted:
+!         dequeues LOCK w/LVB
+!    4. dequeues HDSK        -->      HDSK granted
+!                                     raises LOCK to PR or EX,
+!                                        getting LVB
+!                                     lowers HDSK to NL
+!   [5. dequeues GRPW]
+!     
+!   Because the listeners CONVERT the handshake lock to EX,
+!   they are ensured of getting it at step 4 PRIOR to any
+!   other sender starting a sequence at step 1.  Thus, all
+!   IPC is serialized, and no messages will be lost.
+!
+!   PR mode is used on LOCK for multiple-process agents.
+!   EX mode is used on LOCK for single-process agents.
+!
+!
+! RETURNS:  	cond_value, longword (unsigned), write only, by value
+!
+! PROTOTYPE:
+!
+!   GRP_AST
+!
+! IMPLICIT INPUTS:  Lots.
+!
+! IMPLICIT OUTPUTS: Lots.
+!
+! COMPLETION CODES:
+!
+!   SS$_NORMAL:	    	normal successful completion.
+!
+! SIDE EFFECTS:	    Lots.
+!
+!--
+    LOCAL
+    	STATUS;
+
+    DBGPRT ('GRP_AST: fired');
+
+! Start by lowering the listener lock to NL mode.
+
+    STATUS = $ENQ (EFN=.ENQEF, LKMODE=LCK$K_NLMODE, LKSB=LOCKSB,
+		   FLAGS=LCK$M_CONVERT OR LCK$M_SYNCSTS OR LCK$M_NODLCKWT,
+    	    	   ASTADR=GRP1_AST);
+
+! If this completed immediately, we do the conversion of the handshake
+! lock up to EX here.  Otherwise, that gets done in GRP1_AST ().
+
+    IF .status EQL SS$_SYNCH THEN
+    BEGIN
+    	status = .locksb [LSB_W_STATUS];
+
+! The conversion to NL should always succeed, unless there's something
+! really wrong!!!
+
+    	IF .status THEN
+    	BEGIN
+    	    status = $ENQ (EFN=.enqef, LKMODE=LCK$K_EXMODE, LKSB=HDSKLSB,
+    	    	       	   FLAGS=LCK$M_CONVERT OR LCK$M_NODLCKWT,
+                           ASTADR=GRP2_AST);
+    	    IF NOT .status THEN
+    	    BEGIN
+    	    	DBGPRT ('GRP_AST: conversion of !AS to EX failed, status=!XL',
+    	    	    	config [CFG_Q_LCK2NAM], .status);
+! Just reset the main lock back again.  If this fails, we're totally screwed
+! anyway.
+    	    	$ENQ (EFN=.enqef, LKMODE=LCK$K_PRMODE, LKSB=LOCKSB,
+    	    	      FLAGS=LCK$M_CONVERT OR LCK$M_NODLCKWT, BLKAST=GRP_AST);
+    	    END;
+    	END
+    	ELSE
+    	    DBGPRT ('GRP_AST: conversion of !AS to NL failed, status=!XL',
+    	    	     config [CFG_Q_LOCKNAM], .status);
+
+    END
+    ELSE IF NOT .status THEN
+    BEGIN
+    	DBGPRT ('GRP_AST: $ENQ status=!XL on conversion of !AS to NL', .status,
+    	    	    	config [CFG_Q_LOCKNAM]);
+    	$ENQ (LKMODE=LCK$K_PRMODE, LKSB=LOCKSB, BLKAST=GRP_AST,
+    	      FLAGS=LCK$M_CONVERT OR LCK$M_NODLCKWT);
+    END;
+
+    SS$_NORMAL
+
+END; ! GRP_AST
+
+%SBTTL 'GRP1_AST'
+ROUTINE GRP1_AST = 
+BEGIN
+!++
+! FUNCTIONAL DESCRIPTION:
+!
+!   AST completion routine for the lowering of the main
+!   IPC lock to NL.  Only called if the conversion couldn't
+!   be completed synchronously in GRP_AST.
+!
+! RETURNS:  	cond_value, longword (unsigned), write only, by value
+!
+! PROTOTYPE:
+!
+!   GRP1_AST
+!
+! IMPLICIT INPUTS:  None.
+!
+! IMPLICIT OUTPUTS: None.
+!
+! COMPLETION CODES:
+!
+!   SS$_NORMAL:	    	normal successful completion.
+!
+! SIDE EFFECTS:
+!
+!   None.
+!--
+    LOCAL
+    	status;
+
+    status = .locksb [LSB_W_STATUS];
+    DBGPRT ('GRP1_AST: stat = !XL', .status);
+
+    IF .status THEN
+    BEGIN
+    	status = $ENQ (EFN=.enqef, LKMODE=LCK$K_EXMODE, LKSB=HDSKLSB,
+    	    	       FLAGS=LCK$M_CONVERT OR LCK$M_NODLCKWT,
+                       ASTADR=GRP2_AST);
+    	IF NOT .status THEN
+    	    DBGPRT ('GRP_AST: conversion of !AS to EX failed, status=!XL',
+    	    	    config [CFG_Q_LCK2NAM], .status);
+! Just reset the main lock back again.  If this fails, we're totally screwed
+! anyway.
+    	$ENQ (EFN=.ENQEF, LKMODE=LCK$K_PRMODE, LKSB=LOCKSB,
+    	    	FLAGS=LCK$M_CONVERT OR LCK$M_NODLCKWT, BLKAST=GRP_AST);
+    END
+    ELSE
+    	$ENQ (LKMODE=LCK$K_PRMODE, LKSB=LOCKSB, BLKAST=GRP_AST,
+    	      FLAGS=LCK$M_CONVERT OR LCK$M_NODLCKWT);
+
+    SS$_NORMAL
+
+END; ! GRP1_AST
+
+%SBTTL 'GRP2_AST'
+ROUTINE GRP2_AST = 
+BEGIN
+!++
+! FUNCTIONAL DESCRIPTION:
+!
+!   Completion AST routine for conversion of HDSK lock from NL to EX.
+!   It converts the IPC lock back up to PR/EX mode to retrieve
+!   the new LVB that the sender established.
+!
+! RETURNS:  	cond_value, longword (unsigned), write only, by value
+!
+! PROTOTYPE:
+!
+!   GRP2_AST
+!
+! IMPLICIT INPUTS:  None.
+!
+! IMPLICIT OUTPUTS: None.
+!
+! COMPLETION CODES:
+!
+!   SS$_NORMAL:	    	normal successful completion.
+!
+! SIDE EFFECTS:
+!
+!   None.
+!--
+    LOCAL
+    	status;
+
+    status = .HDSKLSB [LSB_W_STATUS];
+
+    DBGPRT ('GRP2_AST: fired, status = !XL', .status);
+
+! Even if we weren't successful in raising the handshake lock to EX,
+! we still go ahead and get the main lock back again.
+
+    status = $ENQ (EFN=.ENQEF, LKMODE=LCK$K_PRMODE, LKSB=LOCKSB, ASTADR=GRP3_AST,
+    	           FLAGS=LCK$M_CONVERT OR LCK$M_VALBLK OR LCK$M_NODLCKBLK OR LCK$M_NODLCKWT,
+    	    	   BLKAST=GRP_AST);
+    IF NOT .status THEN
+    	DBGPRT ('GRP2_AST: $ENQ failed on converting !AS to PR mode', config [CFG_Q_LOCKNAM]);
+!  --- and if that fails, we're toast!
+
+    SS$_NORMAL
+
+END; ! GRP2_AST
+
+%SBTTL 'GRP3_AST'
+ROUTINE GRP3_AST = 
+BEGIN
+!++
+! FUNCTIONAL DESCRIPTION:
+!
+!   Completion AST for conversion of IPC lock back to its higher mode
+!   (either PR or EX).  It converts the handshake lock back down to NL,
+!   to open the door for the next sender. If the LVB is valid, we call
+!   COMMAND to perform the function requested by the sender.
+!
+!   Remember that ASTs are not interruptible by other ASTs, so there's
+!   no chance that another IPC sequence (from another sender) would
+!   interrupt the processing of the current message.
+!
+! RETURNS:  	cond_value, longword (unsigned), write only, by value
+!
+! PROTOTYPE:
+!
+!   GRP3_AST
+!
+! IMPLICIT INPUTS:  None.
+!
+! IMPLICIT OUTPUTS: None.
+!
+! COMPLETION CODES:
+!
+!   SS$_NORMAL:	    	normal successful completion.
+!
+! SIDE EFFECTS:
+!
+!   None.
+!--
+    LOCAL
+    	status;
+
+    DBGPRT ('GRP3_AST: stat = !XW', .LOCKSB [LSB_W_STATUS]);
+
+! Convert the handshake lock back to NL
+
+    status = $ENQ (EFN=.enqef, LKMODE=LCK$K_NLMODE, LKSB=HDSKLSB,
+                   FLAGS=LCK$M_CONVERT OR LCK$M_SYNCSTS OR LCK$M_NODLCKWT);
+    IF .status EQL SS$_SYNCH THEN status = .HDSKLSB [LSB_W_STATUS];
+    IF NOT .status THEN
+    	DBGPRT ('GRP3_AST: $ENQ failed on conversion of !AS to NL, status=!XL',
+    	    	config [CFG_Q_LCK2NAM], .status);  ! --- and we're toast
+
+    status = .locksb [LSB_W_STATUS];
+    IF .status THEN
+	COMMAND (LOCKSB);
+
+    SS$_NORMAL
+
+END; ! GRP3_AST
+
+%SBTTL 'CMD_AST'
+ROUTINE CMD_AST = 
+BEGIN
+!++
+! FUNCTIONAL DESCRIPTION:
+!
+!   Blocking AST for an IPC message targeted at just this process.
+!
+! RETURNS:  	cond_value, longword (unsigned), write only, by value
+!
+! PROTOTYPE:
+!
+!   CMD_AST
+!
+! IMPLICIT INPUTS:  None.
+!
+! IMPLICIT OUTPUTS: None.
+!
+! COMPLETION CODES:
+!
+!   SS$_NORMAL:	    	normal successful completion.
+!
+! SIDE EFFECTS:
+!
+!   None.
+!--
+    LOCAL
+    	status;
+
+    DBGPRT ('CMD_AST: fired');
+
+    ! show info for debugging
+
+    DBGPRT ('  New messages processed: !6UW', .COUNT [CNT_W_PRCCNT]);
+    DBGPRT ('  Retries processed     : !6UW', .COUNT [CNT_W_RETRCNT]);
+    DBGPRT ('  Messages finished     : !6UW', .COUNT [CNT_W_MSGDONE]);
+    DBGPRT ('  Updates requested     : !6UW', .COUNT [CNT_W_UPDREQ]);
+    DBGPRT ('  Updates processed     : !6UW', .COUNT [CNT_W_UPDCNT]);
+    DBGPRT ('  Updates pending       : !6UW  (!UL bytes)', .COUNT [CNT_W_UPDPEND],
+	    .COUNT [CNT_W_UPDPEND] * UPD_S_UPDDEF);
+    DBGPRT ('  Entries               : !6UW  (!UL bytes)', .COUNT [CNT_W_ENTCNT],
+	    .COUNT [CNT_W_ENTCNT] * ENT_S_ENTDEF);
+
+    ! fill in status information
+
+    CMDSB [LSB_B_CMD]    = MX_K_CMD_NOOP;   ! for default, avoids trouble
+    CMDSB [LSB_L_STCODE] = .STATUS_CODE;
+    CMDSB [LSB_L_STPAR]  = .STATUS_PARAM;
+
+    ! release lock so that requestor receives information and can
+    ! send command
+
+    status = $ENQ (EFN=.CMDEF, LKMODE=LCK$K_NLMODE, LKSB=CMDSB, ASTADR=CMD2_AST,
+	    	  FLAGS=LCK$M_CONVERT OR LCK$M_VALBLK OR LCK$M_NODLCKWT OR LCK$M_SYNCSTS);
+    IF .status EQL SS$_SYNCH THEN
+    BEGIN
+    	status = .cmdsb [LSB_W_STATUS];
+    	IF .status THEN
+    	BEGIN
+    	    status = $ENQ (EFN=.cmdef, LKMODE=LCK$K_EXMODE, LKSB=cmdsb,
+    	    	    	   FLAGS=LCK$M_CONVERT OR LCK$M_VALBLK OR LCK$M_NODLCKWT,
+    	    	    	   BLKAST=CMD_AST, ASTADR=CMD3_AST);
+    	    IF NOT .status THEN
+    	    BEGIN
+    	    	DBGPRT ('CMD_AST: status=!XL raising cmd lock to EX', .status);
+    	    	$ENQ (EFN=.cmdef, LKMODE=LCK$K_EXMODE, LKSB=cmdsb,
+    	    	      FLAGS=LCK$M_CONVERT OR LCK$M_VALBLK OR LCK$M_NODLCKWT,
+    	    	      BLKAST=CMD_AST);
+    	    	! -- and we're probably toast
+    	    	RETURN .status;
+    	    END;
+    	END;
+    END;
+    IF NOT .status THEN
+    BEGIN
+    	DBGPRT ('CMD_AST: status=!XL lowering cmd lock to NL', .status);
+    	$ENQ (EFN=.cmdef, LKMODE=LCK$K_EXMODE, LKSB=cmdsb,
+    	      FLAGS=LCK$M_CONVERT OR LCK$M_VALBLK OR LCK$M_NODLCKWT,
+    	      BLKAST=CMD_AST);
+    END;
+
+    SS$_NORMAL
+
+END; ! CMD_AST
+
+%SBTTL 'CMD2_AST'
+ROUTINE CMD2_AST = 
+BEGIN
+!++
+! FUNCTIONAL DESCRIPTION:
+!
+!   Completion AST for lowering cmd lock to NL, when the conversion
+!   does not complete synchronously.
+!
+! RETURNS:  	cond_value, longword (unsigned), write only, by value
+!
+! PROTOTYPE:
+!
+!   CMD2_AST
+!
+! IMPLICIT INPUTS:  None.
+!
+! IMPLICIT OUTPUTS: None.
+!
+! COMPLETION CODES:
+!
+!   SS$_NORMAL:	    	normal successful completion.
+!
+! SIDE EFFECTS:
+!
+!   None.
+!--
+    LOCAL
+    	status;
+
+    DBGPRT ('CMD2_AST: stat =!XW', .CMDSB [LSB_W_STATUS]);
+
+    ! convert to null complete, request exclusive again
+
+    IF .CMDSB [LSB_W_STATUS] THEN
+	status = $ENQ (EFN=.CMDEF, LKMODE=LCK$K_EXMODE, LKSB=CMDSB,
+	    	       FLAGS=LCK$M_CONVERT OR LCK$M_VALBLK OR LCK$M_NODLCKWT,
+    	    	       BLKAST=CMD_AST, ASTADR=CMD3_AST)
+    ELSE ! just reset without picking up the value block
+	status = $ENQ (EFN=.CMDEF, LKMODE=LCK$K_EXMODE, LKSB=CMDSB,
+	    	       FLAGS=LCK$M_CONVERT OR LCK$M_NODLCKWT,
+    	    	    	BLKAST=CMD_AST);
+    IF NOT .status THEN
+    	DBGPRT ('CMD2_AST: status=!XL converting cmd lock to EX', .status);
+ 
+   SS$_NORMAL
+
+END; ! CMD2_AST
+
+%SBTTL 'CMD3_AST'
+ROUTINE CMD3_AST = 
+BEGIN
+!++
+! FUNCTIONAL DESCRIPTION:
+!
+!   Completion AST for raising cmd lock to EX with LCK$M_VALBLK
+!   specified.  Picks up the LVB and passes it to COMMAND ().
+!
+! RETURNS:  	cond_value, longword (unsigned), write only, by value
+!
+! PROTOTYPE:
+!
+!   CMD3_AST
+!
+! IMPLICIT INPUTS:  None.
+!
+! IMPLICIT OUTPUTS: None.
+!
+! COMPLETION CODES:
+!
+!   SS$_NORMAL:	    	normal successful completion.
+!
+! SIDE EFFECTS:
+!
+!   None.
+!--
+    DBGPRT ('CMD3_AST: stat =!XW', .CMDSB [LSB_W_STATUS]);
+
+    ! we got EXMODE again, so check for command
+    IF .CMDSB [LSB_W_STATUS] THEN
+	COMMAND (CMDSB);
+
+    SS$_NORMAL
+    
+END; ! CMD3_AST
+
+%SBTTL 'DBG_SHOW_QUEUE'
+ROUTINE DBG_SHOW_QUEUE (que_a) = 
+BEGIN
+!++
+! FUNCTIONAL DESCRIPTION:
+!
+!   Debug routine for displaying the pending-entries queue.
+!
+! RETURNS:  	cond_value, longword (unsigned), write only, by value
+!
+! PROTOTYPE:
+!
+!   DBG_SHOW_QUEUE  que
+!
+! IMPLICIT INPUTS:  None.
+!
+! IMPLICIT OUTPUTS: None.
+!
+! COMPLETION CODES:
+!
+!   SS$_NORMAL:	    	normal successful completion.
+!
+! SIDE EFFECTS:
+!
+!   None.
+!--
+    BIND
+	QUE	    = .QUE_A : QUEDEF;
+
+    LOCAL
+	E	    : REF ENTDEF;
+
+    DBGPRT ('Queue  !XL H=!XL T=!XL', QUE, .QUE [QUE_L_HEAD],
+	    .QUE [QUE_L_TAIL]);
+    E = .QUE [QUE_L_HEAD];
+    WHILE .E NEQA QUE DO
+    BEGIN
+	IF .E [ENT_V_DELAY] THEN
+	    DBGPRT ('Entry  !XL F=!XL B=!XL  #!4UL DLY=!%D', .E,
+		.E [ENT_L_FLINK], .E [ENT_L_BLINK],
+		.E [ENT_L_ENTNUM], E [ENT_Q_DLYDT])
+	ELSE
+	    DBGPRT ('Entry  !XL F=!XL B=!XL  #!4UL DLY=NONE', .E,
+		.E [ENT_L_FLINK], .E [ENT_L_BLINK],
+		.E [ENT_L_ENTNUM]);
+	E = .E [ENT_L_FLINK];
+    END;
+
+    SS$_NORMAL
+
+END; ! DBG_SHOW_QUEUE
+
+%SBTTL 'LOCATE_AST'
+ROUTINE LOCATE_AST = 
+BEGIN
+!++
+! FUNCTIONAL DESCRIPTION:
+!
+!   Timer AST routine that triggers a "locate" pass over the
+!   queue.
+!
+! RETURNS:  	cond_value, longword (unsigned), write only, by value
+!
+! PROTOTYPE:
+!
+!   LOCATE_AST     ! called from AST level
+!
+! IMPLICIT INPUTS:  None.
+!
+! IMPLICIT OUTPUTS: None.
+!
+! COMPLETION CODES:
+!
+!   SS$_NORMAL:	    	normal successful completion.
+!
+! SIDE EFFECTS:
+!
+!   LOCATE_FLAG	set.
+!
+!--
+
+    LOCATE_FLAG = 1;
+
+    $WAKE ();
+
+    SS$_NORMAL
+
+END; ! LOCATE_AST
+
+%SBTTL 'SERIAL_AST'
+GLOBAL ROUTINE SERIAL_AST = 
+BEGIN
+!++
+! FUNCTIONAL DESCRIPTION:
+!
+!   AST completion routine for single agent serialization
+!   lock.  Executes when the serialization lock is converted.
+!   to EX mode.
+!
+! RETURNS:  	cond_value, longword (unsigned), write only, by value
+!
+! PROTOTYPE:
+!
+!   SERIAL_AST
+!
+! IMPLICIT INPUTS:  None.
+!
+! IMPLICIT OUTPUTS: None.
+!
+! COMPLETION CODES:
+!
+!   SS$_NORMAL:	    	normal successful completion.
+!
+! SIDE EFFECTS:
+!
+!   None.
+!--
+    LOCAL
+    	status;
+
+    status = .serlsb [LSB_W_STATUS];
+    IF NOT .status THEN  ! try again
+    	$ENQ (EFN=.seref, LKMODE=LCK$K_EXMODE, LKSB=serlsb,
+    	      FLAGS=LCK$M_CONVERT OR LCK$M_NODLCKWT, ASTADR=SERIAL_AST)
+    ELSE
+    BEGIN
+    	this_agent_running = 1;
+    	$WAKE ()
+    END
+
+END; ! SERIAL_AST
+
+END
+ELUDOM

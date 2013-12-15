@@ -1,0 +1,178 @@
+%TITLE 'ACCOUNTING'
+MODULE ACCOUNTING (IDENT='V1.0-2', ADDRESSING_MODE (EXTERNAL=LONG_RELATIVE, NONEXTERNAL=LONG_RELATIVE)) =
+BEGIN
+!++
+! FACILITY: 	    MX
+!
+! ABSTRACT: 	    Accounting routines.
+!
+! MODULE DESCRIPTION:
+!
+!   description
+!
+! AUTHOR:   	    M. Madison
+!
+! Copyright (c) 2008, Matthew Madison.
+! 
+! All rights reserved.
+! 
+! Redistribution and use in source and binary forms, with or without
+! modification, are permitted provided that the following conditions
+! are met:
+! 
+!     * Redistributions of source code must retain the above
+!       copyright notice, this list of conditions and the following
+!       disclaimer.
+!     * Redistributions in binary form must reproduce the above
+!       copyright notice, this list of conditions and the following
+!       disclaimer in the documentation and/or other materials provided
+!       with the distribution.
+!     * Neither the name of the copyright owner nor the names of any
+!       other contributors may be used to endorse or promote products
+!       derived from this software without specific prior written
+!       permission.
+! 
+! THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
+! "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
+! LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
+! A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
+! OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
+! SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
+! LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
+! DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
+! THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
+! (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
+! OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+! CREATION DATE:    28-NOV-2000
+!
+! MODIFICATION HISTORY:
+!
+!   28-NOV-2000	V1.0	Madison	    Initial coding.
+!   28-DEC-2000	V1.0-1	Madison	    Reinit FAB after opening the old file,
+!   	    	    	    	    to avoid inheriting file characteristics.
+!   03-FEB-2001 V1.0-1  Madison     Fix last change to initialize FNM, DNM.
+!--
+
+    LIBRARY 'SYS$LIBRARY:STARLET';
+    LIBRARY 'ACCOUNTING';
+
+    FORWARD ROUTINE
+    	MX_ACC_INIT;
+
+    ACC_REF;
+
+    EXTERNAL ROUTINE
+    	LIB$CVT_DTB 	: BLISS ADDRESSING_MODE (GENERAL);
+
+
+%SBTTL 'MX_ACC_INIT'
+GLOBAL ROUTINE MX_ACC_INIT (fspec, dspec, newfile) = 
+BEGIN
+!++
+! FUNCTIONAL DESCRIPTION:
+!
+!   description
+!
+! RETURNS:  	cond_value, longword (unsigned), write only, by value
+!
+! PROTOTYPE:
+!
+!   x
+!
+! IMPLICIT INPUTS:  None.
+!
+! IMPLICIT OUTPUTS: None.
+!
+! COMPLETION CODES:
+!
+!   SS$_NORMAL:	    	normal successful completion.
+!
+! SIDE EFFECTS:	    None.
+!--
+    BIND
+    	FS = .FSPEC : BLOCK [,BYTE],
+    	DS = .DSPEC : BLOCK [,BYTE];
+
+    LOCAL
+    	nam 	: $NAM_DECL,
+    	espec	: VECTOR [255,BYTE],
+    	rspec	: VECTOR [255,BYTE],
+    	locksb	: VECTOR [4,WORD],
+    	status;
+
+    $FAB_INIT (FAB=ACC_FAB, FAC=PUT, NAM=nam,
+			SHR=<SHRPUT,SHRGET>, RFM=VAR, RAT=CR, MRS=0, FOP=TEF);
+    $NAM_INIT (NAM=nam, ESA=espec, ESS=%ALLOCATION (espec),
+    	    	RSA=rspec, RSS=%ALLOCATION (rspec));
+
+    ACC_FAB [FAB$L_FNA] = .FS [DSC$A_POINTER];
+    ACC_FAB [FAB$B_FNS] = .FS [DSC$W_LENGTH];
+    ACC_FAB [FAB$L_DNA] = .DS [DSC$A_POINTER];
+    ACC_FAB [FAB$B_DNS] = .DS [DSC$W_LENGTH];
+    $RAB_INIT (RAB=ACC_RAB, FAB=ACC_FAB);
+    IF .newfile THEN
+    BEGIN
+    	BIND  lkid = locksb [2] : LONG;
+    	LOCAL
+    	    do_create,
+    	    lstat;
+    	lstat = $ENQW (LKMODE=LCK$K_EXMODE, LKSB=locksb, FLAGS=LCK$M_SYSTEM, 
+    	    	    	    RESNAM=%ASCID'MX_ACCTG_SYNCH');
+    	IF .lstat THEN lstat = .locksb [0];
+    	IF .lstat THEN
+    	BEGIN
+    	    status = $OPEN (FAB=acc_fab);
+    	    IF .status THEN
+    	    BEGIN
+    	    	LOCAL newver;
+    	    	LIB$CVT_DTB (.nam [NAM$B_VER]-1, .nam [NAM$L_VER]+1, newver);
+    	    	do_create = .newver EQLU .acc_cur_filver;
+    	    	IF .do_create THEN
+    	    	BEGIN
+    	    	    $CLOSE (FAB=acc_fab);
+    	    	    $FAB_INIT (FAB=ACC_FAB, FAC=PUT, NAM=nam, FNA=.fs [DSC$A_POINTER],
+			FNS=.fs [DSC$W_LENGTH], DNA=.ds [DSC$A_POINTER], DNS=.ds [DSC$W_LENGTH],
+                        SHR=<SHRPUT,SHRGET>, RFM=VAR, RAT=CR, MRS=0, FOP=TEF);
+    	    	    $NAM_INIT (NAM=nam, ESA=espec, ESS=%ALLOCATION (espec),
+    	    	    	RSA=rspec, RSS=%ALLOCATION (rspec));
+    	    	END;
+    	    END;
+    	END
+    	ELSE
+    	    do_create = 1;  ! go for it anyway
+
+    	IF .do_create THEN
+    	    STATUS = $CREATE (FAB=ACC_FAB)
+    	else
+    	    acc_rab [RAB$V_EOF] = 1;
+
+    	IF .lstat THEN
+    	    $DEQ (LKID=.lkid);
+
+    END
+    ELSE
+    BEGIN
+    	STATUS = $OPEN (FAB=ACC_FAB);
+    	IF .STATUS THEN
+    	    ACC_RAB [RAB$V_EOF] = 1
+    	ELSE
+    	    STATUS = $CREATE (FAB=ACC_FAB);
+    END;
+
+    IF .STATUS THEN
+    BEGIN
+    	LIB$CVT_DTB (.nam [NAM$B_VER]-1, .nam [NAM$L_VER]+1, acc_cur_filver);
+    	STATUS = $CONNECT (RAB=ACC_RAB);
+    	IF .STATUS EQL RMS$_EOF THEN STATUS = RMS$_NORMAL;
+    	IF NOT .STATUS THEN $CLOSE (FAB=ACC_FAB)
+    	ELSE ACC_OPENED = 1;
+    END;
+
+    acc_fab [FAB$L_NAM] = 0;
+
+    .STATUS
+
+END; ! MX_ACC_INIT
+
+END
+ELUDOM

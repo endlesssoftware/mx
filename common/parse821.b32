@@ -1,0 +1,525 @@
+%TITLE 'PARSE821'
+MODULE PARSE821 (IDENT='V2.3', ADDRESSING_MODE (EXTERNAL=LONG_RELATIVE,NONEXTERNAL=LONG_RELATIVE)) =
+BEGIN
+!++
+! FACILITY:	    MX Mail router
+!
+! ABSTRACT:	    Parses RFC821-type addresses.
+!
+! MODULE DESCRIPTION:
+!
+!
+! AUTHOR:	    M. Madison
+!
+! Copyright (c) 2008, Matthew Madison.
+! Copyright (c) 2011, Endless Software Solutions.
+! 
+! All rights reserved.
+! 
+! Redistribution and use in source and binary forms, with or without
+! modification, are permitted provided that the following conditions
+! are met:
+! 
+!     * Redistributions of source code must retain the above
+!       copyright notice, this list of conditions and the following
+!       disclaimer.
+!     * Redistributions in binary form must reproduce the above
+!       copyright notice, this list of conditions and the following
+!       disclaimer in the documentation and/or other materials provided
+!       with the distribution.
+!     * Neither the name of the copyright owner nor the names of any
+!       other contributors may be used to endorse or promote products
+!       derived from this software without specific prior written
+!       permission.
+! 
+! THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
+! "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
+! LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
+! A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
+! OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
+! SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
+! LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
+! DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
+! THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
+! (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
+! OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+!
+! CREATION DATE:    27-APR-1989
+!
+! MODIFICATION HISTORY:
+!
+!   27-APR-1989	    V1.0-001	Madison	    Initial coding.
+!    2-FEB-1993	    V2.0	Goatley	    Added quote_local to handle
+!					    RFC821 quoting issues.
+!   10-MAR-1993     V2.1	Goatley	    Modified for AXP (Thanks, Matt).
+!   15-JUN-1994     V2.2	Goatley	    Allow RTQ to be omitted.
+!   06-JUL-1999	    V2.2-1  	Madison	    Fix list of non-quotables.
+!   19-MAR-2010	    V2.3	Sneddon	    Allow DOM and LCL to be ommitted.
+!--
+
+    LIBRARY 'SYS$LIBRARY:STARLET';
+    LIBRARY 'SYS$LIBRARY:TPAMAC';
+    LIBRARY 'MX';
+
+    FORWARD ROUTINE
+	PARSE821,
+	P821_STORE,
+	quote_local,
+	qlcl_store;
+
+    EXTERNAL ROUTINE
+	G_HAT (QUOTE_STRING),
+	G_HAT (LIB$TPARSE, STR$COPY_DX, STR$COPY_R);
+
+    MACRO
+	TPA_A_P1	=   TPA$C_LENGTH0+00,0,32,0%,
+	TPA_A_P2	=   TPA$C_LENGTH0+04,0,32,0%,
+	TPA_A_P3	=   TPA$C_LENGTH0+08,0,32,0%,
+	TPA_A_P4	=   TPA$C_LENGTH0+12,0,32,0%,
+	TPA_A_P5	=   TPA$C_LENGTH0+16,0,32,0%,
+	TPA_A_P6	=   TPA$C_LENGTH0+20,0,32,0%,
+	TPA_A_P7	=   TPA$C_LENGTH0+24,0,32,0%;
+
+%SBTTL 'State table for PARSE821'
+
+    $INIT_STATE (PARSE821_STATE, PARSE821_KEY);
+
+    $STATE (ROUTEADR,
+    	('<', RTADR1),
+	(TPA$_BLANK, ROUTEADR));
+    $STATE (RTADR1,
+    	('@', RTADR2),
+	(TPA$_LAMBDA, RTADR4));
+    $STATE (RTADR2,
+	((DOMAIN), RTADR3, P821_STORE,,, 1));
+    $STATE (RTADR3,
+    	(',', RTADR1),
+    	(':', RTADR4),
+	(TPA$_BLANK, RTADR3));
+    $STATE (RTADR4,
+	(TPA$_BLANK, RTADR4),
+	((COMMENT), RTADR4),
+	((LCLPART), ADRS1, P821_STORE,,, 2));
+    $STATE (RTADR5,
+	(TPA$_BLANK, RTADR5),
+    	('>', TPA$_EXIT));
+
+    $STATE (ADRS1,
+    	('@', ADRS2),
+	(TPA$_BLANK, ADRS1),
+	((COMMENT), ADRS1));
+    $STATE (ADRS2,
+	(TPA$_BLANK, ADRS2),
+	((COMMENT), ADRS2),
+	((DOMAIN), RTADR5, P821_STORE,,, 3));
+
+    $STATE (LCLPART,
+	((_WORD), LCLP1));
+    $STATE (LCLP1,
+    	('.', LCLP2),
+	(TPA$_LAMBDA, TPA$_EXIT));
+    $STATE (LCLP2,
+	((_WORD), LCLP1),
+	(TPA$_LAMBDA, TPA$_EXIT));
+
+    $STATE (COMMENT,
+    	('(', COM1),
+	(TPA$_ANY, TPA$_FAIL));
+    $STATE (COM1,
+	((COMMENT), COM1),
+	(TPA$_BLANK, COM1),
+    	('\', COMLIT),
+    	(')', TPA$_EXIT),
+	(TPA$_EOS, TPA$_FAIL),
+	(TPA$_ANY, COM1));
+    $STATE (COMLIT,
+	(TPA$_ANY, COM1));
+
+    $STATE (PHRASE,
+	((_WORD), PHR1));
+    $STATE (PHR1,
+	(TPA$_BLANK, PHR2),
+	(TPA$_LAMBDA, TPA$_EXIT));
+    $STATE (PHR2,
+	(TPA$_BLANK, PHR2),
+	((_WORD), PHR1),
+	(TPA$_LAMBDA, TPA$_EXIT));
+
+    $STATE (_WORD,
+    	('"', WORDQ),
+	(TPA$_ALPHA, WORD1),
+	(TPA$_DIGIT, WORD1),
+    	('`', WORD1), ('~', WORD1), ('!', WORD1), ('#', WORD1),
+    	('$', WORD1), ('%', WORD1), ('^', WORD1), ('&', WORD1),
+    	('*', WORD1), ('-', WORD1), ('_', WORD1), ('=', WORD1),
+    	('+', WORD1), ('{', WORD1), ('}', WORD1), ('''', WORD1),
+    	('|', WORD1), ('/', WORD1), ('?', WORD1), ('\', WORD1Q));
+    $STATE (WORDQ,
+    	('\', WORDQ1),
+    	('"', WORD1),
+	(TPA$_ANY, WORDQ));
+    $STATE (WORDQ1,
+	(TPA$_ANY, WORDQ));
+    $STATE (WORD1,
+    	('"', WORDQ),
+	(TPA$_ALPHA, WORD1),
+	(TPA$_DIGIT, WORD1),
+    	('`', WORD1), ('~', WORD1), ('!', WORD1), ('#', WORD1),
+    	('$', WORD1), ('%', WORD1), ('^', WORD1), ('&', WORD1),
+    	('*', WORD1), ('-', WORD1), ('_', WORD1), ('=', WORD1),
+    	('+', WORD1), ('{', WORD1), ('}', WORD1), ('''', WORD1),
+    	('|', WORD1), ('/', WORD1), ('?', WORD1), ('\', WORD1Q),
+	(TPA$_LAMBDA, TPA$_EXIT));
+    $STATE (WORD1Q,
+	(TPA$_ANY, WORD1));
+
+    $STATE (DOMAIN,
+	((SUBDOMAIN), DOM1));
+    $STATE (DOM1,
+    	('.', DOM2),
+	(TPA$_LAMBDA, TPA$_EXIT));
+    $STATE (DOM2,
+	((SUBDOMAIN), DOM1),
+	(TPA$_LAMBDA, TPA$_EXIT));
+
+    $STATE (SUBDOMAIN,
+    	('[', SUBDLIT),
+    	('`', SUBD1), ('~', SUBD1), ('!', SUBD1), ('#', SUBD1),
+    	('$', SUBD1), ('%', SUBD1), ('^', SUBD1), ('&', SUBD1),
+    	('*', SUBD1), ('-', SUBD1), ('_', SUBD1), ('=', SUBD1),
+    	('+', SUBD1), ('{', SUBD1), ('}', SUBD1), ('''', SUBD1),
+    	('|', SUBD1), ('/', SUBD1), ('?', SUBD1),
+	(TPA$_ALPHA, SUBD1),
+	(TPA$_DIGIT, SUBD1));
+    $STATE (SUBDLIT,
+    	('\', SUBDLQ),
+    	(']', TPA$_EXIT),
+	(TPA$_ANY, SUBDLIT));
+    $STATE (SUBDLQ,
+	(TPA$_ANY, SUBDLIT));
+    $STATE (SUBD1,
+    	('`', SUBD1), ('~', SUBD1), ('!', SUBD1), ('#', SUBD1),
+    	('$', SUBD1), ('%', SUBD1), ('^', SUBD1), ('&', SUBD1),
+    	('*', SUBD1), ('-', SUBD1), ('_', SUBD1), ('=', SUBD1),
+    	('+', SUBD1), ('{', SUBD1), ('}', SUBD1), ('''', SUBD1),
+    	('|', SUBD1), ('/', SUBD1), ('?', SUBD1),
+	(TPA$_ALPHA, SUBD1),
+	(TPA$_DIGIT, SUBD1),
+	(TPA$_LAMBDA, TPA$_EXIT));
+
+
+%SBTTL 'State table for QUOTE_LOCAL'
+
+    $INIT_STATE (QLCL_STATE, QLCL_KEY);
+
+    $STATE (QLCLSTART,
+	(TPA$_EOS, TPA$_EXIT),
+    	('"', QLCLQUOTE, QLCL_STORE,,, 0),
+    	('_', QLCLSTART, QLCL_STORE,,, 0),
+    	('$', QLCLSTART, QLCL_STORE,,, 0),
+    	('.', QLCLSTART, QLCL_STORE,,, 0),
+    	('-', QLCLSTART, QLCL_STORE,,, 0),
+    	('%', QLCLSTART, QLCL_STORE,,, 0),
+    	('^', QLCLSTART, QLCL_STORE,,, 0),
+    	('#', QLCLSTART, QLCL_STORE,,, 0),
+    	('*', QLCLSTART, QLCL_STORE,,, 0),
+    	('&', QLCLSTART, QLCL_STORE,,, 0),
+    	('!', QLCLSTART, QLCL_STORE,,, 0),
+    	('+', QLCLSTART, QLCL_STORE,,, 0),
+    	('=', QLCLSTART, QLCL_STORE,,, 0),
+    	('{', QLCLSTART, QLCL_STORE,,, 0),
+    	('}', QLCLSTART, QLCL_STORE,,, 0),
+    	('|', QLCLSTART, QLCL_STORE,,, 0),
+    	('/', QLCLSTART, QLCL_STORE,,, 0),
+    	('?', QLCLSTART, QLCL_STORE,,, 0),
+    	('~', QLCLSTART, QLCL_STORE,,, 0),
+    	('''', QLCLSTART, QLCL_STORE,,, 0),
+    	('\', QLCLLIT2, QLCL_STORE,,, 1),		!If "\" found, must quote addr
+	(TPA$_ALPHA, QLCLSTART, QLCL_STORE,,, 0),
+	(TPA$_DIGIT, QLCLSTART, QLCL_STORE,,, 0),
+	(TPA$_ANY, QLCLSTART, QLCL_STORE,,, 2));
+
+    $STATE (QLCLLIT2,				!Quoted literal ("\" <x>)
+	(TPA$_EOS, TPA$_FAIL),			!If end-of-string, error
+	(TPA$_ANY, QLCLSTART, QLCL_STORE,,,0));	!Otherwise just store next
+
+    $STATE (QLCLQUOTE,
+    	('"', QLCLSTART, QLCL_STORE,,, 0),
+    	('\', QLCLLIT, QLCL_STORE,,, 0),
+	(TPA$_ANY, QLCLQUOTE, QLCL_STORE,,, 0));
+    $STATE (QLCLLIT,
+	(TPA$_ANY, QLCLQUOTE, QLCL_STORE,,, 0));
+
+
+%SBTTL 'PARSE821'
+GLOBAL ROUTINE PARSE821 (STR_A, RTQ_A, LCL_A, DOM_A) =
+BEGIN
+!++
+! FUNCTIONAL DESCRIPTION:
+!
+!   Parses an RFC821-compliant address into its route part,
+!   local part, and domain part.
+!
+! RETURNS:	cond_value, longword (unsigned), write only, by value
+!
+! PROTOTYPE:
+!
+!   PARSE821  str, rtq, lcl, dom
+!
+! IMPLICIT INPUTS:  None.
+!
+! IMPLICIT OUTPUTS: None.
+!
+! COMPLETION CODES:
+!
+!   SS$_NORMAL:		normal successful completion.
+!
+! SIDE EFFECTS:
+!
+!   None.
+!--
+    BIND
+	STR	= .STR_A    : BLOCK [DSC$K_S_BLN,BYTE],
+	RTQ	= .RTQ_A    : QUEDEF;
+
+    LITERAL
+	TPA_C_LENGTH	=   TPA$C_LENGTH0 + 12,
+	TPA_K_COUNT	=   TPA$K_COUNT0 + 3;
+
+    LOCAL
+	TPABLK : BLOCK [TPA_C_LENGTH,BYTE],
+	STRLEN : WORD,
+	STRBUF : BLOCK [255,BYTE],
+	status;
+
+    IF (.rtq_a NEQ 0)
+    THEN
+	RTQ [QUE_L_TAIL] = RTQ [QUE_L_HEAD] = RTQ [QUE_L_HEAD];
+    IF (.lcl_a NEQA 0)
+    THEN
+	STR$COPY_DX (.LCL_A, %ASCID'');
+    IF (.dom_a NEQA 0)
+    THEN
+	STR$COPY_DX (.DOM_A, %ASCID'');
+    TPABLK [TPA$L_COUNT] = TPA_K_COUNT;
+    TPABLK [TPA$L_OPTIONS] = TPA$M_BLANKS;
+    TPABLK [TPA$L_STRINGCNT] = .STR [DSC$W_LENGTH];
+    TPABLK [TPA$L_STRINGPTR] = .STR [DSC$A_POINTER];
+    TPABLK [TPA_A_P1] = .RTQ_A;
+    TPABLK [TPA_A_P2] = .LCL_A;
+    TPABLK [TPA_A_P3] = .DOM_A;
+
+    status = LIB$TPARSE (TPABLK, PARSE821_STATE, PARSE821_KEY);
+
+    !
+    !  If the address is valid, get rid of any "\"-quoted characters.
+    !  For example, DN\:\:U@N -> "DN::U"@N.
+    !
+    IF (.status AND (.lcl_a NEQA 0))
+    THEN
+	status = quote_local (.lcl_a, .lcl_a);
+
+   .status
+
+END; ! PARSE821
+
+
+%SBTTL 'P821_STORE'
+TPA_ROUTINE (P821_STORE, (OPTIONS, STRINGCNT, STRINGPTR, TOKENCNT,
+	    TOKENPTR, CHAR, NUMBER, PARAM, RTQ_A, LCL_A, DOM_A))
+!++
+! FUNCTIONAL DESCRIPTION:
+!
+!   Invoked by TPARSE to store a piece of a mail address.
+!
+! RETURNS:	cond_value, longword (unsigned), write only, by value
+!
+! PROTOTYPE:
+!
+!   P821_STORE opt, scnt, sptr, tcnt, tptr, chr, num, par, p1, p2, p3
+!
+! IMPLICIT INPUTS:  None.
+!
+! IMPLICIT OUTPUTS: None.
+!
+! COMPLETION CODES:
+!
+!   SS$_NORMAL:		normal successful completion.
+!
+! SIDE EFFECTS:
+!
+!   None.
+!--
+    BUILTIN
+	ACTUALPARAMETER;
+
+    BIND
+	RTQ = .RTQ_A : QUEDEF;
+
+    LOCAL
+	S : BLOCK [DSC$K_S_BLN,BYTE];
+
+    S [DSC$B_DTYPE] = DSC$K_DTYPE_T;
+    S [DSC$B_CLASS] = DSC$K_CLASS_S;
+    S [DSC$W_LENGTH] = .TOKENCNT;
+    S [DSC$A_POINTER] = .TOKENPTR;
+
+    SELECTONE .PARAM OF
+	SET
+	[1] :	IF .RTQ_A NEQ 0 THEN INSTXT (S, .RTQ [QUE_L_TAIL]);
+	[2] :	IF .LCL_A NEQ 0 THEN STR$COPY_DX (.LCL_A, S);
+	[3] :	IF .DOM_A NEQ 0 THEN STR$COPY_DX (.DOM_A, S);
+	TES;
+
+    SS$_NORMAL
+
+END; ! P821_STORE
+
+
+%SBTTL	'QUOTE_LOCAL'
+ROUTINE QUOTE_LOCAL (instr_a, outstr_a) =
+BEGIN
+!++
+! FUNCTIONAL DESCRIPTION:
+!
+!   Quotes an RFC821-compliant local part, if necessary.  Used to convert
+!   strings like NODE\:\:USER to "NODE::USER".
+!
+! RETURNS:	cond_value, longword (unsigned), write only, by value
+!
+! PROTOTYPE:
+!
+!   QUOTE_LOCAL	  instr, outstr
+!
+! IMPLICIT INPUTS:  None.
+!
+! IMPLICIT OUTPUTS: None.
+!
+! COMPLETION CODES:
+!
+!   SS$_NORMAL:		normal successful completion.
+!
+! SIDE EFFECTS:
+!
+!   None.
+!--
+
+    BIND
+	instr	= .instr_a	: $BBLOCK,
+	outstr	= .outstr_a	: $BBLOCK;
+
+    LITERAL
+	TPA_C_LENGTH	= TPA$C_LENGTH0 + 12,
+	TPA_K_COUNT	= TPA$K_COUNT0 + 3;
+
+    LOCAL
+	buf		: $BBLOCK[1024],
+	len		: WORD,
+	tpablk		: $BBLOCK[TPA_C_LENGTH],
+	must_quote,
+	status;
+
+
+    TPABLK [TPA$L_COUNT] = TPA_K_COUNT;
+    TPABLK [TPA$L_OPTIONS] = 0;
+    TPABLK [TPA$V_BLANKS] = 1;
+    TPABLK [TPA$L_STRINGCNT] = .instr [DSC$W_LENGTH];
+    TPABLK [TPA$L_STRINGPTR] = .instr [DSC$A_POINTER];
+    TPABLK [TPA_A_P1] = len;
+    TPABLK [TPA_A_P2] = buf;
+    TPABLK [TPA_A_P3] = must_quote;
+
+    must_quote = len = 0;
+    status = LIB$TPARSE (tpablk, qlcl_state, qlcl_key);
+    IF .status
+    THEN
+	IF .must_quote
+	THEN
+	    QUOTE_STRING (outstr, .len, buf, 1)
+	ELSE
+	    STR$COPY_R (outstr, len, buf);
+
+    RETURN (.status);
+
+END;	!QUOTE_LOCAL
+
+
+%SBTTL 'QLCL_STORE'
+TPA_ROUTINE (QLCL_STORE, (OPTIONS, STRLEN, STRPTR, TOKLEN, TOKPTR, CH,
+	    NUMBER, PARAM, LEN_A, BUF_A, MUSTQ_A))
+!++
+! FUNCTIONAL DESCRIPTION:
+!
+!   Stores values for QUOTE_LOCAL.
+!
+! RETURNS:	cond_value, longword (unsigned), write only, by value
+!
+! PROTOTYPE:
+!
+!   QLCL_STORE blah
+!
+! IMPLICIT INPUTS:  None.
+!
+! IMPLICIT OUTPUTS: None.
+!
+! COMPLETION CODES:
+!
+!   SS$_NORMAL:		normal successful completion.
+!
+! SIDE EFFECTS:
+!
+!   None.
+!--
+    BIND
+	char		= ch		: BYTE,
+	len		= .len_a	: WORD,
+	buf		= .buf_a	: VECTOR [,BYTE],
+	must_quote	= .mustq_a;
+
+    CASE .param FROM 0 TO 2 OF
+    SET
+	[0] :	!
+		!Just store the character in the buffer.
+		!
+		IF .len LSS 1024
+		THEN
+		    buf [(len = .len+1)-1] = .char;   ! literal
+
+	[1] :	!
+		!  A "\" was found.  Just set flag indicating that string
+		!  must be quoted.
+		!
+		    must_quote = 1;
+
+	[2] :	!
+		!  A special character was found.  Put in the buffer and
+		!  set the must_quote flag.  If it's a <CR>, <LF>, <">,
+		!  or "\", then it must be preceded by "\", according
+		!  to RFC821.
+		!
+		BEGIN
+		    MUST_QUOTE = 1;
+		    SELECTONE .CHAR OF
+		    SET
+		    [%C'\', %CHAR(13), %CHAR(10), %C'"'] :
+			    IF .len LSS 1023
+			    THEN
+				BEGIN
+				buf [(len = .len+1)-1] = %C'\';
+				buf [(len = .len+1)-1] = .char;
+				END;
+		    [OTHERWISE] :
+			    IF .len LSS 1024
+			    THEN
+				buf [(len = .len+1)-1] = .char;
+		    TES;
+		END;
+    TES;
+
+    SS$_NORMAL
+
+END; ! QLCL_STORE
+
+
+END
+ELUDOM

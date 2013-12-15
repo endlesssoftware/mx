@@ -1,0 +1,427 @@
+%TITLE 'PARSE_MBOX'
+MODULE PARSE_MBOX (IDENT='V1.4') =
+BEGIN
+!++
+! FACILITY: 	    MX
+!
+! ABSTRACT: 	    Routines for parsing RFC822 mailbox sepcifications.
+!
+! MODULE DESCRIPTION:
+!
+!   This module contains routines that parse things.  All of these routines
+!   use LIB$TPARSE to do the major parsing work.  All of the routines also
+!   use extended TPARSE argument blocks for storing things to keep things
+!   modular.  When a token needs to be saved, an action routine is named
+!   in the transition and the user argument is a constant which indicates
+!   to the action routine which argument in the extended argument block
+!   should be modified.  Some of the argument blocks and numbering schemes
+!   are set up so as to allow direct offsetting from the argument pointer
+!   in the action routine (so be careful when modifying).
+!
+! AUTHOR:   	    M. Madison
+!
+! Copyright (c) 2008, Matthew Madison.
+! 
+! All rights reserved.
+! 
+! Redistribution and use in source and binary forms, with or without
+! modification, are permitted provided that the following conditions
+! are met:
+! 
+!     * Redistributions of source code must retain the above
+!       copyright notice, this list of conditions and the following
+!       disclaimer.
+!     * Redistributions in binary form must reproduce the above
+!       copyright notice, this list of conditions and the following
+!       disclaimer in the documentation and/or other materials provided
+!       with the distribution.
+!     * Neither the name of the copyright owner nor the names of any
+!       other contributors may be used to endorse or promote products
+!       derived from this software without specific prior written
+!       permission.
+! 
+! THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
+! "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
+! LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
+! A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
+! OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
+! SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
+! LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
+! DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
+! THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
+! (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
+! OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+!
+! CREATION DATE:    21-DEC-1989
+!
+! MODIFICATION HISTORY:
+!
+!   21-DEC-1989	V1.0	Madison	    Initial coding (swiped from PARSE822).
+!   03-JAN-1990	V1.1-1	Madison	    Provide name, if requested.
+!   05-JAN-1990	V1.1-2	Madison	    Fixed state table bugs.
+!   19-JAN-1990	V1.1-3	Madison	    Fixed bug in ROUTEADR.
+!   13-MAR-1990	V1.1-4	Madison	    Fixed idiotic FIND_FIRST_NOT problem.
+!   03-APR-1991	V1.2	Madison	    Handle more comments.
+!   10-MAR-1993 V1.3	Goatley     Converted to AXP (thanks, Matt!).
+!   27-DEC-1996	V1.4	Madison	    Eliminate dynamic strings.
+!--
+
+    LIBRARY 'SYS$LIBRARY:STARLET';
+    LIBRARY 'SYS$LIBRARY:TPAMAC';
+    LIBRARY 'MX';
+
+    FORWARD ROUTINE
+    	PARSE_MBOX,
+    	PM_STORE;
+
+    EXTERNAL ROUTINE
+    	G_HAT (LIB$TPARSE, LIB$SCOPY_R_DX);
+
+    LITERAL
+    	PM_K_BUFSIZ 	= 1024;
+
+    EXTERNAL LITERAL
+    	LIB$_SYNTAXERR;
+
+    MACRO
+    	TPA_A_P1    	=   TPA$C_LENGTH0+00,0,32,0%,
+    	TPA_A_P2    	=   TPA$C_LENGTH0+04,0,32,0%,
+    	TPA_A_P3    	=   TPA$C_LENGTH0+08,0,32,0%,
+    	TPA_A_P4    	=   TPA$C_LENGTH0+12,0,32,0%,
+    	TPA_A_P5    	=   TPA$C_LENGTH0+16,0,32,0%,
+    	TPA_A_P6    	=   TPA$C_LENGTH0+20,0,32,0%,
+    	TPA_A_P7    	=   TPA$C_LENGTH0+24,0,32,0%,
+    	TPA_A_P8    	=   TPA$C_LENGTH0+28,0,32,0%,
+    	TPA_A_P9    	=   TPA$C_LENGTH0+32,0,32,0%;
+
+%SBTTL 'State table for PARSE_MBOX'
+
+    $INIT_STATE (PM_STATE, PM_KEY);
+
+    $STATE (SKIPWS,
+    	((COMMENT), SKIPWS),
+    	(TPA$_BLANK, SKIPWS),
+    	(TPA$_LAMBDA, GETADR1));
+
+    $STATE (GETADR1,
+    	((MAILBOX), EXPCOM),
+    	((PHRASEPLUSCOL), SKIPWS),
+    	((PHRASE), SKIPWS, PM_STORE,,,999),
+    	(TPA$_ANY, TPA$_FAIL));
+
+    $STATE (EXPCOM,
+    	(TPA$_BLANK, EXPCOM),
+    	((COMMENT), EXPCOM, PM_STORE,,,999),
+    	(TPA$_EOS, TPA$_EXIT),
+    	(TPA$_LAMBDA, TPA$_FAIL));
+
+    $STATE (PHRASEPLUSCOL,
+    	((PHRASE), PPC1),
+    	(TPA$_LAMBDA, TPA$_FAIL));
+    $STATE (PPC1,
+    	(TPA$_BLANK, PPC1),
+    	(':', TPA$_EXIT),
+    	((COMMENT), PPC1),
+    	(TPA$_LAMBDA, TPA$_FAIL));
+
+    $STATE (MAILBOX,
+    	((COMMENT), MAILBOX),
+    	((ROUTEADR), TPA$_EXIT),
+    	((ADDRSPEC), TPA$_EXIT),
+    	(TPA$_LAMBDA, TPA$_FAIL));
+
+    $STATE (COMMENT,
+    	('(', COM1),
+    	(TPA$_ANY, TPA$_FAIL));
+    $STATE (COM1,
+    	((COMMENT), COM1),
+    	(TPA$_BLANK, COM1),
+    	('\', COMLIT),
+    	(')', TPA$_EXIT),
+    	(TPA$_EOS, TPA$_FAIL),
+    	(TPA$_ANY, COM1));
+    $STATE (COMLIT,
+    	(TPA$_ANY, COM1));
+
+    $STATE (ROUTEADR,
+    	('<', RTADR1),
+    	(TPA$_BLANK, ROUTEADR),
+    	(TPA$_LAMBDA, TPA$_FAIL));
+    $STATE (RTADR1,
+    	('@', RTADR2),
+    	((ADDRSPEC), RTADR5),
+    	(TPA$_LAMBDA, TPA$_FAIL));
+    $STATE (RTADR2,
+    	((DOMAIN), RTADR3),
+    	(TPA$_LAMBDA, TPA$_FAIL));
+    $STATE (RTADR3,
+    	(',', RTADR1),
+    	(':', RTADR4),
+    	(TPA$_BLANK, RTADR3),
+    	(TPA$_LAMBDA, TPA$_FAIL));
+    $STATE (RTADR4,
+    	((ADDRSPEC), RTADR5),
+    	(TPA$_LAMBDA, TPA$_FAIL));
+    $STATE (RTADR5,
+    	(TPA$_BLANK, RTADR5),
+    	('>', TPA$_EXIT));
+
+    $STATE (ADDRSPEC,
+    	(TPA$_BLANK, ADDRSPEC),
+    	((COMMENT), ADDRSPEC),
+    	((LCLPART), ADRS1, PM_STORE,,,1),
+    	(TPA$_LAMBDA, TPA$_FAIL));
+    $STATE (ADRS1,
+    	('@', ADRS2),
+    	(TPA$_BLANK, ADRS1),
+    	((COMMENT), ADRS1),
+    	(TPA$_LAMBDA, TPA$_FAIL));
+    $STATE (ADRS2,
+    	(TPA$_BLANK, ADRS2),
+    	((COMMENT), ADRS2),
+    	((DOMAIN), TPA$_EXIT, PM_STORE,,,2),
+    	(TPA$_LAMBDA, TPA$_FAIL));
+
+    $STATE (LCLPART,
+    	((_WORD), LCLP1),
+    	(TPA$_LAMBDA, TPA$_FAIL));
+    $STATE (LCLP1,
+    	('.', LCLP2),
+    	(TPA$_LAMBDA, TPA$_EXIT));
+    $STATE (LCLP2,
+    	((_WORD), LCLP1),
+    	(TPA$_LAMBDA, TPA$_EXIT));
+
+    $STATE (PHRASE,
+    	((_WORD), PHR1),
+    	((COMMENT), PHR1),
+    	(TPA$_LAMBDA, TPA$_FAIL));
+    $STATE (PHR1,
+    	(TPA$_BLANK, PHR2),
+    	(TPA$_LAMBDA, TPA$_EXIT));
+    $STATE (PHR2,
+    	(TPA$_BLANK, PHR2),
+    	((_WORD), PHR1),
+    	((COMMENT), PHR1),
+    	(TPA$_LAMBDA, TPA$_EXIT));
+
+    $STATE (_WORD,
+    	('"', WORDQ),
+    	((COMMENT), _WORD),
+    	(TPA$_ALPHA, WORD1),
+    	(TPA$_DIGIT, WORD1),
+    	('`', WORD1), ('~', WORD1), ('!', WORD1), ('#', WORD1),
+    	('$', WORD1), ('%', WORD1), ('^', WORD1), ('&', WORD1),
+    	('*', WORD1), ('-', WORD1), ('_', WORD1), ('=', WORD1),
+    	('+', WORD1), ('{', WORD1), ('}', WORD1), ('''', WORD1),
+    	('|', WORD1), ('/', WORD1), ('?', WORD1),
+    	(TPA$_LAMBDA, TPA$_FAIL));
+    $STATE (WORDQ,
+    	('\', WORDQ1),
+    	('"', WORD1),
+    	(TPA$_ANY, WORDQ));
+    $STATE (WORDQ1,
+    	(TPA$_ANY, WORDQ));
+    $STATE (WORD1,
+    	('"', WORDQ),
+    	((COMMENT), WORD1),
+    	(TPA$_ALPHA, WORD1),
+    	(TPA$_DIGIT, WORD1),
+    	('`', WORD1), ('~', WORD1), ('!', WORD1), ('#', WORD1),
+    	('$', WORD1), ('%', WORD1), ('^', WORD1), ('&', WORD1),
+    	('*', WORD1), ('-', WORD1), ('_', WORD1), ('=', WORD1),
+    	('+', WORD1), ('{', WORD1), ('}', WORD1), ('''', WORD1),
+    	('|', WORD1), ('/', WORD1), ('?', WORD1),
+    	(TPA$_LAMBDA, TPA$_EXIT));
+
+    $STATE (DOMAIN,
+    	((SUBDOMAIN), DOM1),
+    	(TPA$_LAMBDA, TPA$_FAIL));
+    $STATE (DOM1,
+    	('.', DOM2),
+    	(TPA$_LAMBDA, TPA$_EXIT));
+    $STATE (DOM2,
+    	((SUBDOMAIN), DOM1),
+    	(TPA$_LAMBDA, TPA$_EXIT));
+
+    $STATE (SUBDOMAIN,
+    	('[', SUBDLIT),
+    	('`', SUBD1), ('~', SUBD1), ('!', SUBD1), ('#', SUBD1),
+    	('$', SUBD1), ('%', SUBD1), ('^', SUBD1), ('&', SUBD1),
+    	('*', SUBD1), ('-', SUBD1), ('_', SUBD1), ('=', SUBD1),
+    	('+', SUBD1), ('{', SUBD1), ('}', SUBD1), ('''', SUBD1),
+    	('|', SUBD1), ('/', SUBD1), ('?', SUBD1),
+    	(TPA$_ALPHA, SUBD1),
+    	(TPA$_DIGIT, SUBD1),
+    	(TPA$_LAMBDA, TPA$_FAIL));
+    $STATE (SUBDLIT,
+    	('\', SUBDLQ),
+    	(']', TPA$_EXIT),
+    	(TPA$_ANY, SUBDLIT));
+    $STATE (SUBDLQ,
+    	(TPA$_ANY, SUBDLIT));
+    $STATE (SUBD1,
+    	('`', SUBD1), ('~', SUBD1), ('!', SUBD1), ('#', SUBD1),
+    	('$', SUBD1), ('%', SUBD1), ('^', SUBD1), ('&', SUBD1),
+    	('*', SUBD1), ('-', SUBD1), ('_', SUBD1), ('=', SUBD1),
+    	('+', SUBD1), ('{', SUBD1), ('}', SUBD1), ('''', SUBD1),
+    	('|', SUBD1), ('/', SUBD1), ('?', SUBD1),
+    	(TPA$_ALPHA, SUBD1),
+    	(TPA$_DIGIT, SUBD1),
+    	(TPA$_LAMBDA, TPA$_EXIT));
+
+%SBTTL 'PARSE_MBOX'
+GLOBAL ROUTINE PARSE_MBOX (STR_A, LCLP_A, DOMP_A, NAM_A) =
+BEGIN
+!++
+! FUNCTIONAL DESCRIPTION:
+!
+!   Parses a single mailbox specification, returning the local part
+!   and the domain part.
+!
+!   The addresses are expected to conform with RFC 822, and should
+!   look something like one of the following.
+!
+!   	user@domain     user@domain (comment)      name <user@domain>
+!
+!   Additional comments are also accepted.  Whitespace is allowed in
+!   certain areas as well.  If the KEEP_NAME flag is set, the the
+!   name is returned as part of the address.  Otherwise, it is omitted.
+!   only the leading name and trailing comment/name will be kept.
+!
+! RETURNS:  	cond_value, longword (unsigned), write only, by value
+!
+! PROTOTYPE:
+!
+!   PARSE_MBOX  str, lclp, domp [,name]
+!
+! IMPLICIT INPUTS:  None.
+!
+! IMPLICIT OUTPUTS: None.
+!
+! COMPLETION CODES:
+!
+!   SS$_NORMAL:	    	normal successful completion.
+!
+! SIDE EFFECTS:
+!
+!   None.
+!--
+    BUILTIN
+    	ACTUALCOUNT;
+
+    BIND
+    	STR 	= .STR_A    : BLOCK [,BYTE];
+
+    LITERAL
+    	TPA_C_LENGTH	=   TPA$C_LENGTH0 + 24,
+    	TPA_K_COUNT 	=   TPA$K_COUNT0 + 6;
+
+    LOCAL
+    	TPABLK : BLOCK [TPA_C_LENGTH,BYTE],
+    	LTMP   : VECTOR [PM_K_BUFSIZ,BYTE],
+    	DTMP   : VECTOR [PM_K_BUFSIZ,BYTE],
+    	NTMP   : VECTOR [PM_K_BUFSIZ,BYTE],
+    	LLEN, DLEN, NLEN, STATUS;
+
+    LLEN = DLEN = NLEN = 0;
+    TPABLK [TPA$L_COUNT] = TPA_K_COUNT;
+    TPABLK [TPA$L_OPTIONS] = TPA$M_BLANKS;
+    TPABLK [TPA$L_STRINGCNT] = .STR [DSC$W_LENGTH];
+    TPABLK [TPA$L_STRINGPTR] = .STR [DSC$A_POINTER];
+    TPABLK [TPA_A_P1] = LTMP;
+    TPABLK [TPA_A_P2] = DTMP;
+    TPABLK [TPA_A_P3] = NTMP;
+    TPABLK [TPA_A_P4] = LLEN;
+    TPABLK [TPA_A_P5] = DLEN;
+    TPABLK [TPA_A_P6] = NLEN;
+    STATUS = LIB$TPARSE (TPABLK, PM_STATE, PM_KEY);
+    IF .STATUS THEN
+    BEGIN
+    	STATUS = LIB$SCOPY_R_DX (LLEN, LTMP, .LCLP_A);
+    	IF .STATUS THEN STATUS = LIB$SCOPY_R_DX (DLEN, DTMP, .DOMP_A);
+    	IF .STATUS AND ACTUALCOUNT() GTR 3 THEN
+    	    IF .NAM_A NEQA 0 THEN STATUS = LIB$SCOPY_R_DX (NLEN, NTMP, .NAM_A);
+    END;
+
+    .STATUS
+
+END; ! PARSE_MBOX
+
+%SBTTL 'PM_STORE'
+TPA_ROUTINE (PM_STORE, (OPTIONS, STRINGCNT, STRINGPTR, TOKENCNT,
+    	    TOKENPTR, CHAR, NUMBER, PARAM, LTMP_A, DTMP_A, NTMP_A,
+    	    LLEN_A, DLEN_A, NLEN_A))
+!++
+! FUNCTIONAL DESCRIPTION:
+!
+!   Invoked by TPARSE to store a piece of a mail address.
+!
+! RETURNS:  	cond_value, longword (unsigned), write only, by value
+!
+! PROTOTYPE:
+!
+!   PM_STORE opt, scnt, sptr, tcnt, tptr, chr, num, par, p1, p2, p3
+!
+! IMPLICIT INPUTS:  None.
+!
+! IMPLICIT OUTPUTS: None.
+!
+! COMPLETION CODES:
+!
+!   SS$_NORMAL:	    	normal successful completion.
+!
+! SIDE EFFECTS:
+!
+!   None.
+!--
+    LOCAL
+    	CP, TP, TC;
+
+!
+!   Trim blanks
+!
+    TC = .TOKENCNT;
+    TP = .TOKENPTR;
+    WHILE .TC GTR 0 DO
+    BEGIN
+    	IF CH$RCHAR (CH$PLUS (.TP, .TC-1)) NEQ %C' ' AND
+    	   CH$RCHAR (CH$PLUS (.TP, .TC-1)) NEQ %CHAR (9) THEN EXITLOOP;
+    	TC = .TC - 1;
+    END;
+    WHILE .TC GTR 0 AND (CH$RCHAR (.TP) EQL %C' ' OR
+    	    	    	 CH$RCHAR (.TP) EQL %CHAR (9)) DO
+    BEGIN
+    	TP = CH$PLUS (.TP, 1);
+    	TC = .TC - 1;
+    END;
+
+    IF .TC GTR PM_K_BUFSIZ THEN RETURN LIB$_SYNTAXERR;
+
+    SELECTONE .PARAM OF
+    SET
+    	[1] :
+    	    BEGIN
+    	    	CH$MOVE (.TC, .TP, .LTMP_A);
+    	    	.LLEN_A = .TC;
+    	    END;
+
+    	[2] :
+    	    BEGIN
+    	    	CH$MOVE (.TC, .TP, .DTMP_A);
+    	    	.DLEN_A = .TC;
+    	    END;
+
+    	[999] :
+    	    BEGIN
+    	    	CH$MOVE (.TC, .TP, .NTMP_A);
+    	    	.NLEN_A = .TC;
+    	    END;
+    TES;
+
+    SS$_NORMAL
+
+END; ! PM_STORE
+
+END
+ELUDOM

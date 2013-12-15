@@ -1,0 +1,241 @@
+%TITLE 'QUOTE_STRING'
+MODULE QUOTE_STRING (IDENT='V1.3', ADDRESSING_MODE (EXTERNAL=LONG_RELATIVE,NONEXTERNAL=LONG_RELATIVE)) =
+BEGIN
+!++
+! FACILITY: 	    MCP
+!
+! ABSTRACT: 	    Routines for quoting and unquoting a string.
+!
+! MODULE DESCRIPTION:
+!
+! AUTHOR:   	    M. Madison
+!
+! Copyright (c) 2008, Matthew Madison.
+! 
+! All rights reserved.
+! 
+! Redistribution and use in source and binary forms, with or without
+! modification, are permitted provided that the following conditions
+! are met:
+! 
+!     * Redistributions of source code must retain the above
+!       copyright notice, this list of conditions and the following
+!       disclaimer.
+!     * Redistributions in binary form must reproduce the above
+!       copyright notice, this list of conditions and the following
+!       disclaimer in the documentation and/or other materials provided
+!       with the distribution.
+!     * Neither the name of the copyright owner nor the names of any
+!       other contributors may be used to endorse or promote products
+!       derived from this software without specific prior written
+!       permission.
+! 
+! THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
+! "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
+! LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
+! A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
+! OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
+! SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
+! LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
+! DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
+! THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
+! (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
+! OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+!
+! CREATION DATE:    13-DEC-1989
+!
+! MODIFICATION HISTORY:
+!
+!   13-DEC-1989	V1.0	Madison	    Initial coding.
+!   03-APR-1991	V1.1	Madison	    Add UNQUOTE_STRING.
+!   17-FEB-1992	V1.2    Madison	    Add RFC822-type variant.
+!   24-DEC-1996	V1.3	Madison	    Eliminate dynamic strings.
+!--
+
+    LIBRARY 'SYS$LIBRARY:STARLET';
+
+    FORWARD ROUTINE
+    	QUOTE_STRING,
+    	UNQUOTE_STRING;
+
+    EXTERNAL ROUTINE
+    	LIB$SCOPY_DXDX	: ADDRESSING_MODE (GENERAL),
+    	LIB$SCOPY_R_DX	: ADDRESSING_MODE (GENERAL),
+    	STR$APPEND  	: ADDRESSING_MODE (GENERAL),
+    	STR$FREE1_DX	: ADDRESSING_MODE (GENERAL);
+
+%SBTTL 'QUOTE_STRING'
+GLOBAL ROUTINE QUOTE_STRING (OUT_A, INLEN, INVEC : REF VECTOR [,BYTE], XSLASH) = 
+BEGIN
+!++
+! FUNCTIONAL DESCRIPTION:
+!
+!   Quotes a string.
+!
+! RETURNS:  	cond_value, longword (unsigned), write only, by value
+!
+! PROTOTYPE:
+!
+!   QUOTE_STRING
+!
+! IMPLICIT INPUTS:  None.
+!
+! IMPLICIT OUTPUTS: None.
+!
+! COMPLETION CODES:
+!
+!   SS$_NORMAL:	    	normal successful completion.
+!
+! SIDE EFFECTS:
+!
+!   None.
+!--
+    BUILTIN ACTUALCOUNT;
+
+    LOCAL
+    	TMP 	: BLOCK [DSC$K_S_BLN,BYTE],
+    	CH  	: BLOCK [DSC$K_S_BLN,BYTE],
+    	TMPBUF	: VECTOR [8192,BYTE],
+    	J   	: WORD,
+    	SLASH,
+    	STATUS;
+
+    SLASH = (IF ACTUALCOUNT () GTR 3 THEN .XSLASH ELSE 0);
+
+!+
+!   Resort to using dynamic strings if the string is too big for our
+!   buffer
+!-
+    IF .INLEN GTR 4094 THEN
+    BEGIN
+    	$INIT_DYNDESC (TMP);
+    	CH [DSC$W_LENGTH] = 1;
+    	CH [DSC$B_DTYPE] = DSC$K_DTYPE_T;
+    	CH [DSC$B_CLASS] = DSC$K_CLASS_S;
+
+    	LIB$SCOPY_DXDX (%ASCID'"', TMP);
+
+    	INCR I FROM 0 TO .INLEN-1 DO
+    	    IF .INVEC [.I] EQL %C'"' THEN
+    	    	IF .SLASH THEN STR$APPEND (TMP, %ASCID'\"')
+    	    	ELSE STR$APPEND (TMP, %ASCID'""')
+    	    ELSE
+    	    BEGIN
+    	    	CH [DSC$A_POINTER] = INVEC [.I];
+    	    	STR$APPEND (TMP, CH);
+    	    END;
+
+    	STR$APPEND (TMP, %ASCID'"');
+    	STATUS = LIB$SCOPY_DXDX (TMP, .OUT_A);
+    	STR$FREE1_DX (TMP);
+    END
+    ELSE
+    BEGIN
+    	TMPBUF [0] = %C'"';
+    	J = 1;
+    	INCR I FROM 0 TO .INLEN - 1 DO
+    	BEGIN
+    	    IF .INVEC [.I] EQL %C'"' THEN
+    	    	IF .SLASH THEN (TMPBUF [.J] = %C'\'; J = .J + 1;)
+    	    	ELSE (TMPBUF [.J] = %C'"'; J = .J + 1;);
+    	    TMPBUF [.J] = .INVEC [.I];
+    	    J = .J + 1;
+    	END;
+    	TMPBUF [.J] = %C'"';
+    	J = .J + 1;
+    	STATUS = LIB$SCOPY_R_DX (J, TMPBUF, .OUT_A);
+    END;
+
+    .STATUS
+
+END; ! QUOTE_STRING
+
+%SBTTL 'UNQUOTE_STRING'
+GLOBAL ROUTINE UNQUOTE_STRING (OUT_A, INLEN, INVEC : REF VECTOR [,BYTE]) = 
+BEGIN
+!++
+! FUNCTIONAL DESCRIPTION:
+!
+!   Unquotes a string.
+!
+! RETURNS:  	cond_value, longword (unsigned), write only, by value
+!
+! PROTOTYPE:
+!
+!   UNQUOTE_STRING
+!
+! IMPLICIT INPUTS:  None.
+!
+! IMPLICIT OUTPUTS: None.
+!
+! COMPLETION CODES:
+!
+!   SS$_NORMAL:	    	normal successful completion.
+!
+! SIDE EFFECTS:
+!
+!   None.
+!--
+    LOCAL
+    	TMP 	: BLOCK [DSC$K_S_BLN,BYTE],
+    	CH  	: BLOCK [DSC$K_S_BLN,BYTE],
+    	TMPBUF	: VECTOR [4096, BYTE],
+    	J   	: WORD,
+    	LASTWASQUOTE,
+    	STATUS;
+
+!+
+!   If string exceeds our stack-allocated buffer, using dynamic
+!   strings
+!-
+    IF .INLEN GTR %ALLOCATION (TMPBUF) THEN
+    BEGIN
+    	$INIT_DYNDESC (TMP);
+    	CH [DSC$W_LENGTH] = 1;
+    	CH [DSC$B_DTYPE] = DSC$K_DTYPE_T;
+    	CH [DSC$B_CLASS] = DSC$K_CLASS_S;
+
+    	LASTWASQUOTE = 0;
+    	INCR I FROM 0 TO .INLEN-1 DO
+    	BEGIN
+    	    IF .LASTWASQUOTE THEN
+    	    BEGIN
+    	    	CH [DSC$A_POINTER] = INVEC [.I];
+    	    	STR$APPEND (TMP, CH);
+    	    	LASTWASQUOTE = 0;
+    	    END
+    	    ELSE IF .INVEC [.I] EQL %C'"' THEN LASTWASQUOTE = 1
+    	    ELSE
+       	    BEGIN
+    	    	CH [DSC$A_POINTER] = INVEC [.I];
+    	    	STR$APPEND (TMP, CH);
+    	    END;
+    	END;
+    	STATUS = LIB$SCOPY_DXDX (TMP, .OUT_A);
+    	STR$FREE1_DX (TMP);
+    END
+    ELSE
+    BEGIN
+    	J = 0;
+    	LASTWASQUOTE = 0;
+    	INCR I FROM 0 TO .INLEN-1 DO
+    	BEGIN
+    	    IF .LASTWASQUOTE THEN
+    	    BEGIN
+    	    	TMPBUF [.J] = .INVEC [.I];
+    	    	J = .J + 1;
+    	    	LASTWASQUOTE = 0;
+    	    END
+    	    ELSE IF .INVEC [.I] EQL %C'"' THEN LASTWASQUOTE = 1
+    	    ELSE (TMPBUF [.J] = .INVEC [.I]; J = .J + 1;);
+    	END;
+    	STATUS = LIB$SCOPY_R_DX (J, TMPBUF, .OUT_A);
+    END;
+
+
+    .STATUS
+
+END; ! UNQUOTE_STRING
+
+END
+ELUDOM

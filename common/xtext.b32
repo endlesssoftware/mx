@@ -1,0 +1,315 @@
+%TITLE 'XTEXT'
+MODULE XTEXT (IDENT='V1.0', ADDRESSING_MODE (EXTERNAL=LONG_RELATIVE, NONEXTERNAL=LONG_RELATIVE)) =
+BEGIN
+!++
+! FACILITY: 	    XTEXT
+!
+! ABSTRACT: 	    Routines for dealing with "xtext" for RFC1891
+!   	    	    DSN SMTP extension parameters.   	    	    
+!
+! MODULE DESCRIPTION:
+!
+!   description
+!
+! AUTHOR:   	    M. Madison
+!
+! Copyright (c) 2008, Matthew Madison.
+! 
+! All rights reserved.
+! 
+! Redistribution and use in source and binary forms, with or without
+! modification, are permitted provided that the following conditions
+! are met:
+! 
+!     * Redistributions of source code must retain the above
+!       copyright notice, this list of conditions and the following
+!       disclaimer.
+!     * Redistributions in binary form must reproduce the above
+!       copyright notice, this list of conditions and the following
+!       disclaimer in the documentation and/or other materials provided
+!       with the distribution.
+!     * Neither the name of the copyright owner nor the names of any
+!       other contributors may be used to endorse or promote products
+!       derived from this software without specific prior written
+!       permission.
+! 
+! THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
+! "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
+! LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
+! A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
+! OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
+! SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
+! LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
+! DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
+! THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
+! (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
+! OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+!
+! CREATION DATE:    28-JUN-1998
+!
+! MODIFICATION HISTORY:
+!
+!   28-JUN-1998	V1.0	Madison	    Initial coding.
+!--
+    LIBRARY 'SYS$LIBRARY:STARLET';
+    LIBRARY 'MX';
+
+    FORWARD ROUTINE
+    	XTEXT_ENCODE,
+    	XTEXT_DECODE,
+    	save_outtxt 	: NOVALUE;
+
+    OWN
+    	hexchar	    	: VECTOR [16,BYTE] INITIAL ('0123456789ABCDEF');
+
+    EXTERNAL ROUTINE
+    	MEM_GETTXT,
+    	G_HAT (LIB$GET_VM, LIB$FREE_VM, LIB$SCOPY_R_DX);
+
+
+%SBTTL 'XTEXT_ENCODE'
+GLOBAL ROUTINE XTEXT_ENCODE (intxt_a_a) = 
+BEGIN
+!++
+! FUNCTIONAL DESCRIPTION:
+!
+!   Encodes a string (in a TXTDEF structure) as "xtext"
+!   for use in RFC1891 ESMTP parameters.
+!
+! RETURNS:  	pointer to new TXTDEF
+!
+! PROTOTYPE:
+!
+!   XTEXT_ENCODE  in
+!
+! IMPLICIT INPUTS:  None.
+!
+! IMPLICIT OUTPUTS: None.
+!
+! COMPLETION CODES: None.
+!
+! SIDE EFFECTS:	    None.
+!
+!--
+    BIND
+    	intxt	= .intxt_a_a  : REF TXTDEF;
+
+    LOCAL
+    	inp,
+    	outp,
+    	inlen,
+    	outlen,
+    	outtxt	: REF TXTDEF,
+    	buf 	: VECTOR [2048,BYTE];
+
+    inp = intxt [TXT_T_TEXT];
+    inlen = .intxt [TXT_W_LEN];
+    outtxt = 0;
+    outlen = 0;
+    outp   = buf;
+
+    !	Encoding of the address does NOT include the angle-brackets
+
+    IF .inlen GTRU 1 AND CH$RCHAR (.inp) EQL %C'<' THEN
+    	IF NOT (.inlen GTRU 2 AND CH$RCHAR (CH$PLUS (.inp, 1)) EQL %C'@') THEN
+    	BEGIN
+    	    inp = CH$PLUS (.inp, 1);
+    	    inlen = .inlen - 2;
+    	END;
+
+    WHILE .inlen GTRU 0 DO
+    BEGIN
+    	LOCAL ch : BYTE;
+    	ch = CH$RCHAR_A (inp);
+    	IF (.ch GEQ %C'!' AND .ch LEQ %C'~') AND .ch NEQ %C'+' AND .ch NEQ %C'=' THEN
+    	BEGIN
+    	    IF .outlen EQL %ALLOCATION (buf) THEN
+    	    BEGIN
+    	    	save_outtxt (outtxt, .outlen, buf);
+    	    	outlen = 0;
+    	    	outp = buf;
+    	    END;
+    	    CH$WCHAR_A (.ch, outp);
+    	    outlen = .outlen + 1;
+    	END
+    	ELSE
+    	BEGIN
+    	    IF .outlen GTRU %ALLOCATION (buf)-3 THEN
+    	    BEGIN
+    	    	save_outtxt (outtxt, .outlen, buf);
+    	    	outlen = 0;
+    	    	outp = buf;
+    	    END;
+    	    CH$WCHAR_A (%C'+', outp);
+    	    CH$WCHAR_A (.hexchar [.ch<4,4,0>], outp);
+    	    CH$WCHAR_A (.hexchar [.ch<0,4,0>], outp);
+    	    outlen = .outlen + 3;
+    	END;
+    	inlen = .inlen - 1;
+    END;
+
+    save_outtxt (outtxt, .outlen, buf);
+
+    .outtxt
+ 
+END; ! XTEXT_ENCODE
+
+%SBTTL 'XTEXT_DECODE'
+GLOBAL ROUTINE XTEXT_DECODE (txt_a_a, outdsc_a, outlen_a) = 
+BEGIN
+!++
+! FUNCTIONAL DESCRIPTION:
+!
+!   Decodes "xtext" back into the text's original form.
+!
+! RETURNS:  	cond_value, longword (unsigned), write only, by value
+!
+! PROTOTYPE:
+!
+!   XTEXT_DECODE  txt, outdsc [,outlen]
+!
+! IMPLICIT INPUTS:  None.
+!
+! IMPLICIT OUTPUTS: None.
+!
+! COMPLETION CODES:
+!
+!   SS$_NORMAL:	    	normal successful completion.
+!
+! SIDE EFFECTS:
+!
+!   None.
+!--
+    BIND
+    	txt 	= .txt_a_a  : REF TXTDEF,
+    	outdsc	= .outdsc_a : BLOCK [,BYTE];
+
+    BUILTIN
+    	ACTUALCOUNT;
+
+    LOCAL
+    	buf 	: VECTOR [1024,BYTE],
+    	bufp,
+    	inp,
+    	outp,
+    	remain,
+    	status,
+    	len 	: WORD;
+
+!
+!   We can safely use the xtext's length as the upper bound
+!   for the decoded length, since xtext will always be the
+!   same length as, or longer than, its original form.
+!
+    IF .txt [TXT_W_LEN] GTRU %ALLOCATION (buf) THEN
+    BEGIN
+    	status = LIB$GET_VM (%REF (.txt [TXT_W_LEN]), bufp);
+    	IF NOT .status THEN RETURN .status;
+    END
+    ELSE
+    	bufp = buf;
+
+    inp = txt [TXT_T_TEXT];
+    outp = .bufp;
+    remain = .txt [TXT_W_LEN];
+    WHILE .remain GTRU 0 DO
+    BEGIN
+    	LOCAL ch    : BYTE;
+    	ch = CH$RCHAR_A (inp);
+    	remain = .remain - 1;
+    	IF .ch EQL %C'+' AND .remain GEQU 2 THEN
+    	BEGIN
+    	    LOCAL outch : BYTE;
+    	    ch = CH$RCHAR_A (inp);
+    	    remain = .remain - 1;
+    	    !
+    	    !	Note that the RFC calls for hex encodings to use upper-case A-F for
+    	    !	hex digits, but we handle lower-case as well here, to be more lenient
+    	    !	with non-compliant implementations we may run across.
+    	    !
+    	    IF .ch GEQU %C'A' AND .ch LEQU %C'F' THEN outch = (10 + (.ch - %C'A')) ^ 4
+    	    ELSE IF .ch GEQU %C'a' AND .ch LEQU %C'f' THEN outch = (10 + (.ch - %C'a')) ^ 4
+    	    ELSE IF .ch GEQU %C'0' AND .ch LEQU %C'9' THEN outch = (.ch - %C'0') ^ 4
+    	    ELSE outch = 0;
+
+    	    IF .outch NEQ 0 THEN
+    	    BEGIN
+    	    	ch = CH$RCHAR_A (inp);
+    	    	remain = .remain - 1;
+    	    	IF .ch GEQU %C'A' AND .ch LEQU %C'F' THEN outch = .outch OR (10 + (.ch - %C'A'))
+    	    	ELSE IF .ch GEQU %C'a' AND .ch LEQU %C'f' THEN outch = .outch OR (10 + (.ch - %C'a'))
+    	    	ELSE IF .ch GEQU %C'0' AND .ch LEQU %C'9' THEN outch = .outch OR (.ch - %C'0')
+    	    	ELSE outch = 0;
+    	    	IF .outch NEQ 0 THEN CH$WCHAR_A (.outch, outp);
+    	    END;
+    	END
+    	ELSE CH$WCHAR_A (.ch, outp);
+    END;
+
+    IF .outdsc [DSC$B_CLASS] NEQ DSC$K_CLASS_D THEN
+    	len = MINU (CH$DIFF (.outp, .bufp), .outdsc [DSC$W_LENGTH])
+    ELSE
+    	len = CH$DIFF (.outp, .bufp);
+
+    status = LIB$SCOPY_R_DX (%REF (CH$DIFF (.outp, .bufp)), .bufp, .outdsc_a);
+
+    IF .status AND ACTUALCOUNT () GTR 2 THEN
+    	IF .outlen_a NEQA 0 THEN
+    	BEGIN
+    	    BIND outlen = .outlen_a 	: WORD;
+    	    outlen = .len;
+    	END;
+
+    IF .bufp NEQA buf THEN LIB$FREE_VM (%REF (.txt [TXT_W_LEN]), bufp);
+    
+    .status
+
+END; ! XTEXT_DECODE
+
+%SBTTL 'save_outtxt'
+ROUTINE save_outtxt (outtxt_a_a, len, bufp) : NOVALUE =
+BEGIN
+!++
+! FUNCTIONAL DESCRIPTION:
+!
+!   Appends our current encoding buffer to a TXTDEF string.
+!
+! RETURNS:  	cond_value, longword (unsigned), write only, by value
+!
+! PROTOTYPE:
+!
+!   SAVE_OUTTXT  outtxt, len, bufp
+!
+! IMPLICIT INPUTS:  None.
+!
+! IMPLICIT OUTPUTS: None.
+!
+! COMPLETION CODES:
+!
+!   SS$_NORMAL:	    	normal successful completion.
+!
+! SIDE EFFECTS:
+!
+!   None.
+!--
+    BIND
+    	outtxt = .outtxt_a_a	: REF TXTDEF;
+
+    LOCAL
+    	txt 	: REF TXTDEF;
+
+    IF .outtxt EQLA 0 THEN
+    	outtxt = MEM_GETTXT (.len, .bufp)
+    ELSE
+    BEGIN
+    	txt = MEM_GETTXT (.len + .outtxt [TXT_W_LEN]);
+    	CH$MOVE (.outtxt [TXT_W_LEN], outtxt [TXT_T_TEXT], txt [TXT_T_TEXT]);
+    	CH$MOVE (.len, .bufp, CH$PLUS (txt [TXT_T_TEXT], .outtxt [TXT_W_LEN]));
+    	FREETXT (outtxt);
+    	outtxt = .txt;
+    END;
+
+END; ! save_outtxt
+    
+END
+ELUDOM

@@ -1,0 +1,219 @@
+%TITLE 'HEADERS'
+MODULE HEADERS (IDENT='V1.0-1') =
+BEGIN
+!++
+! FACILITY: 	    MX Mail Exchange utility routines
+!
+! ABSTRACT: 	    Routines for handling .MSG_HDRS files.
+!
+! MODULE DESCRIPTION:
+!
+!   This module contains routines READ_HDRS and WRITE_HDRS, routines
+!   for retrieving and storing message headers.
+!
+! AUTHOR:   	    M. Madison
+!
+! Copyright (c) 2008, Matthew Madison.
+! 
+! All rights reserved.
+! 
+! Redistribution and use in source and binary forms, with or without
+! modification, are permitted provided that the following conditions
+! are met:
+! 
+!     * Redistributions of source code must retain the above
+!       copyright notice, this list of conditions and the following
+!       disclaimer.
+!     * Redistributions in binary form must reproduce the above
+!       copyright notice, this list of conditions and the following
+!       disclaimer in the documentation and/or other materials provided
+!       with the distribution.
+!     * Neither the name of the copyright owner nor the names of any
+!       other contributors may be used to endorse or promote products
+!       derived from this software without specific prior written
+!       permission.
+! 
+! THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
+! "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
+! LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
+! A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
+! OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
+! SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
+! LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
+! DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
+! THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
+! (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
+! OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+!
+! CREATION DATE:    02-JUL-1998
+!
+! MODIFICATION HISTORY:
+!
+!   02-JUL-1998	V1.0	Madison	    Initial coding (separated from INFO.B32).
+!   05-AUG-1998	V1.0-1	Madison	    Got the sign wrong on the shift in page count calculation.
+!--
+    LIBRARY 'SYS$LIBRARY:STARLET';
+    LIBRARY 'MX_SRC_COMMON:FLQ';
+    LIBRARY 'MX';
+
+    FORWARD ROUTINE
+    	WRITE_HDRS,
+    	READ_HDRS;
+
+    EXTERNAL ROUTINE
+    	MEM_GETTXT,
+    	G_HAT (LIB$GET_VM_PAGE, LIB$FREE_VM_PAGE);
+
+
+%SBTTL 'WRITE_HDRS'
+GLOBAL ROUTINE WRITE_HDRS (QAB, QENT_A, SFX_A, HDRQ_A) =
+BEGIN
+!++
+! FUNCTIONAL DESCRIPTION:
+!
+!   Writes a .HDR_INFO file.
+!
+! RETURNS:  	cond_value, longword (unsigned), write only, by value
+!
+! PROTOTYPE:
+!
+!   WRITE_HDRS  qab, qent, sfx, hdrq
+!
+! IMPLICIT INPUTS:  None.
+!
+! IMPLICIT OUTPUTS: None.
+!
+! COMPLETION CODES:
+!
+!   SS$_NORMAL:	    	normal successful completion.
+!
+! SIDE EFFECTS:
+!
+!   None.
+!--
+    BUILTIN
+    	ACTUALCOUNT;
+
+    BIND
+    	QENT	= .QENT_A   	: QENTDEF,
+    	HDRQ	= .HDRQ_A   	: QUEDEF,
+    	SFX 	= .SFX_A    	: BLOCK [,BYTE];
+
+    LOCAL
+    	STR 	: BLOCK [DSC$K_S_BLN,BYTE],
+    	fsbuf	: VECTOR [256,BYTE],
+    	FAB 	: $FAB_DECL,
+    	RAB 	: $RAB_DECL,
+    	R   :	 REF TXTDEF,
+    	STATUS;
+
+    INIT_SDESC (STR, %ALLOCATION (fsbuf), fsbuf);
+    FLQ_MAKE_FSPEC (.QENT [QENT_L_ENTNUM], SFX, STR, STR [DSC$W_LENGTH]);
+
+    $FAB_INIT (FAB=FAB, FAC=PUT, RFM=VAR, MRS=0, FNA=.STR [DSC$A_POINTER],
+    	FNS=.STR [DSC$W_LENGTH]);
+    $RAB_INIT (RAB=RAB, FAB=FAB);
+
+    STATUS = $CREATE (FAB=FAB);
+    IF NOT .STATUS THEN RETURN .STATUS;
+
+    $CONNECT (RAB=RAB);
+
+    R = .HDRQ [QUE_L_HEAD];
+    WHILE .R NEQA HDRQ [QUE_L_HEAD] DO
+    BEGIN
+    	RAB [RAB$W_RSZ] = .R [TXT_W_LEN] + 4;
+    	RAB [RAB$L_RBF] = R [TXT_W_CODE];
+    	$PUT (RAB=RAB);
+    	R = .R [TXT_L_FLINK];
+    END;
+
+    $DISCONNECT (RAB=RAB);
+    $CLOSE (FAB=FAB);
+
+    SS$_NORMAL
+
+END; ! WRITE_HDRS
+
+%SBTTL 'READ_HDRS'
+GLOBAL ROUTINE READ_HDRS (QAB, QENT_A, SFX_A, HDRQ_A) = 
+BEGIN
+!++
+! FUNCTIONAL DESCRIPTION:
+!
+!   Reads in the info from a .HDR_INFO file.
+!
+! RETURNS:  	cond_value, longword (unsigned), write only, by value
+!
+! PROTOTYPE:
+!
+!   READ_HDRS  qab, qent, sfx, hdrq
+!
+! IMPLICIT INPUTS:  None.
+!
+! IMPLICIT OUTPUTS: None.
+!
+! COMPLETION CODES:
+!
+!   SS$_NORMAL:	    	normal successful completion.
+!
+! SIDE EFFECTS:
+!
+!   None.
+!--
+    BIND
+    	QENT	= .QENT_A   	: QENTDEF,
+    	SFX 	= .SFX_A    	: BLOCK [,BYTE],
+    	HDRQ	= .HDRQ_A   	: QUEDEF;
+
+    LOCAL
+    	STR 	: BLOCK [DSC$K_S_BLN,BYTE],
+    	buf	: VECTOR [1024,BYTE],
+    	FAB 	: $FAB_DECL,
+    	RAB 	: $RAB_DECL,
+    	FHC 	: $XABFHC_DECL,
+    	TXT 	: REF TXTDEF,
+    	STATUS;
+
+    INIT_SDESC (STR, %ALLOCATION (buf), buf);
+    FLQ_MAKE_FSPEC (.QENT [QENT_L_ENTNUM], SFX, STR, STR [DSC$W_LENGTH]);
+
+    $FAB_INIT (FAB=FAB, FAC=GET, FNA=.STR [DSC$A_POINTER],
+    	       FNS=.STR [DSC$W_LENGTH], XAB=FHC);
+    $XABFHC_INIT (XAB=FHC);
+
+    STATUS = $OPEN (FAB=FAB);
+    IF NOT .STATUS THEN RETURN .STATUS;
+
+    $RAB_INIT (RAB=RAB, FAB=FAB, USZ=.FHC [XAB$W_LRL], UBF=buf);
+    IF .fhc [XAB$W_LRL] GTRU %ALLOCATION (buf) THEN
+    BEGIN
+    	status = LIB$GET_VM_PAGE (%REF ((.FHC [XAB$W_LRL]+511) ^ -9), RAB [RAB$L_UBF]);
+    	IF NOT .status THEN
+    	BEGIN
+    	    $CLOSE (FAB=fab);
+    	    RETURN .status;
+    	END;
+    END;
+
+    $CONNECT (RAB=RAB);
+
+    WHILE $GET (RAB=RAB) DO
+    BEGIN
+    	TXT = MEM_GETTXT (.RAB [RAB$W_RSZ]);
+    	CH$MOVE (.RAB [RAB$W_RSZ], .RAB [RAB$L_UBF], TXT [TXT_W_CODE]);
+    	INSQUE (.TXT, .HDRQ [QUE_L_TAIL]);
+    END;
+
+    IF .rab [RAB$L_UBF] NEQA buf THEN
+    	LIB$FREE_VM_PAGE (%REF ((.FHC [XAB$W_LRL]+511) ^ -9), RAB [RAB$L_UBF]);
+
+    $DISCONNECT (RAB=RAB);
+    $CLOSE (FAB=FAB);
+
+    SS$_NORMAL
+
+END; ! READ_HDRS
+
+END
+ELUDOM

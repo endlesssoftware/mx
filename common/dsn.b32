@@ -1,0 +1,1314 @@
+%TITLE 'DSN'
+MODULE DSN (IDENT='V1.3', ADDRESSING_MODE (EXTERNAL=LONG_RELATIVE, NONEXTERNAL=LONG_RELATIVE)) =
+BEGIN
+!++
+! FACILITY: 	    MX
+!
+! ABSTRACT: 	    Routines for generating DSNs.
+!
+! MODULE DESCRIPTION:
+!
+!   description
+!
+! AUTHOR:   	    M. Madison
+!
+! Copyright (c) 2008, Matthew Madison.
+! 
+! All rights reserved.
+! 
+! Redistribution and use in source and binary forms, with or without
+! modification, are permitted provided that the following conditions
+! are met:
+! 
+!     * Redistributions of source code must retain the above
+!       copyright notice, this list of conditions and the following
+!       disclaimer.
+!     * Redistributions in binary form must reproduce the above
+!       copyright notice, this list of conditions and the following
+!       disclaimer in the documentation and/or other materials provided
+!       with the distribution.
+!     * Neither the name of the copyright owner nor the names of any
+!       other contributors may be used to endorse or promote products
+!       derived from this software without specific prior written
+!       permission.
+! 
+! THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
+! "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
+! LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
+! A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
+! OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
+! SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
+! LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
+! DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
+! THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
+! (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
+! OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+! CREATION DATE:    01-JUL-1998
+!
+! MODIFICATION HISTORY:
+!
+!   01-JUL-1998	V1.0	Madison	    Initial coding.
+!   20-JUL-1998	V1.0-1	Madison	    Fix "mulipart", address types.
+!   21-JUL-1998	V1.0-2	Madison	    Fix extra blank lines, x-other address type.
+!   25-JUL-1998	V1.0-3	Madison	    Fix memory leak.
+!   30-JUL-1998	V1.0-4	Madison	    Fix loop.
+!   11-AUG-1998	V1.0-5	Madison	    Set ENVL_V_DSN_SENTDT flag in envelope.
+!   12-SEP-1998	V1.0-6	Madison	    Logical name to turn off RELAY DSNs.
+!   02-DEC-1998	V1.0-7	Madison	    Logical name to turn off initial DELAY DSNs.
+!   24-JAN-2000	V1.1	Madison	    Add CC-to-postmaster support.
+!   29-NOV-2000	V1.2	Madison	    Headers only if message exceeds threshold size.
+!   13-MAR-2002 V1.3    Madison     DSN even if sender is <> if CC-to-Postmaster is on.
+!--
+    LIBRARY 'SYS$LIBRARY:STARLET';
+    LIBRARY 'MX';
+    LIBRARY 'FLQ';
+    LIBRARY 'FIELDS';
+
+    FORWARD ROUTINE
+    	DSN_REPORT_INIT,
+    	DSN_REPORT_ADD_RCPT,
+    	DSN_REPORT_SEND,
+        do_send,
+    	DSN_SET_RCPT_STATUS,
+    	mta_type,
+    	free_context	    	: NOVALUE,
+    	add_to_queue	    	: NOVALUE,
+        copy_rcpt;
+
+    EXTERNAL ROUTINE
+    	MEM_GETRCPT, MEM_FREERCPT, MEM_GETTXT,
+    	XTEXT_DECODE, MX_MKDATE, PARSE821, MX_FILE_OPEN, MX_FILE_READ,
+    	MX_FILE_WRITE, MX_FILE_CLOSE, WRITE_ENVELOPE, WRITE_HDRS,
+    	MAKE_ADDRESS, MAKE_ADDR821, MAKE_TO_ADDRESS,
+    	DISPOSE_ENVELOPE, FORMAT_HDR, PARSE_MBOX,
+    	G_HAT (LIB$GET_VM, LIB$FREE_VM, LIB$SUB_TIMES, STR$CONCAT),
+    	G_HAT (MTH$RANDOM, LIB$CVT_DTB);
+
+    _DEF (DSN)
+    	DSN_Q_RCPTQUE	= _QUAD,
+    	DSN_Q_MAYBQUE	= _QUAD,
+        DSN_Q_PSTMQUE   = _QUAD,
+    	DSN_Q_NTFYINTVL	= _QUAD,
+    	DSN_L_FLAGS 	= _LONG,
+    	_OVERLAY (DSN_L_FLAGS)
+    	    DSN_V_NORELAYS  = _BIT,
+    	    DSN_V_NODELAY1  = _BIT,
+    	    DSN_V_CCPSTMSTR = _BIT,
+    	_ENDOVERLAY
+    	DSN_L_SZTHRESH	= _LONG
+    _ENDDEF (DSN);
+
+    BIND
+    	boundarychars	= %ASCID'BCDFGHJKLMNPQRSTVWXYZbcdghjklmnpqrstvwxyz0123456789''()+_,-./:=?' : BLOCK [,BYTE],
+    	null_d	    	= %ASCID'',
+    	ntfylog_d   	= %ASCID'MX_DSN_NOTIFICATION_INTERVAL',
+    	ntfydflt_d  	= %ASCID'0 12:00:00.00',
+    	delivered_as_d	= %ASCID'    Actual address: ',
+    	address_d       = %ASCID'  Address: ' 	    	    : BLOCK [,BYTE],
+    	postmaster_d	= %ASCID'Postmaster',
+    	threshlog_d 	= %ASCID'MX_DSN_TEXT_SIZE_THRESHOLD',
+        no_sender_d     = %ASCID'[no sender address]'       : BLOCK [,BYTE];
+
+    LITERAL
+    	DSN_K_DFLT_SZTHRESH   = 65536;
+
+    MACRO
+    	repmtahdr   	= 'Reporting-MTA: dns;' %,
+    	arrdate	    	= 'Arrival-Date: '%,
+    	sthdr	    	= 'Status: '%,
+    	ladate	    	= 'Last-Attempt-Date: '%,
+    	status_was  	= '  Status:  '%;
+
+    OWN
+    	action_dsc    : VECTOR [6,LONG] INITIAL (%ASCID'', %ASCID'delivered', %ASCID'delayed',
+    	    	    	    	    	       %ASCID'relayed', %ASCID'expanded', %ASCID'failed'),
+    	action_text : VECTOR [7,LONG] INITIAL (%ASCID'',
+    	    	    	%ASCID'  --Successful delivery to:',
+    	    	    	%ASCID'  --Delayed delivery for:',
+    	    	    	%ASCID'  --Successful relay to:',
+    	    	    	%ASCID'  --Successful alias expansion for:',
+    	    	    	%ASCID'  --Failed delivery to:',
+    	    	    	%ASCID'  --Unknown delivery action for:'),
+    	action_subj : VECTOR [6,LONG] INITIAL (%ASCID'',
+    	    	    	%ASCID'Message delivered successfully',
+    	    	    	%ASCID'Message delivery delayed',
+    	    	    	%ASCID'Message relayed successfully',
+    	    	    	%ASCID'Message delivered successfully: alias expansion occurred',
+    	    	    	%ASCID'Message delivery failed');
+
+    EXTERNAL LITERAL
+    	MX_SMTP$_FACILITY;
+
+
+%SBTTL 'DSN_REPORT_INIT'
+GLOBAL ROUTINE DSN_REPORT_INIT (ctx_a_a, envl_a, x_cc_p) = 
+BEGIN
+!++
+! FUNCTIONAL DESCRIPTION:
+!
+!   Initializes DSN report context.
+!
+! RETURNS:  	cond_value, longword (unsigned), write only, by value
+!
+! PROTOTYPE:
+!
+!   DSN_REPORT_INIT  ctx, envl
+!
+!   ctx:    REF DSNDEF, write only, by reference
+!   envl:   ENVLDEF, read only, by reference
+!
+! IMPLICIT INPUTS:  None.
+!
+! IMPLICIT OUTPUTS: None.
+!
+! COMPLETION CODES:
+!
+!   SS$_NORMAL:	    	normal successful completion.
+!
+! SIDE EFFECTS:	    None.
+!--
+    BIND
+    	ctx 	= .ctx_a_a  : REF DSNDEF,
+    	envl	= .envl_a   : ENVLDEF;
+
+    BUILTIN
+    	ACTUALCOUNT;
+
+    BIND_ENVL_FIELDS (envl);
+
+    LOCAL
+    	lnmlst	: $ITMLST_DECL (ITEMS=1),
+    	lnmbuf	: VECTOR [64,BYTE],
+    	dsc 	: BLOCK [DSC$K_S_BLN,BYTE],
+        cc_p,
+        was_local,
+    	status;
+
+    cc_p = (IF ACTUALCOUNT () LSSU 3 THEN 0 ELSE .x_cc_p);
+    was_local = .envl [ENVL_V_ORIGIN] AND .envl [ENVL_L_ORIGIN] EQLU MX_K_ORG_LOCAL;
+
+    ctx = 0;
+
+    !
+    !   Skip the DSN if we aren't notifying the local postmaster OR if
+    !   if the message originated from the local system and has no FROMADR or has <> as FROMADR.
+    !
+    IF NOT .cc_p OR .was_local THEN
+    BEGIN
+        IF NOT .envl [ENVL_V_FROMADR] OR .fromadr EQLA 0 THEN RETURN SS$_NORMAL;
+        IF .fromadr [TXT_W_LEN] EQL 2 AND CH$EQL (2, fromadr [TXT_T_TEXT], 2, UPLIT ('<>')) THEN
+    	    RETURN SS$_NORMAL;
+    END;
+
+    status = LIB$GET_VM (%REF (DSN_S_DSNDEF), ctx);
+    IF NOT .status THEN
+    BEGIN
+    	ctx = 0;
+    	RETURN .status;
+    END;
+
+    INIT_QUEUE (ctx [DSN_Q_RCPTQUE]);
+    INIT_QUEUE (ctx [DSN_Q_MAYBQUE]);
+    INIT_QUEUE (ctx [DSN_Q_PSTMQUE]);
+
+    ctx [DSN_L_FLAGS] = 0;
+    ctx [DSN_V_NORELAYS] = $TRNLNM (TABNAM=%ASCID'LNM$FILE_DEV', LOGNAM=%ASCID'MX_DSN_DISABLE_RELAY_NOTIFICATIONS',
+    	    	    	    	    ACMODE=%REF (PSL$C_EXEC));
+    ctx [DSN_V_NODELAY1] = $TRNLNM (TABNAM=%ASCID'LNM$FILE_DEV', LOGNAM=%ASCID'MX_DSN_DISABLE_INITIAL_DELAY_NOTIFICATIONS',
+    	    	    	    	    ACMODE=%REF (PSL$C_EXEC));
+    ctx [DSN_V_CCPSTMSTR] = .cc_p;
+
+    INIT_SDESC (dsc, %ALLOCATION (lnmbuf), lnmbuf);
+    $ITMLST_INIT (ITMLST=lnmlst,
+    	    	    (ITMCOD=LNM$_STRING, BUFSIZ=%ALLOCATION (lnmbuf), BUFADR=lnmbuf, RETLEN=dsc [DSC$W_LENGTH]));
+    status = $TRNLNM (TABNAM=%ASCID'LNM$FILE_DEV', LOGNAM=ntfylog_d, ITMLST=lnmlst);
+    IF .status THEN
+    	status = $BINTIM (TIMBUF=dsc, TIMADR=ctx [DSN_Q_NTFYINTVL]);
+    IF NOT .status THEN
+    	$BINTIM (TIMBUF=ntfydflt_d, TIMADR=ctx [DSN_Q_NTFYINTVL]);
+    
+    INIT_SDESC (dsc, %ALLOCATION (lnmbuf), lnmbuf);
+    $ITMLST_INIT (ITMLST=lnmlst,
+    	    	    (ITMCOD=LNM$_STRING, BUFSIZ=%ALLOCATION (lnmbuf), BUFADR=lnmbuf, RETLEN=dsc [DSC$W_LENGTH]));
+    status = $TRNLNM (TABNAM=%ASCID'LNM$FILE_DEV', LOGNAM=threshlog_d, ITMLST=lnmlst);
+    IF .status THEN
+    	status = LIB$CVT_DTB (.dsc [DSC$W_LENGTH], lnmbuf, ctx [DSN_L_SZTHRESH]);
+    IF .status THEN
+    	ctx [DSN_L_SZTHRESH] = .ctx [DSN_L_SZTHRESH] * 1024
+    ELSE
+    	ctx [DSN_L_SZTHRESH] = DSN_K_DFLT_SZTHRESH;
+
+    SS$_NORMAL
+
+END; ! DSN_REPORT_INIT
+
+%SBTTL 'DSN_REPORT_ADD_RCPT'
+GLOBAL ROUTINE DSN_REPORT_ADD_RCPT (ctx_a_a, rcpt_a_a, remote_dsn_capable) = 
+BEGIN
+!++
+! FUNCTIONAL DESCRIPTION:
+!
+!   Adds a recipient to a DSN report, if the DSN report settings match the
+!   delivery status.
+!
+! RETURNS:  	cond_value, longword (unsigned), write only, by value
+!
+! PROTOTYPE:
+!
+!   DSN_REPORT_ADD_RCPT  ctx, rcpt, remote_dsn_capable
+!
+!   ctx:    	    	REF DSNCTX, modify, by reference
+!   rcpt:   	    	REF RCPTDEF, read only, by reference
+!   remote_dsn_capable:	longword_unsigned, read only, by value
+!
+! IMPLICIT INPUTS:  None.
+!
+! IMPLICIT OUTPUTS: None.
+!
+! COMPLETION CODES:
+!
+!   SS$_NORMAL:	    	normal successful completion.
+!
+! SIDE EFFECTS:	    None.
+!--
+    BIND
+    	ctx 	= .ctx_a_a  	: REF DSNDEF,
+    	rcpt	= .rcpt_a_a 	: REF RCPTDEF;
+    BIND_RCPT_FIELDS (rcpt);
+    BIND
+    	ds = rcpt [RCPT_L_DSN_STATUS] : BLOCK [,BYTE];
+
+    IF .ctx EQLA 0 THEN
+        RETURN SS$_NORMAL;
+
+    !
+    ! If DSN=NEVER was set for this recipient, only notify local postmaster.
+    !
+    IF .rcpt [RCPT_V_DSN_NEVER] THEN
+    BEGIN
+        IF .ctx [DSN_V_CCPSTMSTR] AND .ds [STS$V_SEVERITY] EQL STS$K_SEVERE THEN
+            add_to_queue (rcpt, 0, DSN__FAILED, 1, ctx [DSN_Q_PSTMQUE]);
+        RETURN SS$_NORMAL;
+    END;
+
+    !
+    ! If a DSN state was not set for this recipient, only track it if this was a failed delivery.
+    !
+    IF NOT (.rcpt [RCPT_V_DSN_FAILURE] OR .rcpt [RCPT_V_DSN_SUCCESS] OR .rcpt [RCPT_V_DSN_DELAY]) THEN
+    BEGIN
+    	IF .ds [STS$V_SEVERITY] NEQ STS$K_SEVERE THEN RETURN SS$_NORMAL;
+    	add_to_queue (rcpt, ctx [DSN_Q_RCPTQUE], DSN__FAILED, .ctx [DSN_V_CCPSTMSTR], ctx [DSN_Q_PSTMQUE]);
+    	RETURN SS$_NORMAL;
+    END;
+
+    !
+    ! For the success case, only set the DSN_ACTION field for the recipient if the action
+    ! was not set by the caller (who would set it if the action was EXPANDED, for instance)
+    ! or if the action is set to DELIVERED but the system we delivered to was not another
+    ! DSN-capable SMTP mailer.
+    !
+    IF .rcpt [RCPT_V_DSN_SUCCESS] AND .ds [STS$V_SEVERITY] EQL STS$K_SUCCESS THEN
+    BEGIN
+    	IF .remote_dsn_capable NEQ 1 THEN      ! don't add if we sent to another DSN system
+    	BEGIN
+    	    IF .remote_dsn_capable EQL 0 THEN
+    	    BEGIN
+    	    	IF .rcpt [RCPT_L_DSN_ACTION] EQL 0 OR .rcpt [RCPT_L_DSN_ACTION] EQL DSN__DELIVERED THEN
+    	    	    rcpt [RCPT_L_DSN_ACTION] = DSN__RELAYED;
+    	    END
+    	    ELSE IF .rcpt [RCPT_L_DSN_ACTION] EQL 0 THEN
+    	    	rcpt [RCPT_L_DSN_ACTION] = DSN__DELIVERED;
+            !
+    	    ! Don't add to queue if this is a RELAYED DSN and relay notificiations are disabled
+            !
+    	    IF NOT (.ctx [DSN_V_NORELAYS] AND .rcpt [RCPT_L_DSN_ACTION] EQL DSN__RELAYED) THEN
+    	    	add_to_queue (rcpt, ctx [DSN_Q_RCPTQUE], .rcpt [RCPT_L_DSN_ACTION], 0, 0);
+    	END;
+    	RETURN SS$_NORMAL;
+    END;
+
+    !
+    ! If a non-fatal status was encountered, add to the "maybe" queue, which will
+    ! trigger a "delayed" DSN if it has been long enough since the last delay DSN was
+    ! sent (from the ENVLDEF structure passed in at REPORT_SEND time).
+    !
+    IF .rcpt [RCPT_V_DSN_DELAY] AND .ds [STS$V_SEVERITY] EQL STS$K_WARNING THEN
+    BEGIN
+    	add_to_queue (rcpt, ctx [DSN_Q_MAYBQUE], DSN__DELAYED, 0, 0);
+    	RETURN SS$_NORMAL;
+    END;
+
+    !
+    ! Failure case.  Make sure postmaster is notified even if sender doesn't care.
+    !
+    IF .ds [STS$V_SEVERITY] EQL STS$K_SEVERE THEN
+    BEGIN
+        IF .rcpt [RCPT_V_DSN_FAILURE] THEN
+    	    add_to_queue (rcpt, ctx [DSN_Q_RCPTQUE], DSN__FAILED, .ctx [DSN_V_CCPSTMSTR], ctx [DSN_Q_PSTMQUE])
+        ELSE IF .ctx [DSN_V_CCPSTMSTR] THEN
+            add_to_queue (rcpt, 0, DSN__FAILED, 1, ctx [DSN_Q_PSTMQUE]);
+    END;
+
+    SS$_NORMAL
+
+END;
+
+%SBTTL 'do_send'
+ROUTINE do_send (ctx_a_a, qctx, agent, hdrq_a, refent_a, envl_a, is_cc_p) = 
+BEGIN
+!++
+! FUNCTIONAL DESCRIPTION:
+!
+!   Sends a DSN report to sender or postmaster.
+!
+! RETURNS:  	cond_value, longword (unsigned), write only, by value
+!
+! PROTOTYPE:
+!
+!   DSN_REPORT_SEND  ctx, qctx, agent, hdrq, refent, envl
+!
+!   ctx:    	REF DSNCTX, modify, by reference
+!   qctx:   	longword_unsigned, read only, by value
+!   agent:  	longword_unsigned, read only, by value
+!   refent: 	QENTDEF, read only, by reference
+!   envl:   	ENVLDEF, read only, by reference
+!
+! IMPLICIT INPUTS:  None.
+!
+! IMPLICIT OUTPUTS: None.
+!
+! COMPLETION CODES:
+!
+!   SS$_NORMAL:	    	normal successful completion.
+!
+! SIDE EFFECTS:	    None.
+!--
+    BIND
+    	ctx 	= .ctx_a_a  	    	: REF DSNDEF,
+    	hdrq	= .hdrq_a   	    	: QUEDEF,
+    	refent	= .refent_a 	    	: QENTDEF,
+    	envl	= .envl_a   	    	: ENVLDEF;
+        
+    BIND_ENVL_FIELDS (envl);
+
+    LOCAL
+    	newent	    : QENTDEF,
+    	newenvl	    : ENVLDEF,
+    	hdr 	    : REF TXTDEF,
+    	msgid	    : REF TXTDEF,
+    	subj	    : REF TXTDEF,
+    	newhdrq	    : QUEDEF,
+    	txt 	    : REF TXTDEF,
+    	txtque	    : QUEDEF,
+    	rcpt	    : REF RCPTDEF,
+        dsnque      : REF QUEDEF,
+    	lnmlst	    : $ITMLST_DECL (ITEMS=1),
+    	now 	    : VECTOR [2,LONG],
+    	buf 	    : VECTOR [2048,BYTE],
+    	boundarybuf : VECTOR [56,BYTE],
+    	sdsc	    : BLOCK [DSC$K_S_BLN,BYTE],
+    	rdsc	    : BLOCK [DSC$K_S_BLN,BYTE],
+    	boundary    : BLOCK [DSC$K_S_BLN,BYTE],
+    	lclp        : BLOCK [DSC$K_S_BLN,BYTE],
+    	domp        : BLOCK [DSC$K_S_BLN,BYTE],
+    	found_failure,
+    	hdrs_only,
+    	do_it,
+    	action,
+    	unit,
+    	status;
+
+    !
+    ! Send headers only to local postmaster.
+    !
+    hdrs_only = .envl [ENVL_V_DSN_HDRSONLY] OR .is_cc_p;
+    IF NOT .hdrs_only THEN
+    BEGIN
+    	LOCAL
+    	    msg_size;
+    	msg_size = .refent [QENT_L_SIZE] /
+    	    	    (IF .envl [ENVL_L_RCPTCOUNT] EQL 0 THEN 1 ELSE .envl [ENVL_L_RCPTCOUNT]);
+    	hdrs_only = .msg_size GTRU .ctx [DSN_L_SZTHRESH];
+    END;
+
+    !
+    ! DSN generation, formatted per RFC1892 (multipart/report).
+    !
+    INIT_SDESC (sdsc, %ALLOCATION (buf), buf);
+    INIT_QUEUE (newhdrq);
+
+    FLQ_INIT_QENT (newent);
+    newent [QENT_L_STATUS] = FLQ_K_STINP;
+    newent [QENT_V_LOCK]   = 1;
+    newent [QENT_L_DSTPRC] = FLQ_K_MX_ROUTER;
+    newent [QENT_L_ORIGIN] = MX_K_ORG_LOCAL;
+
+    status = MAKE_ADDRESS (postmaster_d, %ASCID'MX Mail Delivery System', sdsc, sdsc [DSC$W_LENGTH]);
+    IF .status THEN INSTXT (sdsc, .newhdrq [QUE_L_TAIL], MX_K_HDR_FROM);
+
+    newent [QENT_W_ORGADR] = 2;
+    CH$MOVE (2, UPLIT ('<>'), newent [QENT_T_ORGADR]);
+
+    status = FLQ_ADD (qctx, newent);
+    IF NOT .status THEN
+    	RETURN .status;
+
+    CH$FILL (%CHAR (0), ENVL_S_ENVLDEF, newenvl);
+    newenvl [ENVL_V_ORIGIN] 	= 1;
+    newenvl [ENVL_L_ORIGIN] 	= MX_K_ORG_LOCAL;
+    newenvl [ENVL_V_FROMADR]	= 1;
+    newenvl [ENVL_A_FROMADR]	= MEM_GETTXT (2, UPLIT ('<>'));
+    newenvl [ENVL_L_RCPTCOUNT]	= 1;
+    INIT_QUEUE (newenvl [ENVL_Q_RCPTQUE]);
+    MEM_GETRCPT (rcpt);
+    IF .is_cc_p THEN
+    BEGIN
+    	INIT_SDESC (sdsc, %ALLOCATION (buf), buf);
+    	status = MAKE_ADDR821 (postmaster_d, sdsc, sdsc [DSC$W_LENGTH]);
+        rcpt [RCPT_A_ADDR] = MEM_GETTXT (.sdsc [DSC$W_LENGTH], .sdsc [DSC$A_POINTER]);
+    END
+    ELSE
+        rcpt [RCPT_A_ADDR] = MEM_GETTXT (.fromadr [TXT_W_LEN], fromadr [TXT_T_TEXT]);
+    rcpt [RCPT_V_DSN_NEVER] = 1;
+    INSQUE_TAIL (.rcpt, newenvl [ENVL_Q_RCPTQUE]);
+
+    IF .rcpt [RCPT_A_ADDR] EQLA 0 THEN
+    BEGIN
+        newent [QENT_L_STATUS] = FLQ_K_STCAN;
+        FLQ_UPDATE (qctx, newent);
+        DISPOSE_ENVELOPE (newenvl);
+        RETURN 0;
+    END;
+    
+
+    status = WRITE_ENVELOPE (.qctx, newent, %ASCID'SRC_INFO', newenvl);
+    DISPOSE_ENVELOPE (newenvl);
+    IF NOT .status THEN
+    BEGIN
+    	newent [QENT_L_STATUS] = FLQ_K_STCAN;
+    	FLQ_UPDATE (qctx, newent);
+    	RETURN .status;
+    END;
+
+    INIT_DYNDESC (lclp, domp);
+
+    IF .is_cc_p THEN
+    BEGIN
+    	INIT_SDESC (sdsc, %ALLOCATION (buf), buf);
+    	status = MAKE_TO_ADDRESS (postmaster_d, sdsc, sdsc [DSC$W_LENGTH]);
+    	    hdr = MEM_GETTXT (.sdsc [DSC$W_LENGTH], .sdsc [DSC$A_POINTER]);
+    	    hdr [TXT_W_CODE] = MX_K_HDR_TO;
+    	    INSQUE (.hdr, .newhdrq [QUE_L_TAIL]);
+    END
+    ELSE
+    BEGIN
+    	LOCAL
+    	    toadr   : BLOCK [DSC$K_S_BLN,BYTE];
+
+        INIT_SDESC (sdsc, .fromadr [TXT_W_LEN], fromadr [TXT_T_TEXT]);
+    	INIT_DYNDESC (toadr);
+    	IF PARSE821 (sdsc, 0, lclp, domp) THEN
+    	BEGIN
+    	    STR$CONCAT (toadr, lclp, %ASCID'@', domp);
+    	    INSTXT (toadr, .newhdrq [QUE_L_TAIL], MX_K_HDR_TO);
+    	END
+    	ELSE
+    	BEGIN
+    	    hdr = MEM_GETTXT (.fromadr [TXT_W_LEN], fromadr [TXT_T_TEXT]);
+    	    hdr [TXT_W_CODE] = MX_K_HDR_TO;
+    	    INSQUE (.hdr, .newhdrq [QUE_L_TAIL]);
+    	END;
+    	FREE_STRINGS (toadr);
+    END;
+
+    INIT_SDESC (sdsc, %ALLOCATION (buf), buf);
+
+    $GETTIM (TIMADR=now);
+    MX_MKDATE (now, sdsc, sdsc [DSC$W_LENGTH]);
+    INSTXT (sdsc, .newhdrq [QUE_L_TAIL], MX_K_HDR_DATE);
+
+    !
+    ! Try to provide as descriptive a subject as possible.
+    !
+    dsnque = (IF .is_cc_p THEN ctx [DSN_Q_PSTMQUE] ELSE ctx [DSN_Q_RCPTQUE]);
+
+    rcpt = .dsnque [QUE_L_HEAD];
+    action = .rcpt [RCPT_L_DSN_ACTION];
+    rcpt = .rcpt [RCPT_L_FLINK];
+    WHILE .rcpt NEQA .dsnque DO
+    BEGIN
+    	IF .action NEQU .rcpt [RCPT_L_DSN_ACTION] THEN EXITLOOP;
+    	rcpt = .rcpt [RCPT_L_FLINK];
+    END;
+    IF .rcpt EQLA dsnque AND .action GEQU DSN__LOACTION AND .action LEQU DSN__HIACTION THEN
+    	INSTXT (.action_subj [.action], .newhdrq [QUE_L_TAIL], MX_K_HDR_SUBJECT)
+    ELSE
+    	INSTXT (%ASCID'Delivery status notification', .newhdrq [QUE_L_TAIL], MX_K_HDR_SUBJECT);
+
+    INSTXT (%ASCID'1.0', .newhdrq [QUE_L_TAIL], MX_K_HDR_MIME_VERSION);
+
+    boundarybuf [0] = boundarybuf [1] = %C'-';
+    boundarybuf [2] = %C'='; boundarybuf [3] = '_';
+    BEGIN
+    	BUILTIN CVTLF, CVTFL, MULF;
+    	EXTERNAL ROUTINE G_HAT (MTH$RANDOM);
+    	BIND bchars = .boundarychars [DSC$A_POINTER] : VECTOR [,BYTE];
+    	LOCAL
+    	    seed,
+    	    n,
+    	    max_f,
+    	    rand_f,
+    	    prod_f;
+
+    	CVTLF (%REF (.boundarychars [DSC$W_LENGTH]), max_f);
+    	seed = .now [0];
+    	INCR i FROM 4 TO %ALLOCATION (boundarybuf)-3 DO
+    	BEGIN
+%IF %BLISS (BLISS32V) %THEN
+    	    rand_f = MTH$RANDOM (seed);
+%ELSE
+    	    MTH$RANDOM (seed; %FFLOAT (rand_f));
+%FI
+    	    MULF (max_f, rand_f, prod_f);
+    	    CVTFL (prod_f, n);
+            boundarybuf [.i] = .bchars [.n];
+    	END;
+    END;
+    boundarybuf [%ALLOCATION (boundarybuf)-2] = boundarybuf [%ALLOCATION (boundarybuf)-1] = %C'-';
+
+    INIT_SDESC (boundary, %ALLOCATION (boundarybuf)-2, boundarybuf);
+    sdsc [DSC$W_LENGTH] = %ALLOCATION (buf);
+    $FAO (%ASCID'multipart/report; report-type=delivery-status; boundary="!AD"',
+    	  sdsc [DSC$W_LENGTH], sdsc, .boundary [DSC$W_LENGTH]-2, CH$PLUS (boundarybuf, 2));
+    INSTXT (sdsc, .newhdrq [QUE_L_TAIL], MX_K_HDR_MIME_C_TYPE);
+
+    status = WRITE_HDRS (.qctx, newent, %ASCID'HDR_INFO', newhdrq);
+    WHILE NOT REMQUE_HEAD (newhdrq, hdr) DO FREETXT (hdr);
+    IF NOT .status THEN
+    BEGIN
+    	newent [QENT_L_STATUS] = FLQ_K_STCAN;
+    	FLQ_UPDATE (qctx, newent);
+    	FREE_STRINGS (lclp, domp);
+    	RETURN .status;
+    END;
+
+    sdsc [DSC$W_LENGTH] = %ALLOCATION (buf);
+    status = FLQ_MAKE_FSPEC (.newent [QENT_L_ENTNUM], %ASCID'MSG_TEXT', sdsc, sdsc [DSC$W_LENGTH]);
+    IF .status THEN
+    	status = MX_FILE_OPEN (MX__FILE_WRITE, sdsc, unit);
+    IF NOT .status THEN
+    BEGIN
+    	newent [QENT_L_STATUS] = FLQ_K_STCAN;
+    	FLQ_UPDATE (qctx, newent);
+    	FREE_STRINGS (lclp, domp);
+    	RETURN .status;
+    END;
+
+    !
+    ! Message part 1:  human-readable form
+    !
+    MX_FILE_WRITE (.unit, boundary);
+    MX_FILE_WRITE (.unit, %ASCID'Content-Type: text/plain');
+    MX_FILE_WRITE (.unit, null_d);
+    newent [QENT_L_SIZE] = .boundary [DSC$W_LENGTH] + 24;
+    IF .is_cc_p THEN
+    BEGIN
+        sdsc [DSC$W_LENGTH] = %ALLOCATION (buf);
+        $FAO (%ASCID'Delivery status report on message sent by: !AD', sdsc [DSC$W_LENGTH], sdsc,
+                    (IF .fromadr EQLA 0 THEN .no_sender_d [DSC$W_LENGTH] ELSE .fromadr [TXT_W_LEN]),
+                    (IF .fromadr EQLA 0 THEN .no_sender_d [DSC$A_POINTER] ELSE fromadr [TXT_T_TEXT]));
+        MX_FILE_WRITE (.unit, sdsc);
+        newent [QENT_L_SIZE] = .newent [QENT_L_SIZE] + .sdsc [DSC$W_LENGTH];
+    END
+    ELSE
+    BEGIN
+        MX_FILE_WRITE (.unit, %ASCID'This is a report on the delivery status of your message.');
+        newent [QENT_L_SIZE] = .newent [QENT_L_SIZE] + 56;
+    END;
+    MX_FILE_WRITE (.unit, null_d);
+    IF .dsn_envid NEQA 0 THEN
+    BEGIN
+    	sdsc [DSC$W_LENGTH] = %ALLOCATION (buf);
+    	$FAO (%ASCID'  Envelope ID: !AD', sdsc [DSC$W_LENGTH], sdsc, .dsn_envid [TXT_W_LEN], dsn_envid [TXT_T_TEXT]);
+    	MX_FILE_WRITE (.unit, sdsc);
+    	newent [QENT_L_SIZE] = .newent [QENT_L_SIZE] + .sdsc [DSC$W_LENGTH];
+    END;
+    msgid = subj = 0;
+    hdr = .hdrq [QUE_L_HEAD];
+    WHILE (.hdr NEQA hdrq) AND (.msgid EQLA 0 OR .subj EQLA 0) DO
+    BEGIN
+    	IF .hdr [TXT_W_CODE] EQL MX_K_HDR_SUBJECT THEN subj = .hdr;
+    	IF .hdr [TXT_W_CODE] EQL MX_K_HDR_MESSAGE_ID THEN msgid = .hdr;
+    	hdr = .hdr [TXT_L_FLINK];
+    END;
+    IF .msgid NEQA 0 THEN
+    BEGIN
+    	sdsc [DSC$W_LENGTH] = %ALLOCATION (buf);
+    	$FAO (%ASCID'  Message-ID:  !AD', sdsc [DSC$W_LENGTH], sdsc, .msgid [TXT_W_LEN], msgid [TXT_T_TEXT]);
+    	MX_FILE_WRITE (.unit, sdsc);
+    	newent [QENT_L_SIZE] = .newent [QENT_L_SIZE] + .sdsc [DSC$W_LENGTH];
+    END;
+    IF .subj NEQA 0 THEN
+    BEGIN
+    	sdsc [DSC$W_LENGTH] = %ALLOCATION (buf);
+    	$FAO (%ASCID'  Subject:     !AD', sdsc [DSC$W_LENGTH], sdsc, .subj [TXT_W_LEN], subj [TXT_T_TEXT]);
+    	MX_FILE_WRITE (.unit, sdsc);
+    	newent [QENT_L_SIZE] = .newent [QENT_L_SIZE] + .sdsc [DSC$W_LENGTH];
+    END;
+
+    MX_FILE_WRITE (.unit, null_d);
+
+    INCR i FROM DSN__LOACTION TO DSN__HIACTION+1 DO
+    BEGIN
+    	LOCAL did_one;
+
+    	did_one = 0;    	
+    	rcpt = .dsnque [QUE_L_HEAD];
+    	WHILE .rcpt NEQA .dsnque DO
+    	BEGIN
+    	    IF .rcpt [RCPT_L_DSN_ACTION] EQLU .i OR
+    	       (.i GTRU DSN__HIACTION AND (.rcpt [RCPT_L_DSN_ACTION] LSSU DSN__LOACTION OR
+                                           .rcpt [RCPT_L_DSN_ACTION] GTRU DSN__HIACTION)) THEN
+    	    BEGIN
+    	    	BIND_RCPT_FIELDS (rcpt);
+
+    	    	IF NOT .did_one THEN
+    	    	BEGIN
+    	    	    MX_FILE_WRITE (.unit, .action_text [.i]);
+    	    	    did_one = 1;
+    	    	END;
+
+    	    	IF .oraddr NEQA 0 THEN
+    	    	BEGIN
+    	    	    CH$MOVE (.address_d [DSC$W_LENGTH], .address_d [DSC$A_POINTER], buf);
+    	    	    INIT_SDESC (rdsc, .oraddr [TXT_W_LEN], oraddr [TXT_T_TEXT]);
+    	    	    INIT_SDESC (sdsc, %ALLOCATION (buf)-.address_d [DSC$W_LENGTH],
+    	    	    	    	CH$PLUS (buf, .address_d [DSC$W_LENGTH]));
+    	    	    IF XTEXT_DECODE (oraddr, sdsc, sdsc [DSC$W_LENGTH]) THEN
+    	    	    BEGIN
+    	    	    	sdsc [DSC$W_LENGTH] = .sdsc [DSC$W_LENGTH] + .address_d [DSC$W_LENGTH];
+    	    	    	sdsc [DSC$A_POINTER] = buf;
+    	    	    	MX_FILE_WRITE (.unit, sdsc);
+    	    	    	newent [QENT_L_SIZE] = .newent [QENT_L_SIZE] + .sdsc [DSC$W_LENGTH];
+    	    	    END;
+    	    	END;
+    	    	INIT_SDESC (sdsc, %ALLOCATION (buf), buf);
+    	    	INIT_SDESC (rdsc, .addr [TXT_W_LEN], addr [TXT_T_TEXT]);
+    	    	IF PARSE821 (rdsc, 0, lclp, domp) THEN
+    	    	    $FAO (%ASCID'!AS!AS@!AS', sdsc [DSC$W_LENGTH], sdsc,
+    	    	    	    (IF .oraddr EQLA 0 THEN address_d ELSE delivered_as_d), lclp, domp)
+    	    	ELSE
+    	    	    $FAO (%ASCID'!AS!AD', sdsc [DSC$W_LENGTH], sdsc,
+    	    	    	    (IF .oraddr EQLA 0 THEN address_d ELSE delivered_as_d), .addr [TXT_W_LEN], addr [TXT_T_TEXT]);
+    	    	MX_FILE_WRITE (.unit, sdsc);
+    	    	newent [QENT_L_SIZE] = .newent [QENT_L_SIZE] + .sdsc [DSC$W_LENGTH];
+    	    	CH$MOVE (%CHARCOUNT (status_was), UPLIT (status_was), buf);
+    	    	INIT_SDESC (sdsc, %ALLOCATION (buf)-%CHARCOUNT (status_was), CH$PLUS (buf, %CHARCOUNT (status_was)));
+    	    	IF $GETMSG (MSGID=.rcpt [RCPT_L_STATUS], MSGLEN=sdsc [DSC$W_LENGTH], BUFADR=sdsc, FLAGS=1) THEN
+    	    	BEGIN
+    	    	    sdsc [DSC$W_LENGTH] = .sdsc [DSC$W_LENGTH] + %CHARCOUNT (status_was);
+    	    	    sdsc [DSC$A_POINTER] = buf;
+    	    	    MX_FILE_WRITE (.unit, sdsc);
+    	    	    newent [QENT_L_SIZE] = .newent [QENT_L_SIZE] + .sdsc [DSC$W_LENGTH];
+    	    	END;
+    	    	INIT_SDESC (sdsc, %ALLOCATION (buf), buf);
+    	    END;
+    	    rcpt = .rcpt [RCPT_L_FLINK];
+    	END;
+    	IF .did_one THEN MX_FILE_WRITE (.unit, null_d);
+    END;
+
+    !
+    ! Message part 2: machine-parseable form
+    !
+    MX_FILE_WRITE (.unit, boundary);
+    MX_FILE_WRITE (.unit, %ASCID'Content-Type: message/delivery-status');
+    MX_FILE_WRITE (.unit, null_d);
+    newent [QENT_L_SIZE] = .newent [QENT_L_SIZE] + .boundary [DSC$W_LENGTH] + 37;
+
+    IF .envl [ENVL_V_DSN_ENVID] THEN
+    BEGIN
+    	sdsc [DSC$W_LENGTH] = %ALLOCATION (buf);
+    	$FAO (%ASCID'Original-Envelope-Id: !AD', sdsc [DSC$W_LENGTH], sdsc, .dsn_envid [TXT_W_LEN], dsn_envid [TXT_T_TEXT]);
+    	MX_FILE_WRITE (.unit, sdsc);
+    	newent [QENT_L_SIZE] = .newent [QENT_L_SIZE] + .sdsc [DSC$W_LENGTH];
+    END;
+
+    CH$MOVE (%CHARCOUNT (repmtahdr), UPLIT (repmtahdr), buf);
+    $ITMLST_INIT (ITMLST=lnmlst,
+    	    	    (ITMCOD=LNM$_STRING, BUFSIZ=%ALLOCATION (buf) - %CHARCOUNT (repmtahdr),
+    	    	     BUFADR=CH$PLUS (buf, %CHARCOUNT (repmtahdr)), RETLEN=sdsc [DSC$W_LENGTH]));
+    IF $TRNLNM (LOGNAM=%ASCID'MX_NODE_NAME', TABNAM=%ASCID'LNM$SYSTEM', ITMLST=lnmlst) THEN
+    BEGIN
+    	sdsc = .sdsc [DSC$W_LENGTH] + %CHARCOUNT (repmtahdr);
+    	MX_FILE_WRITE (.unit, sdsc);
+    	newent [QENT_L_SIZE] = .newent [QENT_L_SIZE] + .sdsc [DSC$W_LENGTH];
+    END;
+
+    IF .envl [ENVL_V_RCVDFROM] THEN
+    BEGIN
+    	sdsc [DSC$W_LENGTH] = %ALLOCATION (buf);
+    	$FAO (%ASCID'Received-From-MTA: smtp;!AD', sdsc [DSC$W_LENGTH], sdsc, .rcvdfrom [TXT_W_LEN], rcvdfrom [TXT_T_TEXT]);
+    	MX_FILE_WRITE (.unit, sdsc);
+    	newent [QENT_L_SIZE] = .newent [QENT_L_SIZE] + .sdsc [DSC$W_LENGTH];
+    END;
+
+    CH$MOVE (%CHARCOUNT (arrdate), UPLIT (arrdate), buf);
+    sdsc [DSC$W_LENGTH] = %ALLOCATION (buf) - %CHARCOUNT (arrdate);
+    sdsc [DSC$A_POINTER] = CH$PLUS (buf, %CHARCOUNT (arrdate));
+    IF MX_MKDATE (refent [QENT_Q_CREDT], sdsc, sdsc [DSC$W_LENGTH]) THEN
+    BEGIN
+    	sdsc [DSC$W_LENGTH] = .sdsc [DSC$W_LENGTH] + %CHARCOUNT (arrdate);
+    	sdsc [DSC$A_POINTER] = buf;
+    	MX_FILE_WRITE (.unit, sdsc);
+    	newent [QENT_L_SIZE] = .newent [QENT_L_SIZE] + .sdsc [DSC$W_LENGTH];
+    END;
+
+    MX_FILE_WRITE (.unit, null_d);
+
+    WHILE NOT REMQUE_HEAD (.dsnque, rcpt) DO
+    BEGIN
+    	BIND_RCPT_FIELDS (rcpt);
+    	BIND rstat  = rcpt [RCPT_L_STATUS] : BLOCK [,BYTE];
+    	LOCAL
+    	    adsc    : BLOCK [DSC$K_S_BLN,BYTE];
+
+    	INIT_SDESC (sdsc, %ALLOCATION (buf), buf);
+    	IF .oraddr NEQA 0 THEN
+    	BEGIN
+    	    $FAO (%ASCID'Originial-Recipient: !AD;', sdsc [DSC$W_LENGTH], sdsc,
+    	    	    (IF .ortype NEQA 0 THEN .ortype [TXT_W_LEN] ELSE 6),
+    	    	    (IF .ortype NEQA 0 THEN ortype [TXT_T_TEXT] ELSE UPLIT ('rfc822')));
+    	    INIT_SDESC (adsc, %ALLOCATION (buf)-.sdsc [DSC$W_LENGTH], CH$PLUS (buf, .sdsc [DSC$W_LENGTH]));
+    	    IF XTEXT_DECODE (oraddr, adsc, adsc [DSC$W_LENGTH]) THEN
+    	    BEGIN
+    	    	sdsc [DSC$W_LENGTH] = .sdsc [DSC$W_LENGTH] + .adsc [DSC$W_LENGTH];
+    	    	MX_FILE_WRITE (.unit, sdsc);
+    	    	newent [QENT_L_SIZE] = .newent [QENT_L_SIZE] + .sdsc [DSC$W_LENGTH];
+    	    END;
+    	END;
+
+    	sdsc [DSC$W_LENGTH] = %ALLOCATION (buf);
+    	INIT_SDESC (rdsc, .addr [TXT_W_LEN], addr [TXT_T_TEXT]);
+    	status = PARSE821 (rdsc, 0, lclp, domp);
+    	IF NOT .status THEN status = PARSE_MBOX (rdsc, lclp, domp);
+    	IF .status THEN
+    	BEGIN
+    	    IF .domp [DSC$W_LENGTH] NEQ 0 THEN
+    	    	$FAO (%ASCID'Final-Recipient: rfc822;!AS@!AS', sdsc [DSC$W_LENGTH], sdsc, lclp, domp)
+    	    ELSE
+    	    	$FAO (%ASCID'Final-Recipient: x-local;!AS', sdsc [DSC$W_LENGTH], sdsc, lclp);
+    	END
+    	ELSE
+    	    $FAO (%ASCID'Final-Recipient: x-local;!AD', sdsc [DSC$W_LENGTH], sdsc, .addr [TXT_W_LEN], addr [TXT_T_TEXT]);
+    	MX_FILE_WRITE (.unit, sdsc);
+    	newent [QENT_L_SIZE] = .newent [QENT_L_SIZE] + .sdsc [DSC$W_LENGTH];
+
+    	sdsc [DSC$W_LENGTH] = %ALLOCATION (buf);
+    	$FAO (%ASCID'Action: !AS', sdsc [DSC$W_LENGTH], sdsc,
+    	    	(IF .rcpt [RCPT_L_DSN_ACTION] LSS DSN__LOACTION OR .rcpt [RCPT_L_DSN_ACTION] GTR DSN__HIACTION
+    	    	 THEN %ASCID'unknown' ELSE .action_dsc [.rcpt [RCPT_L_DSN_ACTION]]));
+    	MX_FILE_WRITE (.unit, sdsc);    
+    	newent [QENT_L_SIZE] = .newent [QENT_L_SIZE] + .sdsc [DSC$W_LENGTH];
+
+    	INIT_SDESC (adsc, %ALLOCATION (buf) - %CHARCOUNT (sthdr), CH$PLUS (buf, %CHARCOUNT (sthdr)));
+    	CH$MOVE (%CHARCOUNT (sthdr), UPLIT (sthdr), buf);
+    	IF $GETMSG (MSGID=.rcpt [RCPT_L_DSN_STATUS], MSGLEN=adsc [DSC$W_LENGTH], BUFADR=adsc, FLAGS=1) THEN
+    	BEGIN
+    	    sdsc [DSC$W_LENGTH] = .adsc [DSC$W_LENGTH] + %CHARCOUNT (sthdr);
+    	    MX_FILE_WRITE (.unit, sdsc);
+    	    newent [QENT_L_SIZE] = .newent [QENT_L_SIZE] + .sdsc [DSC$W_LENGTH];
+    	END;
+
+    	IF .remotemta NEQA 0 THEN
+    	BEGIN
+    	    sdsc [DSC$W_LENGTH] = %ALLOCATION (buf);
+    	    $FAO (%ASCID'Remote-MTA: !AS;!AD', sdsc [DSC$W_LENGTH], sdsc, mta_type (.agent),
+    	    	    .remotemta [TXT_W_LEN], remotemta [TXT_T_TEXT]);
+    	    MX_FILE_WRITE (.unit, sdsc);
+    	    newent [QENT_L_SIZE] = .newent [QENT_L_SIZE] + .sdsc [DSC$W_LENGTH];
+    	END;
+
+    	sdsc [DSC$W_LENGTH] = %ALLOCATION (buf);
+    	$FAO (%ASCID'Diagnostic-Code: !AS;', sdsc [DSC$W_LENGTH], sdsc,
+    	    	(IF .rstat [STS$V_FAC_NO] EQL MX_SMTP$_FACILITY THEN %ASCID'smtp' ELSE %ASCID'x-local'));
+    	INIT_SDESC (adsc, %ALLOCATION (buf) - .sdsc [DSC$W_LENGTH], CH$PLUS (buf, .sdsc [DSC$W_LENGTH]));
+    	IF $GETMSG (MSGID=.rcpt [RCPT_L_STATUS], MSGLEN=adsc [DSC$W_LENGTH], BUFADR=adsc, FLAGS=1) THEN
+    	BEGIN
+    	    sdsc [DSC$W_LENGTH] = .sdsc [DSC$W_LENGTH] + .adsc [DSC$W_LENGTH];
+    	    MX_FILE_WRITE (.unit, sdsc);
+    	    newent [QENT_L_SIZE] = .newent [QENT_L_SIZE] + .sdsc [DSC$W_LENGTH];
+    	    CH$WCHAR (%C' ', buf);
+    	    txt = .diagtxtque [QUE_L_HEAD];
+    	    WHILE .txt NEQA diagtxtque DO
+    	    BEGIN
+    	    	sdsc [DSC$W_LENGTH] = MINU (.txt [TXT_W_LEN]+1, %ALLOCATION (buf));
+    	    	CH$MOVE (.sdsc [DSC$W_LENGTH]-1, txt [TXT_T_TEXT], CH$PLUS (buf, 1));
+    	    	MX_FILE_WRITE (.unit, sdsc);
+    	    	newent [QENT_L_SIZE] = .newent [QENT_L_SIZE] + .sdsc [DSC$W_LENGTH];
+    	    	txt = .txt [TXT_L_FLINK];
+    	    END;
+    	END;
+
+    	CH$MOVE (%CHARCOUNT (ladate), UPLIT (ladate), buf);
+    	INIT_SDESC (adsc, %ALLOCATION (buf)-%CHARCOUNT (ladate), CH$PLUS (buf, %CHARCOUNT (ladate)));
+    	IF MX_MKDATE (rcpt [RCPT_Q_ATTEMPTDT], adsc, adsc [DSC$W_LENGTH]) THEN
+    	BEGIN
+    	    sdsc [DSC$W_LENGTH] = .adsc [DSC$W_LENGTH] + %CHARCOUNT (ladate);
+    	    MX_FILE_WRITE (.unit, sdsc);
+    	    newent [QENT_L_SIZE] = .newent [QENT_L_SIZE] + .sdsc [DSC$W_LENGTH];
+    	END;
+
+    	MX_FILE_WRITE (.unit, null_d);
+
+    	MEM_FREERCPT (rcpt);
+
+    END;
+
+    !
+    ! Message part 3: headers or returned message
+    !
+    MX_FILE_WRITE (.unit, boundary);
+    newent [QENT_L_SIZE] = .newent [QENT_L_SIZE] + .boundary [DSC$W_LENGTH];
+
+    IF .hdrs_only THEN
+    BEGIN
+    	MX_FILE_WRITE (.unit, %ASCID'Content-Type: text/rfc822-headers');
+    	newent [QENT_L_SIZE] = .newent [QENT_L_SIZE] + 33;
+    END
+    ELSE
+    BEGIN
+    	MX_FILE_WRITE (.unit, %ASCID'Content-Type: message/rfc822');
+    	newent [QENT_L_SIZE] = .newent [QENT_L_SIZE] + 28;
+    END;
+    MX_FILE_WRITE (.unit, null_d);
+
+    INIT_QUEUE (txtque);
+    hdr = .hdrq [QUE_L_HEAD];
+    WHILE .hdr NEQA hdrq DO
+    BEGIN
+    	FORMAT_HDR (.hdr, txtque, 80);
+    	WHILE NOT REMQUE_HEAD (txtque, txt) DO
+    	BEGIN
+    	    INIT_SDESC (sdsc, .txt [TXT_W_LEN], txt [TXT_T_TEXT]);
+    	    MX_FILE_WRITE (.unit, sdsc);
+    	    newent [QENT_L_SIZE] = .newent [QENT_L_SIZE] + .sdsc [DSC$W_LENGTH];
+    	    FREETXT (txt);
+    	END;
+    	hdr = .hdr [TXT_L_FLINK];
+    END;
+
+    IF NOT .hdrs_only THEN
+    BEGIN
+    	LOCAL
+    	    msgunit,
+    	    oflags,
+    	    maxrec;
+
+    	MX_FILE_WRITE (.unit, null_d);
+
+    	oflags = MX__FILE_READ;
+    	IF CH$EQL (MXQ_S_FILEID, refent [MXQ_X_FILEID], 4, UPLIT (0), %CHAR (0)) THEN
+    	BEGIN
+    	    INIT_SDESC (sdsc, %ALLOCATION (buf), buf);
+    	    FLQ_MAKE_FSPEC (.refent [QENT_L_ENTNUM], %ASCID'MSG_TEXT', sdsc, sdsc [DSC$W_LENGTH]);
+    	END
+    	ELSE
+    	BEGIN
+    	    INIT_SDESC (sdsc, MXQ_S_FILEID, refent [MXQ_X_FILEID]);
+    	    oflags = .oflags OR MX_M_FILE_FIDOPEN;
+    	END;
+
+    	IF MX_FILE_OPEN (.oflags, sdsc, msgunit, 0, 0, maxrec) THEN
+    	BEGIN
+    	    LOCAL bufp, bufsize;
+
+    	    bufsize = %ALLOCATION (buf);
+    	    bufp = buf;
+    	    IF .maxrec GTRU %ALLOCATION (buf) THEN
+    	    	IF LIB$GET_VM (maxrec, bufp) THEN
+    	    	    bufsize = .maxrec
+    	    	ELSE
+    	    	    bufp = buf;
+
+    	    INIT_SDESC (sdsc, .bufsize, .bufp);
+    	    WHILE MX_FILE_READ (.msgunit, sdsc, sdsc [DSC$W_LENGTH]) DO
+    	    BEGIN
+    	    	MX_FILE_WRITE (.unit, sdsc);
+    	    	newent [QENT_L_SIZE] = .newent [QENT_L_SIZE] + .sdsc [DSC$W_LENGTH];
+    	    	sdsc [DSC$W_LENGTH] = .bufsize;
+    	    END;
+    	    MX_FILE_CLOSE (.msgunit);
+    	    IF .bufp NEQA buf THEN LIB$FREE_VM (maxrec, bufp);
+    	END
+    	ELSE
+    	BEGIN
+    	    MX_FILE_WRITE (.unit, %ASCID'(Could not obtain message text)');
+    	    newent [QENT_L_SIZE] = .newent [QENT_L_SIZE] + 31;
+    	END;
+    END;
+
+    MX_FILE_WRITE (.unit, null_d);
+    boundary [DSC$W_LENGTH] = .boundary [DSC$W_LENGTH] + 2; ! for trailing --
+    MX_FILE_WRITE (.unit, boundary);
+    newent [QENT_L_SIZE] = .newent [QENT_L_SIZE] + .boundary [DSC$W_LENGTH];
+    MX_FILE_CLOSE (.unit);
+
+    !
+    ! Message complete.
+    !
+    newent [QENT_L_STATUS] = FLQ_K_STRDY;
+    FLQ_UPDATE (qctx, newent);
+
+    FREE_STRINGS (lclp, domp);
+
+    !
+    ! Note DSN-sent timestamp in envelope
+    !
+    envl [ENVL_V_DSN_SENTDT] = 1;
+    $GETTIM (TIMADR=envl [ENVL_Q_DSN_SENTDT]);
+
+    SS$_NORMAL
+
+END;
+
+%SBTTL 'DSN_REPORT_SEND'
+GLOBAL ROUTINE DSN_REPORT_SEND (ctx_a_a, qctx, agent, hdrq_a, refent_a, envl_a) = 
+BEGIN
+!++
+! FUNCTIONAL DESCRIPTION:
+!
+!   Sends a DSN report, if appropriate.
+!
+! RETURNS:  	cond_value, longword (unsigned), write only, by value
+!
+! PROTOTYPE:
+!
+!   DSN_REPORT_SEND  ctx, qctx, agent, hdrq, refent, envl
+!
+!   ctx:    	REF DSNCTX, modify, by reference
+!   qctx:   	longword_unsigned, read only, by value
+!   agent:  	longword_unsigned, read only, by value
+!   refent: 	QENTDEF, read only, by reference
+!   envl:   	ENVLDEF, read only, by reference
+!
+! IMPLICIT INPUTS:  None.
+!
+! IMPLICIT OUTPUTS: None.
+!
+! COMPLETION CODES:
+!
+!   SS$_NORMAL:	    	normal successful completion.
+!
+! SIDE EFFECTS:	    None.
+!--
+    BIND
+    	ctx 	= .ctx_a_a  	    	: REF DSNDEF,
+    	hdrq	= .hdrq_a   	    	: QUEDEF,
+    	refent	= .refent_a 	    	: QENTDEF,
+    	envl	= .envl_a   	    	: ENVLDEF,
+    	dsnque  = ctx [DSN_Q_RCPTQUE]	: QUEDEF;
+    BIND_ENVL_FIELDS (envl);
+
+    LOCAL
+    	rcpt	    : REF RCPTDEF,
+    	do_it;
+
+    IF .ctx EQLA 0 THEN RETURN SS$_NORMAL;
+
+    ! Check the "maybe" queue, which consists of recipients that should
+    ! have "delayed" DSNs generated for them.  Only generate such a notification
+    ! if we have never done so before (unless NODELAY1 is set) or if it has
+    ! been longer than the specified interval for such notices.
+
+    IF NOT QUEUE_EMPTY (ctx [DSN_Q_MAYBQUE]) THEN
+    BEGIN
+    	do_it = 0;
+    	IF NOT .envl [ENVL_V_DSN_SENTDT] THEN   ! never sent before?
+    	BEGIN
+    	    IF .ctx [DSN_V_NODELAY1] THEN   	! skip first notification?
+    	    BEGIN
+    	    	envl [ENVL_V_DSN_SENTDT] = 1;
+    	    	$GETTIM (TIMADR=envl [ENVL_Q_DSN_SENTDT]);  ! Make it look like we did send it
+    	    END
+    	    ELSE    	    	    	    	! don't skip first notification
+    	    	do_it = 1;
+    	END
+    	ELSE	    	    	    	    	! sent one before, check interval
+    	BEGIN
+    	    LOCAL
+    	    	now 	: VECTOR [2,LONG],
+    	    	diff	: VECTOR [2,LONG],
+    	    	junk	: VECTOR [2,LONG];
+    	    $GETTIM (TIMADR=now);
+    	    IF LIB$SUB_TIMES (now, envl [ENVL_Q_DSN_SENTDT], diff) THEN
+    	    	do_it = LIB$SUB_TIMES (diff, ctx [DSN_Q_NTFYINTVL], junk);
+    	END;
+
+    	WHILE NOT REMQUE_HEAD (ctx [DSN_Q_MAYBQUE], rcpt) DO
+    	    IF .do_it THEN
+    	    	INSQUE_TAIL (.rcpt, ctx [DSN_Q_RCPTQUE])
+    	    ELSE
+    	    	MEM_FREERCPT (rcpt);
+    END;
+
+    IF NOT QUEUE_EMPTY (ctx [DSN_Q_RCPTQUE]) AND .envl [ENVL_V_FROMADR] AND .fromadr NEQA 0 THEN
+        IF .fromadr [TXT_W_LEN] NEQ 2 OR CH$NEQ (2, fromadr [TXT_T_TEXT], 2, UPLIT ('<>')) THEN
+            do_send (.ctx_a_a, .qctx, .agent, .hdrq_a, .refent_a, .envl_a, 0);
+
+    IF .ctx [DSN_V_CCPSTMSTR] AND NOT QUEUE_EMPTY (ctx [DSN_Q_PSTMQUE]) THEN
+        do_send (.ctx_a_a, .qctx, .agent, .hdrq_a, .refent_a, .envl_a, 1);
+
+    free_context (ctx);
+
+    SS$_NORMAL
+
+END;
+
+%SBTTL 'DSN_SET_RCPT_STATUS'
+GLOBAL ROUTINE DSN_SET_RCPT_STATUS (rcptq_a, dsn_status, status, txtq_a, override_success) = 
+BEGIN
+!++
+! FUNCTIONAL DESCRIPTION:
+!
+!   Utility routine for setting the DSN status for a list of recipients.
+!
+! RETURNS:  	cond_value, longword (unsigned), write only, by value
+!
+! PROTOTYPE:
+!
+!   DSN_SET_RCPT_STATUS  rcptq, dsn_status, status, txtq, override_success
+!
+!   rcptq:  	    	QUEDEF, read only, by reference
+!   dsn_status:	    	longword_unsigned, read only, by value
+!   status: 	    	longword_unsigned, read only, by value
+!   txtq:   	    	QUEDEF, read only, by reference
+!   override_success:	longword_unsigned, read only, by value
+!
+! IMPLICIT INPUTS:  None.
+!
+! IMPLICIT OUTPUTS: None.
+!
+! COMPLETION CODES:
+!
+!   SS$_NORMAL:	    	normal successful completion.
+!
+! SIDE EFFECTS:	    None.
+!--
+    BIND
+    	rcptq	    = .rcptq_a	    	: QUEDEF,
+    	txtq	    = .txtq_a	    	: QUEDEF;
+
+    LOCAL
+    	rcpt	    : REF RCPTDEF,
+    	txt 	    : REF TXTDEF,
+    	newtxt	    : REF TXTDEF,
+    	now 	    : VECTOR [2,LONG];
+
+    $GETTIM (TIMADR=now);
+    rcpt = .rcptq [QUE_L_HEAD];
+    WHILE .rcpt NEQA rcptq DO
+    BEGIN
+    	BIND ds = rcpt [RCPT_L_DSN_STATUS] : BLOCK [,BYTE];
+
+    	IF .rcpt [RCPT_L_DSN_STATUS] EQL 0 OR
+    	   (.override_success AND .ds [STS$V_SEVERITY] EQL STS$K_SUCCESS) THEN
+    	BEGIN
+    	    rcpt [RCPT_L_STATUS] = .status;
+    	    rcpt [RCPT_L_DSN_STATUS] = .dsn_status;
+    	    CH$MOVE (8, now, rcpt [RCPT_Q_ATTEMPTDT]);
+    	    WHILE NOT REMQUE_HEAD (rcpt [RCPT_Q_DIAGTXTQUE], txt) DO FREETXT (txt);
+    	    IF txtq NEQA 0 THEN
+    	    BEGIN
+    	    	txt = .txtq [QUE_L_HEAD];
+    	    	WHILE .txt NEQA txtq DO
+    	    	BEGIN
+    	    	    newtxt = MEM_GETTXT (.txt [TXT_W_LEN], txt [TXT_T_TEXT]);
+    	    	    INSQUE_TAIL (.newtxt, rcpt [RCPT_Q_DIAGTXTQUE]);
+    	    	    txt = .txt [TXT_L_FLINK];
+    	    	END;
+    	    END;
+    	END;
+    	rcpt = .rcpt [RCPT_L_FLINK];
+    END;
+
+    SS$_NORMAL
+
+END;
+
+%SBTTL 'mta_type'
+ROUTINE mta_type (agentcode) = 
+BEGIN
+!++
+! FUNCTIONAL DESCRIPTION:
+!
+!   Returns a pointer to a descriptor for a string describing
+!   the remote MTA type for a particular reporting agent.
+!
+! RETURNS:  	char_string (read only), write only, by descriptor
+!
+! PROTOTYPE:
+!
+!   MTA_TYPE  agentcode
+!
+! IMPLICIT INPUTS:  None.
+!
+! IMPLICIT OUTPUTS: None.
+!
+! COMPLETION CODES: None.
+!
+! SIDE EFFECTS:	    None.
+!--
+    SELECTONE .agentcode OF
+    SET
+    	[MX_K_ORG_SMTP,MX_K_ORG_DNSMTP,MX_K_ORG_XSMTP]	: %ASCID'dns';
+    	[MX_K_ORG_UUCP]	    	    	    	    	: %ASCID'x-uucp';
+    	[OTHERWISE] 	    	    	    	    	: %ASCID'x-other'
+    TES
+
+END; ! mta_type
+
+%SBTTL 'free_context'
+ROUTINE free_context (ctx_a_a) : NOVALUE = 
+BEGIN
+!++
+! FUNCTIONAL DESCRIPTION:
+!
+!   Frees and clears a DSN context structure.
+!
+! RETURNS:  	novalue
+!
+! PROTOTYPE:
+!
+!   FREE_CONTEXT  ctx
+!
+! IMPLICIT INPUTS:  None.
+!
+! IMPLICIT OUTPUTS: None.
+!
+! COMPLETION CODES: None.
+!
+! SIDE EFFECTS:	    None.
+!--
+    BIND
+    	ctx 	= .ctx_a_a  	: REF DSNDEF;
+
+    LOCAL
+    	rcpt	: REF RCPTDEF;
+
+    IF .ctx EQLA 0 THEN RETURN;
+
+    WHILE NOT REMQUE_HEAD (ctx [DSN_Q_RCPTQUE], rcpt) DO MEM_FREERCPT (rcpt);
+    WHILE NOT REMQUE_HEAD (ctx [DSN_Q_MAYBQUE], rcpt) DO MEM_FREERCPT (rcpt);
+    WHILE NOT REMQUE_HEAD (ctx [DSN_Q_PSTMQUE], rcpt) DO MEM_FREERCPT (rcpt);
+
+    LIB$FREE_VM (%REF (DSN_S_DSNDEF), ctx);
+
+    ctx = 0;
+
+END; ! free_context
+
+%SBTTL 'add_to_queue'
+ROUTINE add_to_queue (rcpt_a_a, que_a, action, do_cc_p, pstmque_a) : NOVALUE = 
+BEGIN
+!++
+! FUNCTIONAL DESCRIPTION:
+!
+!   Makes a copy of a recipient structure and adds it to
+!   a queue.  Also sets the DSN_ACTION and ATTEMPDT fields
+!   of the original recipient before making the copy.
+!
+! RETURNS:  	cond_value, longword (unsigned), write only, by value
+!
+! PROTOTYPE:
+!
+!   ADD_TO_QUEUE rcpt, que, action
+!
+! IMPLICIT INPUTS:  None.
+!
+! IMPLICIT OUTPUTS: None.
+!
+! COMPLETION CODES:
+!
+!   SS$_NORMAL:	    	normal successful completion.
+!
+! SIDE EFFECTS:	    None.
+!--
+    BIND
+    	rcpt	= .rcpt_a_a 	: REF RCPTDEF;
+
+    LOCAL
+    	newrcpt	: REF RCPTDEF;
+
+    rcpt [RCPT_L_DSN_ACTION] = .action;
+    $GETTIM (TIMADR=rcpt [RCPT_Q_ATTEMPTDT]);
+    IF .que_a NEQA 0 THEN
+    BEGIN
+        newrcpt = copy_rcpt (.rcpt_a_a);
+        IF .newrcpt NEQA 0 THEN
+            INSQUE_TAIL (.newrcpt, .que_a);
+    END;
+    IF .do_cc_p AND .pstmque_a NEQA 0 THEN
+    BEGIN
+        newrcpt = copy_rcpt (.rcpt_a_a);
+        IF .newrcpt NEQA 0 THEN
+            INSQUE_TAIL (.newrcpt, .pstmque_a);
+    END;
+
+END; ! add_to_queue
+
+%SBTTL 'copy_rcpt'
+ROUTINE copy_rcpt (rcpt_a_a) = 
+BEGIN
+!++
+! FUNCTIONAL DESCRIPTION:
+!
+!   description
+!
+! RETURNS:  	cond_value, longword (unsigned), write only, by value
+!
+! PROTOTYPE:
+!
+!   x
+!
+! IMPLICIT INPUTS:  None.
+!
+! IMPLICIT OUTPUTS: None.
+!
+! COMPLETION CODES:
+!
+!   SS$_NORMAL:	    	normal successful completion.
+!
+! SIDE EFFECTS:	    None.
+!--
+    BIND
+    	rcpt	= .rcpt_a_a 	: REF RCPTDEF;
+    BIND_RCPT_FIELDS (rcpt);
+
+    LOCAL
+        newrcpt     : REF RCPTDEF,
+        txt         : REF TXTDEF,
+        newtxt      : REF TXTDEF;
+
+    IF NOT MEM_GETRCPT (newrcpt) THEN RETURN 0;
+    CH$MOVE (RCPT_S_RCPTDEF, .rcpt, .newrcpt);
+    newrcpt [RCPT_A_ADDR]   = MEM_GETTXT (.addr [TXT_W_LEN], addr [TXT_T_TEXT]);
+    newrcpt [RCPT_A_ROUTE]  = (IF .route EQLA 0 THEN 0 ELSE MEM_GETTXT (.route [TXT_W_LEN], route [TXT_T_TEXT]));
+    newrcpt [RCPT_A_ORADDR] = (IF .oraddr EQLA 0 THEN 0 ELSE MEM_GETTXT (.oraddr [TXT_W_LEN], oraddr [TXT_T_TEXT]));
+    newrcpt [RCPT_A_ORTYPE] = (IF .ortype EQLA 0 THEN 0 ELSE MEM_GETTXT (.ortype [TXT_W_LEN], ortype [TXT_T_TEXT]));
+    newrcpt [RCPT_A_REMOTEMTA] = (IF .remotemta EQLA 0 THEN 0 ELSE MEM_GETTXT (.remotemta [TXT_W_LEN], remotemta [TXT_T_TEXT]));
+    INIT_QUEUE (newrcpt [RCPT_Q_DIAGTXTQUE]);
+    txt = .diagtxtque [QUE_L_HEAD];
+    WHILE .txt NEQA diagtxtque DO
+    BEGIN
+    	newtxt = MEM_GETTXT (.txt [TXT_W_LEN], txt [TXT_T_TEXT]);
+    	INSQUE_TAIL (.newtxt, newrcpt [RCPT_Q_DIAGTXTQUE]);
+    	txt = .txt [TXT_L_FLINK];
+    END;
+
+    .newrcpt
+
+END; ! copy_rcpt
+
+END
+ELUDOM

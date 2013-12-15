@@ -1,0 +1,368 @@
+%TITLE 'LOCAL_USER'
+MODULE LOCAL_USER (IDENT='V2.1-1', ADDRESSING_MODE (EXTERNAL=LONG_RELATIVE,NONEXTERNAL=LONG_RELATIVE)) =
+BEGIN
+!++
+! FACILITY: 	    MX common routines
+!
+! ABSTRACT: 	    Checks local VMS MAIL information for a username.
+!
+! MODULE DESCRIPTION:
+!
+!   LOCAL_USER uses callable MAIL to determine a possible forwarding
+!   address for a user, and checks for a user's existence in the UAF.
+!
+! AUTHOR:   	    M. Madison
+!
+! Copyright (c) 2008, Matthew Madison.
+! 
+! All rights reserved.
+! 
+! Redistribution and use in source and binary forms, with or without
+! modification, are permitted provided that the following conditions
+! are met:
+! 
+!     * Redistributions of source code must retain the above
+!       copyright notice, this list of conditions and the following
+!       disclaimer.
+!     * Redistributions in binary form must reproduce the above
+!       copyright notice, this list of conditions and the following
+!       disclaimer in the documentation and/or other materials provided
+!       with the distribution.
+!     * Neither the name of the copyright owner nor the names of any
+!       other contributors may be used to endorse or promote products
+!       derived from this software without specific prior written
+!       permission.
+! 
+! THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
+! "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
+! LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
+! A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
+! OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
+! SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
+! LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
+! DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
+! THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
+! (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
+! OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+!
+! CREATION DATE:    19-APR-1998
+!
+! MODIFICATION HISTORY:
+!
+!   19-APR-1998	V2.0	Madison	    Initial coding (from original in [MX.LOCAL])
+!   20-JUL-1998	V2.0-1	Madison	    Fix handling of underscore-prefixed usernames.
+!   12-DEC-1998	V2.0-2	Madison	    Fix handling of DECnet usernames.
+!   10-DEC-2000	V2.1	Madison	    Short-circuit forward-to-self case that VMS MAIL can't detect.
+!   14-FEB-2002 V2.1-1  Madison     Fix .-to-$ rewrite in local username check.
+!--
+    LIBRARY 'SYS$LIBRARY:STARLET';
+    LIBRARY 'MX_SRC_COMMON:MX';
+
+    FORWARD ROUTINE
+    	MX_LOCAL_USER_INIT,
+    	MX_LOCAL_USER,
+    	MX_LOCAL_USER_FINISH;
+
+    EXTERNAL LITERAL
+    	MX__LCLUSER, MX__FWDUSER, MX__DISMAIL;
+
+    EXTERNAL ROUTINE
+    	G_HAT (MX_FMT_LCL_ADDR, MEM_GETTXT, PARSE_MBOX),
+    	G_HAT (MAIL$USER_BEGIN, MAIL$USER_END, MAIL$USER_GET_INFO,
+    	       STR$UPCASE, STR$CONCAT, LIB$SCOPY_DXDX, LIB$ANALYZE_SDESC,
+    	       STR$PREFIX, STR$CASE_BLIND_COMPARE);
+
+%SBTTL 'MX_LOCAL_USER_INIT'
+GLOBAL ROUTINE MX_LOCAL_USER_INIT (ctx_a) = 
+BEGIN
+!++
+! FUNCTIONAL DESCRIPTION:
+!
+!   Initializes a context block for use with MX_LOCAL_USER.
+!
+! RETURNS:  	cond_value, longword (unsigned), write only, by value
+!
+! PROTOTYPE:
+!
+!   MX_LOCAL_USER_INIT context
+!
+! IMPLICIT INPUTS:  None.
+!
+! IMPLICIT OUTPUTS: None.
+!
+! COMPLETION CODES:
+!
+!   SS$_NORMAL:	    	normal successful completion.
+!
+! SIDE EFFECTS:
+!
+!   None.
+!--
+    LOCAL
+    	mailst0	: $ITMLST_DECL (ITEMS=1);
+
+    $ITMLST_INIT (ITMLST=mailst0,
+    	(ITMCOD=MAIL$_NOSIGNAL, BUFADR=MAILST0, BUFSIZ=0));
+
+    MAIL$USER_BEGIN (.ctx_a, mailst0, %REF (0))
+
+END; ! MX_LOCAL_USER_INIT
+
+%SBTTL 'MX_LOCAL_USER'
+GLOBAL ROUTINE MX_LOCAL_USER (ctx_a_a, usrnam_a, actual_a_a, folder_a) = 
+BEGIN
+!++
+! FUNCTIONAL DESCRIPTION:
+!
+!   Checks the VMS MAIL database for forwarding address, and
+!   checks SYSUAF for user's existence.
+!
+! RETURNS:  	cond_value, longword (unsigned), write only, by value
+!
+! PROTOTYPE:
+!
+!   MX_LOCAL_USER  [context], usrnam [,actual] [,folder]
+!
+!   usrnam: 	character string, read only, by descriptor
+!   actual: 	TXTDEF pointer, write only, by reference
+!   folder: 	character string, write only, by descriptor (dynamic)
+!   context:	longword_unsigned, read only, by reference
+!
+! IMPLICIT INPUTS:  None.
+!
+! IMPLICIT OUTPUTS: None.
+!
+! COMPLETION CODES:
+!
+!   SS$_NORMAL:	    	normal successful completion.
+!
+! SIDE EFFECTS:
+!
+!   None.
+!--
+    BUILTIN
+    	ACTUALCOUNT;
+
+    BIND
+    	usrnam	= .usrnam_a 	    	: BLOCK [,BYTE];
+
+    LOCAL
+    	mailst1	    : $ITMLST_DECL (ITEMS=2),
+    	mailst2	    : $ITMLST_DECL (ITEMS=1),
+    	fwdname	    : BLOCK [255,BYTE],
+    	username    : BLOCK [DSC$K_S_BLN,BYTE],
+    	sdsc 	    : BLOCK [DSC$K_S_BLN,BYTE],
+    	uaiflags    : VOLATILE BLOCK [4,BYTE],
+    	fwdlen	    : VOLATILE,
+    	ulen	    : WORD,
+    	uptr,
+    	check_fwd,
+    	nonlcl,
+    	maictx,
+    	free_context,
+    	underscored,
+    	status;
+
+    maictx = (IF .ctx_a_a NEQA 0 THEN ..ctx_a_a ELSE 0);
+
+    free_context = 0;
+!
+!   Quick DECnet check.
+!
+    status = LIB$ANALYZE_SDESC (usrnam, ulen, uptr);
+    IF NOT .status THEN RETURN .status;
+
+    IF NOT CH$FAIL (CH$FIND_SUB (.ulen, .uptr, 2, UPLIT ('::'))) THEN
+    BEGIN
+    	IF ACTUALCOUNT () GTR 2 THEN IF .actual_a_a NEQA 0 THEN
+    	    .actual_a_a = MEM_GETTXT (.ulen, .uptr);
+    	RETURN MX__LCLUSER;
+    END;
+
+    IF .maictx EQLU 0 THEN
+    BEGIN
+    	status = MX_LOCAL_USER_INIT (maictx);
+    	IF NOT .status THEN RETURN .status;
+    	free_context = 1;
+    END;
+
+    INIT_DYNDESC (username);
+
+    check_fwd = 1;
+    underscored = 0;
+
+!
+!  If username starts with "_", then don't check forwarding.
+!
+    INIT_SDESC (sdsc, .ulen, .uptr);
+    IF .ulen GTR 0 THEN
+    BEGIN
+    	IF CH$RCHAR (.uptr) EQL %C'_' THEN
+    	BEGIN
+    	    check_fwd = 0;
+    	    underscored = 1;
+    	END;
+    END;
+
+!
+!  If username contains "+foldername", save the folder name and
+!  truncate it from the username for the check.
+!
+!  Start by initializing the folder name to null.
+!
+    IF ACTUALCOUNT () GTR 3 THEN IF .folder_a NEQA 0 THEN
+    	LIB$SCOPY_DXDX (%ASCID'', .folder_a);
+
+    IF .sdsc [DSC$W_LENGTH] GTR 0 THEN
+    BEGIN
+    	LOCAL cp;
+    	cp = CH$FIND_CH (.sdsc [DSC$W_LENGTH], .sdsc [DSC$A_POINTER], %C'+');
+    	IF NOT CH$FAIL (.cp) THEN
+    	BEGIN
+    	    LOCAL
+    	    	len;
+    	    len = CH$DIFF (.cp, .sdsc [DSC$A_POINTER]);
+    	    IF ACTUALCOUNT () GTR 3 THEN IF .folder_a NEQA 0 THEN
+    	    BEGIN
+    	    	LOCAL
+    	    	    sdsc2 : BLOCK [DSC$K_S_BLN,BYTE];
+    	    	INIT_SDESC (sdsc2, .sdsc [DSC$W_LENGTH]-.len-1, CH$PLUS (.cp, 1));
+    	    	STR$UPCASE (.folder_a, sdsc2);
+    	    END;
+    	    sdsc [DSC$W_LENGTH] = .len;
+    	END;
+    END;
+
+    STR$UPCASE (username, sdsc);
+
+    fwdlen = 0;
+    IF .check_fwd THEN
+    BEGIN
+    	$ITMLST_INIT (ITMLST=mailst1,
+    	    (ITMCOD=MAIL$_NOSIGNAL, BUFADR=mailst1, BUFSIZ=0),
+    	    (ITMCOD=MAIL$_USER_USERNAME, BUFADR=.username [DSC$A_POINTER], BUFSIZ=.username [DSC$W_LENGTH]));
+    	$ITMLST_INIT (ITMLST=mailst2,
+    	    (ITMCOD=MAIL$_USER_FORWARDING, BUFADR=fwdname,
+    	    	BUFSIZ=%ALLOCATION (fwdname), RETLEN=fwdlen));
+
+    	status = MAIL$USER_GET_INFO (maictx, mailst1, mailst2);
+
+    	IF NOT .status THEN
+    	BEGIN
+    	    LOCAL
+    	    	cp, remain;
+    	    cp = CH$FIND_CH (.username [DSC$W_LENGTH], .username [DSC$A_POINTER], %C'.');
+    	    IF NOT CH$FAIL (.cp) THEN
+    	    BEGIN
+    	    	DO
+    	    	BEGIN
+    	    	    CH$WCHAR (%C'$', .cp);
+    	    	    remain = .username [DSC$W_LENGTH] - CH$DIFF (.cp, .username [DSC$A_POINTER]) - 1;
+    	    	    IF .remain LEQ 0 THEN EXITLOOP;
+    	    	    cp = CH$FIND_CH (.remain, CH$PLUS (.cp, 1), %C'.');
+    	    	END UNTIL CH$FAIL (.cp);
+    	    	fwdlen = 0;
+    	    	status = MAIL$USER_GET_INFO (maictx, mailst1, mailst2);
+    	    END;
+    	END;
+    END;
+
+    IF .fwdlen EQL 0 THEN
+    BEGIN
+    	LOCAL
+    	    uailst : $ITMLST_DECL (ITEMS=1),
+    	    dsc	   : BLOCK [DSC$K_S_BLN,BYTE];
+
+    	INIT_SDESC (dsc, .username [DSC$W_LENGTH]-.underscored, CH$PLUS (.username [DSC$A_POINTER], .underscored));
+    	$ITMLST_INIT (ITMLST=uailst,
+    	    (ITMCOD=UAI$_FLAGS, BUFADR=uaiflags, BUFSIZ=%ALLOCATION (uaiflags)));
+    	status = $GETUAI (USRNAM=dsc, ITMLST=uailst);
+
+    	IF .status THEN
+    	    status = (IF .uaiflags [UAI$V_NOMAIL] THEN MX__DISMAIL ELSE MX__LCLUSER);
+    END
+    ELSE
+    BEGIN
+    	LOCAL
+    	    tmp	    : BLOCK [DSC$K_S_BLN,BYTE];
+
+    	$INIT_DYNDESC (tmp);
+    	sdsc [DSC$A_POINTER] = fwdname;
+    	sdsc [DSC$W_LENGTH] = .fwdlen;
+    	IF MX_FMT_LCL_ADDR (MX__FMT_TO OR FMT_M_LOWERCASE, sdsc, tmp, 0, nonlcl) THEN
+    	BEGIN
+    	    IF (.nonlcl AND MX_M_FMT_NON_LOCAL) EQL MX_M_FMT_NON_LOCAL THEN
+    	    BEGIN
+    	    	status = MX__FWDUSER;
+    	    	STR$CONCAT (username, %ASCID'<', tmp, %ASCID'>');
+    	    END
+    	    ELSE
+    	    BEGIN
+    	    	LOCAL
+    	    	    lclp	: BLOCK [DSC$K_S_BLN,BYTE],
+    	    	    domp	: BLOCK [DSC$K_S_BLN,BYTE];
+    	    	INIT_DYNDESC (lclp, domp);
+    	    	IF PARSE_MBOX (tmp, lclp, domp) THEN
+    	    	    IF STR$CASE_BLIND_COMPARE (username, lclp) EQL 0 THEN
+    	    	    	STR$PREFIX (username, %ASCID'_');  ! don't let VMS MAIL forward to self!
+    	    	FREE_STRINGS (lclp, domp);
+    	    	STATUS = MX__LCLUSER;
+    	    END;
+    	END
+    	ELSE
+    	    status = MX__LCLUSER;
+
+    	FREE_STRINGS (tmp);
+    END;
+
+    IF .status AND .status NEQ MX__FWDUSER THEN STATUS = MX__LCLUSER;
+
+    IF ACTUALCOUNT () GTR 2 THEN IF .actual_a_a NEQA 0 THEN
+    	.actual_a_a = MEM_GETTXT (.username [DSC$W_LENGTH], .username [DSC$A_POINTER]);
+
+    IF .free_context THEN MX_LOCAL_USER_FINISH (maictx);
+    	
+    FREE_STRINGS (username);
+
+    .status
+
+END; ! LOCAL_USER
+
+%SBTTL 'MX_LOCAL_USER_FINISH'
+GLOBAL ROUTINE MX_LOCAL_USER_FINISH (ctx_a_a) = 
+BEGIN
+!++
+! FUNCTIONAL DESCRIPTION:
+!
+!   Initializes a context block for use with MX_LOCAL_USER.
+!
+! RETURNS:  	cond_value, longword (unsigned), write only, by value
+!
+! PROTOTYPE:
+!
+!   MX_LOCAL_USER_FINISH context
+!
+! IMPLICIT INPUTS:  None.
+!
+! IMPLICIT OUTPUTS: None.
+!
+! COMPLETION CODES:
+!
+!   SS$_NORMAL:	    	normal successful completion.
+!
+! SIDE EFFECTS:
+!
+!   None.
+!--
+    LOCAL
+    	mailst0	: $ITMLST_DECL (ITEMS=1);
+
+    $ITMLST_INIT (ITMLST=mailst0,
+    	(ITMCOD=MAIL$_NOSIGNAL, BUFADR=MAILST0, BUFSIZ=0));
+
+    MAIL$USER_END (.ctx_a_a, mailst0, %REF (0))
+
+END; ! MX_LOCAL_USER_FINISH
+
+END
+ELUDOM

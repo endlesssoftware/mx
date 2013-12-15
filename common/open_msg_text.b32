@@ -1,0 +1,128 @@
+%TITLE 'OPEN_MSG_TEXT'
+MODULE OPEN_MSG_TEXT (IDENT='V1.1', ADDRESSING_MODE (EXTERNAL=LONG_RELATIVE,NONEXTERNAL=LONG_RELATIVE)) =
+BEGIN
+!++
+! FACILITY: 	    MX
+!
+! ABSTRACT: 	    Open a message text file.
+!
+! MODULE DESCRIPTION:
+!
+!   This module contains a routine for opening a queue entry's message text
+!   file.
+!
+! AUTHOR:   	    M. Madison
+!
+! Copyright (c) 2008, Matthew Madison.
+! 
+! All rights reserved.
+! 
+! Redistribution and use in source and binary forms, with or without
+! modification, are permitted provided that the following conditions
+! are met:
+! 
+!     * Redistributions of source code must retain the above
+!       copyright notice, this list of conditions and the following
+!       disclaimer.
+!     * Redistributions in binary form must reproduce the above
+!       copyright notice, this list of conditions and the following
+!       disclaimer in the documentation and/or other materials provided
+!       with the distribution.
+!     * Neither the name of the copyright owner nor the names of any
+!       other contributors may be used to endorse or promote products
+!       derived from this software without specific prior written
+!       permission.
+! 
+! THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
+! "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
+! LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
+! A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
+! OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
+! SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
+! LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
+! DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
+! THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
+! (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
+! OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+!
+! CREATION DATE:    24-OCT-1991
+!
+! MODIFICATION HISTORY:
+!
+!   24-OCT-1991	V1.0	Madison	    Initial coding.
+!   30-DEC-1996	V1.1	Madison	    Eliminate MDMLIB.
+!--
+
+    LIBRARY 'SYS$LIBRARY:STARLET';
+    LIBRARY 'MX_SRC_COMMON:MX';
+    LIBRARY 'MX_SRC_COMMON:FLQ';
+
+    EXTERNAL ROUTINE
+    	MX_FILE_OPEN;
+
+%SBTTL 'OPEN_MSG_TEXT'
+GLOBAL ROUTINE OPEN_MSG_TEXT (QENT_A, FIOFUNC, UNIT_A) = 
+BEGIN
+!++
+! FUNCTIONAL DESCRIPTION:
+!
+!   This routine, given a queue entry, opens the message text file
+!   associated with that entry.
+!
+!   	If the MXQ_X_FILEID field is non-zero, that value is used
+!   	as the FID for the message text file.
+!
+!   	Otherwise, if the MXQ_L_BACKREF field is non-zero, that value is
+!   	used to build the name of the message text file in FLQ_DIR.
+!
+!   	Otherwise, the QENT_L_ENTNUM field is used to build the name
+!   	of the file in FLQ_DIR.
+!
+!   MX_FILE_OPEN is used to open the file.
+!
+! RETURNS:  	cond_value, longword (unsigned), write only, by value
+!
+! PROTOTYPE:
+!
+!   OPEN_MSG_TEXT  qent, fiofunc, unit
+!
+! IMPLICIT INPUTS:  None.
+!
+! IMPLICIT OUTPUTS: None.
+!
+! COMPLETION CODES:
+!
+!   SS$_NORMAL:	    	normal successful completion.
+!
+! SIDE EFFECTS:
+!
+!   None.
+!--
+    BIND
+    	QENT	= .QENT_A   : QENTDEF;
+
+    LOCAL
+    	STR 	: BLOCK [DSC$K_S_BLN,BYTE],
+    	DSC 	: BLOCK [DSC$K_S_BLN,BYTE],
+    	STRBUF	: VECTOR [256,BYTE],
+    	STATUS;
+
+    IF CH$NEQ (MXQ_S_FILEID, QENT [MXQ_X_FILEID], 4, UPLIT (0), %CHAR (0)) THEN
+    BEGIN
+    	FIOFUNC = .FIOFUNC OR MX_M_FILE_FIDOPEN;
+    	INIT_SDESC (DSC, MXQ_S_FILEID, QENT [MXQ_X_FILEID]);
+    	RETURN MX_FILE_OPEN (.FIOFUNC, DSC, .UNIT_A);
+    END;
+
+    INIT_SDESC (STR, %ALLOCATION (STRBUF), STRBUF);
+    FLQ_MAKE_FSPEC ((IF .QENT [MXQ_L_BACKREF] NEQ 0 THEN
+    	    	    	.QENT [MXQ_L_BACKREF] ELSE .QENT [QENT_L_ENTNUM]),
+    	    	    %ASCID'MSG_TEXT', STR, STR [DSC$W_LENGTH]);
+    STATUS = MX_FILE_OPEN (.FIOFUNC, STR, .UNIT_A);
+
+    .STATUS
+
+END; ! OPEN_MSG_TEXT
+
+END
+ELUDOM

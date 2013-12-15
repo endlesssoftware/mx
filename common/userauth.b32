@@ -1,0 +1,913 @@
+%TITLE 'USERAUTH'
+MODULE USERAUTH (IDENT='V1.0', ADDRESSING_MODE (EXTERNAL=LONG_RELATIVE, NONEXTERNAL=LONG_RELATIVE)) =
+BEGIN
+!++
+! FACILITY: 	    MX
+!
+! ABSTRACT: 	    User authentication routines
+!
+! MODULE DESCRIPTION:
+!
+!   description
+!
+! AUTHOR:   	    M. Madison
+!
+! Copyright (c) 2008, Matthew Madison.
+! 
+! All rights reserved.
+! 
+! Redistribution and use in source and binary forms, with or without
+! modification, are permitted provided that the following conditions
+! are met:
+! 
+!     * Redistributions of source code must retain the above
+!       copyright notice, this list of conditions and the following
+!       disclaimer.
+!     * Redistributions in binary form must reproduce the above
+!       copyright notice, this list of conditions and the following
+!       disclaimer in the documentation and/or other materials provided
+!       with the distribution.
+!     * Neither the name of the copyright owner nor the names of any
+!       other contributors may be used to endorse or promote products
+!       derived from this software without specific prior written
+!       permission.
+! 
+! THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
+! "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
+! LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
+! A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
+! OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
+! SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
+! LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
+! DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
+! THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
+! (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
+! OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+!
+! CREATION DATE:    26-NOV-2000
+!
+! MODIFICATION HISTORY:
+!
+!   26-NOV-2000	V1.0	Madison	    Initial coding.
+!--
+
+    LIBRARY 'SYS$LIBRARY:STARLET';
+    LIBRARY 'MX';
+    LIBRARY 'MD5DEF';
+    LIBRARY 'FIELDS';
+
+    FORWARD ROUTINE
+    	userauth_user_add,
+    	userauth_user_modify,
+    	userauth_user_delete,
+    	userauth_user_pwchange,
+    	userauth_user_enum,
+    	userauth_user_enum_end,
+    	userauth_hmac_digest,
+    	userauth_db_create,
+    	userauth_open,
+    	userauth_read,
+    	userauth_write,
+    	userauth_delete,
+    	userauth_close;
+
+    EXTERNAL ROUTINE
+    	G_HAT (md5_init, md5_update, md5_final),
+    	G_HAT (base64_encode_string, base64_decode_string),
+    	G_HAT (STR$UPCASE, LIB$GET_VM, LIB$FREE_VM, LIB$SYS_FAO);
+
+    EXTERNAL LITERAL
+    	MX__UAEXISTS, MX__UAINVPWD, MX__AUTHFAIL;
+
+    LITERAL
+    	UA__READWRITE	    = 1,
+    	UA__READONLY	    = 2,
+    	UA_M_ACCKEY 	    = %X'FF',
+    	UA_M_SEQUENTIAL	    = %X'100',
+    	UA_M_UPDATE 	    = 1,
+    	AUTH_K_CURVERSION   = 1,
+    	AUTH_S_USERNAME	    = 16,
+    	AUTH_S_PASSWORD	    = 64,
+    	XAUTH_S_USERNAME    = 64,
+    	XAUTH_S_PASSWORD    = 128;
+
+    _DEF (AUTH)
+    	AUTH_W_USERNAME	    = _WORD,
+    	AUTH_W_PASSWORD	    = _WORD,
+    	AUTH_T_USERNAME	    = _BYTES (AUTH_S_USERNAME),
+    	AUTH_T_PASSWORD	    = _BYTES (AUTH_S_PASSWORD)
+    _ENDDEF (AUTH);
+
+    _DEF (XAUTH)
+    	XAUTH_L_VERSION	    = _LONG,
+    	XAUTH_W_USERNAME    = _WORD,
+    	XAUTH_W_PASSWORD    = _WORD,
+    	XAUTH_T_USERNAME    = _BYTES (XAUTH_S_USERNAME),
+    	XAUTH_T_PASSWORD    = _BYTES (XAUTH_S_PASSWORD),
+    	XAUTH_X_UNUSED	    = _BYTES (512-(XAUTH_S_PASSWORD+XAUTH_S_USERNAME+8))
+    _ENDDEF (XAUTH);
+
+    _DEF (CTX)
+    	_ALIGN (QUAD)
+    	CTX_X_FAB   	    = _BYTES (FAB$C_BLN),
+    	_ALIGN (QUAD)
+    	CTX_X_RAB   	    = _BYTES (RAB$C_BLN)
+    _ENDDEF (CTX);
+    	
+
+%SBTTL 'userauth_user_add'
+GLOBAL ROUTINE userauth_user_add (username_a, password_a) = 
+BEGIN
+!++
+! FUNCTIONAL DESCRIPTION:
+!
+!   Adds a username/password to the authentication database.
+!
+! RETURNS:  	cond_value, longword (unsigned), write only, by value
+!
+! PROTOTYPE:
+!
+!   userauth_user_add	username, password
+!
+! IMPLICIT INPUTS:  None.
+!
+! IMPLICIT OUTPUTS: None.
+!
+! COMPLETION CODES:
+!
+!   SS$_NORMAL:	    	normal successful completion.
+!
+! SIDE EFFECTS:	    None.
+!--
+
+    BIND
+    	username    = .username_a   : BLOCK [DSC$K_S_BLN,BYTE],
+    	password    = .password_a   : BLOCK [DSC$K_S_BLN,BYTE];
+
+    LOCAL
+    	auth	: AUTHDEF,
+    	ctx 	: CTXDEF,
+    	status;
+
+    IF .username [DSC$W_LENGTH] GTRU AUTH_S_USERNAME OR
+    	    .password [DSC$W_LENGTH] GTRU AUTH_S_PASSWORD THEN
+    	RETURN SS$_BADPARAM;
+
+    status = userauth_open (UA__READWRITE, ctx);
+    IF NOT .status THEN
+    	RETURN .status;
+
+    status = userauth_read (ctx, username, auth);
+    IF .status THEN
+    	status = MX__UAEXISTS
+    ELSE
+    BEGIN
+    	CH$FILL (%CHAR (0), AUTH_S_AUTHDEF, auth);
+    	CH$MOVE (.username [DSC$W_LENGTH], .username [DSC$A_POINTER], auth [AUTH_T_USERNAME]);
+    	auth [AUTH_W_USERNAME] = .username [DSC$W_LENGTH];
+    	CH$MOVE (.password [DSC$W_LENGTH], .password [DSC$A_POINTER], auth [AUTH_T_PASSWORD]);
+    	auth [AUTH_W_PASSWORD] = .password [DSC$W_LENGTH];
+    	status = userauth_write (ctx, 0, auth);
+    END;
+    userauth_close (ctx);
+    CH$FILL (%CHAR (0), AUTH_S_AUTHDEF, auth);
+
+    .status
+
+END; ! userauth_user_add
+
+%SBTTL 'userauth_user_modify'
+GLOBAL ROUTINE userauth_user_modify (username_a, newpw_a) = 
+BEGIN
+!++
+! FUNCTIONAL DESCRIPTION:
+!
+!   Modifies an entry in the authentication database.
+!
+! RETURNS:  	cond_value, longword (unsigned), write only, by value
+!
+! PROTOTYPE:
+!
+!   userauth_user_modify  username, newpw
+!
+! IMPLICIT INPUTS:  None.
+!
+! IMPLICIT OUTPUTS: None.
+!
+! COMPLETION CODES:
+!
+!   SS$_NORMAL:	    	normal successful completion.
+!
+! SIDE EFFECTS:	    None.
+!--
+
+    BIND
+    	username    = .username_a   : BLOCK [DSC$K_S_BLN,BYTE],
+    	newpw       = .newpw_a	    : BLOCK [DSC$K_S_BLN,BYTE];
+
+    LOCAL
+    	auth	: AUTHDEF,
+    	ctx 	: CTXDEF,
+    	status;
+
+    IF .username [DSC$W_LENGTH] GTRU AUTH_S_USERNAME OR
+    	    .newpw [DSC$W_LENGTH] GTRU AUTH_S_PASSWORD THEN
+    	RETURN SS$_BADPARAM;
+
+    status = userauth_open (UA__READWRITE, ctx);
+    IF NOT .status THEN
+    	RETURN .status;
+
+    status = userauth_read (ctx, username, auth);
+    IF .status THEN
+    BEGIN
+    	CH$FILL (%CHAR (0), AUTH_S_PASSWORD, auth [AUTH_T_PASSWORD]);
+    	CH$MOVE (.newpw [DSC$W_LENGTH], .newpw [DSC$A_POINTER], auth [AUTH_T_PASSWORD]);
+    	auth [AUTH_W_PASSWORD] = .newpw [DSC$W_LENGTH];
+    	status = userauth_write (ctx, UA_M_UPDATE, auth);
+    END;
+    userauth_close (ctx);
+    CH$FILL (%CHAR (0), AUTH_S_AUTHDEF, auth);
+
+    .status
+
+END; ! userauth_user_modify
+
+%SBTTL 'userauth_user_delete'
+GLOBAL ROUTINE userauth_user_delete (username_a) = 
+BEGIN
+!++
+! FUNCTIONAL DESCRIPTION:
+!
+!   Removes a user from the authentication database.
+!
+! RETURNS:  	cond_value, longword (unsigned), write only, by value
+!
+! PROTOTYPE:
+!
+!   userauth_user_delete  username
+!
+! IMPLICIT INPUTS:  None.
+!
+! IMPLICIT OUTPUTS: None.
+!
+! COMPLETION CODES:
+!
+!   SS$_NORMAL:	    	normal successful completion.
+!
+! SIDE EFFECTS:	    None.
+!--
+    BIND
+    	username    = .username_a   : BLOCK [DSC$K_S_BLN,BYTE];
+
+    LOCAL
+    	ctx 	: CTXDEF,
+    	status;
+
+    IF .username [DSC$W_LENGTH] GTRU AUTH_S_USERNAME THEN
+    	RETURN SS$_BADPARAM;
+
+    status = userauth_open (UA__READWRITE, ctx);
+    IF NOT .status THEN
+    	RETURN .status;
+
+    status = userauth_delete (ctx, username);
+    userauth_close (ctx);
+
+    .status
+
+END; ! userauth_user_delete
+
+%SBTTL 'userauth_user_pwchange'
+GLOBAL ROUTINE userauth_user_pwchange (username_a, oldpw_a, newpw_a) = 
+BEGIN
+!++
+! FUNCTIONAL DESCRIPTION:
+!
+!   Changes a user's password.  Requires old password and validates it
+!   before changing.  Automatically enables SYSPRV for opening auth db.
+!
+! RETURNS:  	cond_value, longword (unsigned), write only, by value
+!
+! PROTOTYPE:
+!
+!   userauth_user_pwchange  username, oldpw, newpw
+!
+! IMPLICIT INPUTS:  None.
+!
+! IMPLICIT OUTPUTS: None.
+!
+! COMPLETION CODES:
+!
+!   SS$_NORMAL:	    	normal successful completion.
+!
+! SIDE EFFECTS:	    None.
+!--
+
+    BIND
+    	username    = .username_a   : BLOCK [DSC$K_S_BLN,BYTE],
+    	oldpw       = .oldpw_a	    : BLOCK [DSC$K_S_BLN,BYTE],
+    	newpw       = .newpw_a	    : BLOCK [DSC$K_S_BLN,BYTE];
+
+    LOCAL
+    	auth	: AUTHDEF,
+    	sysprv	: BLOCK [PRV$S_PRVDEF,BYTE],
+    	oldprv	: BLOCK [PRV$S_PRVDEF,BYTE],
+    	ctx 	: CTXDEF,
+    	status;
+
+    IF .username [DSC$W_LENGTH] GTRU AUTH_S_USERNAME OR
+    	    .newpw [DSC$W_LENGTH] GTRU AUTH_S_PASSWORD THEN
+    	RETURN SS$_BADPARAM;
+
+    CH$FILL (%CHAR (0), %ALLOCATION (sysprv), sysprv);
+    sysprv [PRV$V_SYSPRV] = 1;
+
+    status = $SETPRV (ENBFLG=1, PRVADR=sysprv, PRVPRV=oldprv);
+    IF NOT .status THEN
+    	RETURN .status;
+
+    status = userauth_open (UA__READWRITE, ctx);
+    IF NOT .oldprv [PRV$V_SYSPRV] THEN
+    	$SETPRV (ENBFLG=0, PRVADR=sysprv);
+
+    IF .status THEN
+    	status = userauth_read (ctx, username, auth);
+
+    IF .status THEN
+    BEGIN
+    	IF .oldpw [DSC$W_LENGTH] EQL .auth [AUTH_W_PASSWORD] AND
+    	    	CH$EQL (.oldpw [DSC$W_LENGTH], .oldpw [DSC$A_POINTER], auth [AUTH_T_PASSWORD], %C' ') THEN
+    	BEGIN
+    	    CH$FILL (%CHAR (0), AUTH_S_PASSWORD, auth [AUTH_T_PASSWORD]);
+    	    CH$MOVE (.newpw [DSC$W_LENGTH], .newpw [DSC$A_POINTER], auth [AUTH_T_PASSWORD]);
+    	    auth [AUTH_W_PASSWORD] = .newpw [DSC$W_LENGTH];
+    	    status = userauth_write (ctx, UA_M_UPDATE, auth);
+    	END
+    	ELSE
+    	    status = MX__UAINVPWD;
+    END;
+    userauth_close (ctx);
+    CH$FILL (%CHAR (0), AUTH_S_AUTHDEF, auth);
+
+    .status
+
+END; ! userauth_user_pwchange
+
+%SBTTL 'userauth_user_enum'
+GLOBAL ROUTINE userauth_user_enum (ctx_a, username_a, len_a) = 
+BEGIN
+!++
+! FUNCTIONAL DESCRIPTION:
+!
+!   Enumerates the entries in 
+!
+! RETURNS:  	cond_value, longword (unsigned), write only, by value
+!
+! PROTOTYPE:
+!
+!   userauth_user_enum  ctx, username [,len]
+!
+! IMPLICIT INPUTS:  None.
+!
+! IMPLICIT OUTPUTS: None.
+!
+! COMPLETION CODES:
+!
+!   SS$_NORMAL:	    	normal successful completion.
+!
+! SIDE EFFECTS:	    None.
+!--
+    BUILTIN
+    	ACTUALCOUNT;
+
+    BIND
+    	ctx 	    = .ctx_a	    : REF CTXDEF,
+    	username    = .username_a   : BLOCK [DSC$K_S_BLN,BYTE];
+
+    LOCAL
+    	auth	: AUTHDEF,
+    	status;
+
+    IF .ctx EQLA 0 THEN
+    BEGIN
+    	status = LIB$GET_VM (%REF (CTX_S_CTXDEF), ctx);
+    	IF NOT .status THEN
+    	    RETURN .status;
+
+    	status = userauth_open (UA__READONLY OR UA_M_SEQUENTIAL, .ctx);
+    	IF NOT .status THEN
+    	BEGIN
+    	    LIB$FREE_VM (%REF (CTX_S_CTXDEF), ctx);
+    	    ctx = 0;
+    	    RETURN .status;
+    	END;
+    END;
+
+    status = userauth_read (.ctx, 0, auth);
+    IF .status THEN
+    	status = LIB$SYS_FAO (%ASCID'!AD',
+    	    	    (IF ACTUALCOUNT () GTR 2 THEN .len_a ELSE 0),
+    	    	    username, .auth [AUTH_W_USERNAME], auth [AUTH_T_USERNAME]);
+
+    IF NOT .status THEN
+    BEGIN
+    	userauth_close (.ctx);
+    	LIB$FREE_VM (%REF (CTX_S_CTXDEF), ctx);
+    	ctx = 0;
+    END;
+
+    CH$FILL (%CHAR (0), AUTH_S_AUTHDEF, auth);
+
+    .status
+
+END; ! userauth_user_enum
+
+%SBTTL 'userauth_user_enum_end'
+GLOBAL ROUTINE userauth_user_enum_end (ctx_a) = 
+BEGIN
+!++
+! FUNCTIONAL DESCRIPTION:
+!
+!   Closes an enumeration.
+!
+! RETURNS:  	cond_value, longword (unsigned), write only, by value
+!
+! PROTOTYPE:
+!
+!   userauth_user_enum_end  ctx
+!
+! IMPLICIT INPUTS:  None.
+!
+! IMPLICIT OUTPUTS: None.
+!
+! COMPLETION CODES:
+!
+!   SS$_NORMAL:	    	normal successful completion.
+!
+! SIDE EFFECTS:	    None.
+!--
+    BUILTIN
+    	ACTUALCOUNT;
+
+    BIND
+    	ctx 	    = .ctx_a	    : REF CTXDEF;
+
+
+    IF ctx NEQA 0 THEN
+    BEGIN
+    	userauth_close (.ctx);
+    	LIB$FREE_VM (%REF (CTX_S_CTXDEF), ctx);
+    	ctx = 0;
+    END;
+
+    SS$_NORMAL
+
+END; ! userauth_user_enum_end
+
+%SBTTL 'userauth_hmac_digest'
+GLOBAL ROUTINE userauth_hmac_digest (username_a, salt_a, digest_a) = 
+BEGIN
+!++
+! FUNCTIONAL DESCRIPTION:
+!
+!   Validates an HMAC digest for a user:
+!
+!   	MD5(password XOR opad, MD5(password XOR ipad, salt))
+!
+!   	where <password> is the plain-text password, padded with zeros to
+!   	a length of 64 bytes, <opad> is a string of 64 bytes of 0x5C,
+!   	<ipad> is a string of 64 bytes of 0x36, and <salt> is the
+!   	random salt value passed in as the second argument to this
+!   	routine.
+!
+!   	The computed digest is compared against the <digest> argument
+!   	value; the two digests must match exactly for the authentication
+!   	to be successful.
+!
+! RETURNS:  	cond_value, longword (unsigned), write only, by value
+!
+! PROTOTYPE:
+!
+!   	userauth_hmac_digest  username, salt, digest
+!
+! IMPLICIT INPUTS:  None.
+!
+! IMPLICIT OUTPUTS: None.
+!
+! COMPLETION CODES:
+!
+!   SS$_NORMAL:	    	normal successful completion.
+!
+! SIDE EFFECTS:	    None.
+!--
+    BIND
+    	username    = .username_a   : BLOCK [DSC$K_S_BLN,BYTE],
+    	salt	    = .salt_a	    : BLOCK [DSC$K_S_BLN,BYTE],
+    	digest	    = .digest_a	    : BLOCK [DSC$K_S_BLN,BYTE];
+
+    LOCAL
+    	md5ctx	: MD5CTXDEF,
+    	isum	: MD5SUMDEF,
+    	osum	: MD5SUMDEF,
+    	auth	: AUTHDEF,
+    	ibuf	: VECTOR [64,BYTE],
+    	obuf	: VECTOR [64,BYTE],
+    	updigest: VECTOR [32,BYTE],
+    	sumhex	: VECTOR [32,BYTE],
+    	dsc	: BLOCK [DSC$K_S_BLN,BYTE],
+    	ctx 	: CTXDEF,
+    	status;
+
+    IF .digest [DSC$W_LENGTH] NEQU %ALLOCATION (updigest) THEN
+    	RETURN SS$_BADPARAM;
+
+    INIT_SDESC (dsc, %ALLOCATION (updigest), updigest);
+    STR$UPCASE (dsc, digest);
+
+    status = userauth_open (UA__READONLY, ctx);
+    IF NOT .status THEN
+    	RETURN .status;
+
+    status = userauth_read (ctx, username, auth);
+    userauth_close (ctx);
+
+    IF NOT .status THEN
+    	RETURN .status;
+
+    CH$FILL (%CHAR (0), %ALLOCATION (ibuf), ibuf);
+    CH$MOVE (.auth [AUTH_W_PASSWORD], auth [AUTH_T_PASSWORD], ibuf);
+    INCR i FROM 0 to %ALLOCATION (ibuf)-1 DO
+    	ibuf [.i] = .ibuf [.i] XOR %X'36';
+    CH$FILL (%CHAR (0), %ALLOCATION (obuf), obuf);
+    CH$MOVE (.auth [AUTH_W_PASSWORD], auth [AUTH_T_PASSWORD], obuf);
+    INCR i FROM 0 to %ALLOCATION (obuf)-1 DO
+    	obuf [.i] = .obuf [.i] XOR %X'5C';
+    
+    md5_init (md5ctx);
+    md5_update (md5ctx, ibuf, %ALLOCATION (ibuf));
+    md5_update (md5ctx, .salt [DSC$A_POINTER], .salt [DSC$W_LENGTH]);
+    md5_final (isum, md5ctx);
+
+    CH$FILL (%CHAR (0), %ALLOCATION (ibuf), ibuf);
+
+    md5_init (md5ctx);
+    md5_update (md5ctx, obuf, %ALLOCATION (obuf));
+    md5_update (md5ctx, isum, %ALLOCATION (isum));
+    md5_final (osum, md5ctx);
+
+    CH$FILL (%CHAR (0), %ALLOCATION (obuf), obuf);
+
+    INCR i FROM 0 TO %ALLOCATION (osum)-1 DO
+    BEGIN
+    	BIND osvec = osum : VECTOR [,BYTE];
+    	INIT_SDESC (dsc, 2, CH$PLUS (sumhex, .i*2));
+    	$FAO (%ASCID'!XB', 0, dsc, .osvec [.i]);
+    END;
+
+    IF CH$EQL (%ALLOCATION (sumhex), sumhex, %ALLOCATION (updigest), updigest) THEN
+    	SS$_NORMAL
+    ELSE
+    	MX__AUTHFAIL
+
+END; ! userauth_hmac_digest
+
+%SBTTL 'userauth_db_create'
+GLOBAL ROUTINE userauth_db_create (fspec_a, dspec_a) = 
+BEGIN
+!++
+! FUNCTIONAL DESCRIPTION:
+!
+!   description
+!
+! RETURNS:  	cond_value, longword (unsigned), write only, by value
+!
+! PROTOTYPE:
+!
+!   userauth_db_create  [fspec], [dspec]
+!
+! IMPLICIT INPUTS:  None.
+!
+! IMPLICIT OUTPUTS: None.
+!
+! COMPLETION CODES:
+!
+!   SS$_NORMAL:	    	normal successful completion.
+!
+! SIDE EFFECTS:	    None.
+!--
+    BIND
+    	fspec	= .fspec_a  	: BLOCK [DSC$K_S_BLN,BYTE],
+    	dspec	= .dspec_a  	: BLOCK [DSC$K_S_BLN,BYTE];
+
+    LOCAL
+    	fab 	: $FAB_DECL,
+    	xabpro	: $XABPRO_DECL,
+    	xabkey	: $XABKEY_DECL,
+    	status;
+
+    $FAB_INIT (FAB=fab, XAB=xabkey, ORG=IDX, FAC=PUT,
+    	       FNM='MX_USERAUTH_DB', DNM='MX_DIR:.DAT',
+    	       SHR=<GET,PUT,DEL,UPD>, RFM=FIX, MRS=XAUTH_S_XAUTHDEF,
+    	       LNM_MODE=PSL$C_EXEC);
+
+    IF .fspec_a NEQA 0 THEN
+    BEGIN
+    	fab [FAB$L_FNA] = .fspec [DSC$A_POINTER];
+    	fab [FAB$B_FNS] = .fspec [DSC$W_LENGTH];
+    END;
+    IF .dspec_a NEQA 0 THEN
+    BEGIN
+    	fab [FAB$L_DNA] = .dspec [DSC$A_POINTER];
+    	fab [FAB$B_DNS] = .dspec [DSC$W_LENGTH];
+    END;
+
+    $XABKEY_INIT (XAB=xabkey, NXT=xabpro, KREF=0, PROLOG=3,
+    	    	  DTP=STG, SIZ=XAUTH_S_USERNAME, POS=%FIELDEXPAND (XAUTH_T_USERNAME, 0));
+    $XABPRO_INIT (XAB=xabpro, NXT=0, PRO=<RW,RW,,>);
+
+    $CREATE (FAB=fab)
+
+END; ! userauth_open
+
+%SBTTL 'userauth_open'
+GLOBAL ROUTINE userauth_open (access, ctx_a) = 
+BEGIN
+!++
+! FUNCTIONAL DESCRIPTION:
+!
+!   description
+!
+! RETURNS:  	cond_value, longword (unsigned), write only, by value
+!
+! PROTOTYPE:
+!
+!   x
+!
+! IMPLICIT INPUTS:  None.
+!
+! IMPLICIT OUTPUTS: None.
+!
+! COMPLETION CODES:
+!
+!   SS$_NORMAL:	    	normal successful completion.
+!
+! SIDE EFFECTS:	    None.
+!--
+    BIND
+    	ctx 	= .ctx_a    	    : CTXDEF,
+    	fab 	= ctx [CTX_X_FAB]   : $FAB_DECL,
+    	rab 	= ctx [CTX_X_RAB]   : $RAB_DECL;
+
+    LOCAL
+    	rac,
+    	status;
+
+    IF (.access AND UA_M_SEQUENTIAL) NEQU 0 THEN
+    	rac = RAB$C_SEQ
+    ELSE
+    	rac = RAB$C_KEY;
+
+    CH$FILL (%CHAR (0), CTX_S_CTXDEF, ctx);
+    $FAB_INIT (FAB=fab, FNM='MX_USERAUTH_DB', DNM='MX_DIR:.DAT',
+    	       SHR=<GET,PUT,DEL,UPD>, LNM_MODE=PSL$C_EXEC);
+    IF (.access AND UA_M_ACCKEY) EQLU UA__READONLY THEN
+    	fab [FAB$B_FAC] = FAB$M_GET
+    ELSE
+    	fab [FAB$B_FAC] = FAB$M_GET OR FAB$M_PUT OR FAB$M_DEL OR FAB$M_UPD;
+
+    status = $OPEN (FAB=fab);
+    IF NOT .status THEN
+    	RETURN .status;
+
+    $RAB_INIT (RAB=rab, FAB=fab);
+    rab [RAB$B_RAC] = .rac;
+    status = $CONNECT (RAB=rab);
+    IF NOT .status THEN
+    	$CLOSE (FAB=fab);
+
+    .status
+
+END; ! userauth_open
+
+%SBTTL 'userauth_read'
+GLOBAL ROUTINE userauth_read (ctx_a, user_a, auth_a) = 
+BEGIN
+!++
+! FUNCTIONAL DESCRIPTION:
+!
+!   description
+!
+! RETURNS:  	cond_value, longword (unsigned), write only, by value
+!
+! PROTOTYPE:
+!
+!   x
+!
+! IMPLICIT INPUTS:  None.
+!
+! IMPLICIT OUTPUTS: None.
+!
+! COMPLETION CODES:
+!
+!   SS$_NORMAL:	    	normal successful completion.
+!
+! SIDE EFFECTS:	    None.
+!--
+    BIND
+    	ctx 	= .ctx_a    	    : CTXDEF,
+    	fab 	= ctx [CTX_X_FAB]   : $FAB_DECL,
+    	rab 	= ctx [CTX_X_RAB]   : $RAB_DECL,
+    	user	= .user_a   	    : BLOCK [DSC$K_S_BLN,BYTE],
+    	auth	= .auth_a   	    : AUTHDEF;
+
+    LOCAL
+    	xauth	    : XAUTHDEF,
+    	adsc	    : BLOCK [DSC$K_S_BLN,BYTE],
+    	kdsc	    : BLOCK [DSC$K_S_BLN,BYTE],
+    	status;
+
+    IF .rab [RAB$B_RAC] EQLU RAB$C_KEY THEN
+    BEGIN
+    	CH$FILL (%CHAR (0), XAUTH_S_XAUTHDEF, xauth);
+    	INIT_SDESC (kdsc, XAUTH_S_USERNAME, xauth [XAUTH_T_USERNAME]);
+    	base64_encode_string (user, xauth [XAUTH_W_USERNAME], kdsc);
+    	rab [RAB$L_KBF] = xauth [XAUTH_T_USERNAME];
+    	rab [RAB$B_KSZ] = XAUTH_S_USERNAME;
+    END;
+
+    rab [RAB$W_USZ] = XAUTH_S_XAUTHDEF;
+    rab [RAB$L_UBF] = xauth;
+
+    status = $GET (RAB=rab);
+
+    IF .status THEN
+    BEGIN
+    	CH$FILL (%CHAR (0), AUTH_S_AUTHDEF, auth);
+    	INIT_SDESC (adsc, AUTH_S_USERNAME, auth [AUTH_T_USERNAME]);
+    	INIT_SDESC (kdsc, .xauth [XAUTH_W_USERNAME], xauth [XAUTH_T_USERNAME]);
+    	base64_decode_string (kdsc, auth [AUTH_W_USERNAME], adsc);
+    	INIT_SDESC (adsc, AUTH_S_PASSWORD, auth [AUTH_T_PASSWORD]);
+    	INIT_SDESC (kdsc, .xauth [XAUTH_W_PASSWORD], xauth [XAUTH_T_PASSWORD]);
+    	base64_decode_string (kdsc, auth [AUTH_W_PASSWORD], adsc);
+    END;
+
+    CH$FILL (%CHAR (0), XAUTH_S_XAUTHDEF, xauth);
+
+    .status
+
+END; ! userauth_read
+
+%SBTTL 'userauth_write'
+GLOBAL ROUTINE userauth_write (ctx_a, flags, auth_a) = 
+BEGIN
+!++
+! FUNCTIONAL DESCRIPTION:
+!
+!   description
+!
+! RETURNS:  	cond_value, longword (unsigned), write only, by value
+!
+! PROTOTYPE:
+!
+!   x
+!
+! IMPLICIT INPUTS:  None.
+!
+! IMPLICIT OUTPUTS: None.
+!
+! COMPLETION CODES:
+!
+!   SS$_NORMAL:	    	normal successful completion.
+!
+! SIDE EFFECTS:	    None.
+!--
+    BIND
+    	ctx 	= .ctx_a    	    : CTXDEF,
+    	fab 	= ctx [CTX_X_FAB]   : $FAB_DECL,
+    	rab 	= ctx [CTX_X_RAB]   : $RAB_DECL,
+    	auth	= .auth_a   	    : AUTHDEF;
+
+    LOCAL
+    	xauth	    : XAUTHDEF,
+    	adsc	    : BLOCK [DSC$K_S_BLN,BYTE],
+    	kdsc	    : BLOCK [DSC$K_S_BLN,BYTE],
+    	status;
+
+    CH$FILL (%CHAR (0), XAUTH_S_XAUTHDEF, xauth);
+    INIT_SDESC (adsc, .auth [AUTH_W_USERNAME], auth [AUTH_T_USERNAME]);
+    INIT_SDESC (kdsc, XAUTH_S_USERNAME, xauth [XAUTH_T_USERNAME]);
+    base64_encode_string (adsc, xauth [XAUTH_W_USERNAME], kdsc);
+    INIT_SDESC (adsc, .auth [AUTH_W_PASSWORD], auth [AUTH_T_PASSWORD]);
+    INIT_SDESC (kdsc, XAUTH_S_PASSWORD, xauth [XAUTH_T_PASSWORD]);
+    base64_encode_string (adsc, xauth [XAUTH_W_PASSWORD], kdsc);
+    xauth [XAUTH_L_VERSION] = AUTH_K_CURVERSION;
+
+    rab [RAB$W_RSZ] = XAUTH_S_XAUTHDEF;
+    rab [RAB$L_RBF] = xauth;
+
+    IF .flags AND UA_M_UPDATE THEN
+    	status = $UPDATE (RAB=rab)
+    ELSE
+    BEGIN
+    	rab [RAB$L_KBF] = xauth [XAUTH_T_USERNAME];
+    	rab [RAB$B_KSZ] = XAUTH_S_USERNAME;
+    	status = $PUT (RAB=rab);
+    END;
+    CH$FILL (%CHAR (0), XAUTH_S_XAUTHDEF, xauth);
+
+    .status
+
+END; ! userauth_write
+
+%SBTTL 'userauth_delete'
+GLOBAL ROUTINE userauth_delete (ctx_a, user_a) = 
+BEGIN
+!++
+! FUNCTIONAL DESCRIPTION:
+!
+!   description
+!
+! RETURNS:  	cond_value, longword (unsigned), write only, by value
+!
+! PROTOTYPE:
+!
+!   x
+!
+! IMPLICIT INPUTS:  None.
+!
+! IMPLICIT OUTPUTS: None.
+!
+! COMPLETION CODES:
+!
+!   SS$_NORMAL:	    	normal successful completion.
+!
+! SIDE EFFECTS:	    None.
+!--
+    BIND
+    	ctx 	= .ctx_a    	    : CTXDEF,
+    	fab 	= ctx [CTX_X_FAB]   : $FAB_DECL,
+    	rab 	= ctx [CTX_X_RAB]   : $RAB_DECL,
+    	user	= .user_a   	    : BLOCK [DSC$K_S_BLN,BYTE];
+
+    LOCAL
+    	xauth	    : XAUTHDEF,
+    	kdsc	    : BLOCK [DSC$K_S_BLN,BYTE],
+    	status;
+
+    CH$FILL (%CHAR (0), XAUTH_S_XAUTHDEF, xauth);
+    INIT_SDESC (kdsc, XAUTH_S_USERNAME, xauth [XAUTH_T_USERNAME]);
+    base64_encode_string (user, xauth [XAUTH_W_USERNAME], kdsc);
+    rab [RAB$L_KBF] = xauth [XAUTH_T_USERNAME];
+    rab [RAB$B_KSZ] = .xauth [XAUTH_W_USERNAME];
+    status = $FIND (RAB=rab);
+    IF .status THEN
+    	status = $DELETE (RAB=rab);
+    CH$FILL (%CHAR (0), XAUTH_S_XAUTHDEF, xauth);
+
+    .status
+
+END; ! userauth_delete
+
+%SBTTL 'userauth_close'
+GLOBAL ROUTINE userauth_close (ctx_a) = 
+BEGIN
+!++
+! FUNCTIONAL DESCRIPTION:
+!
+!   description
+!
+! RETURNS:  	cond_value, longword (unsigned), write only, by value
+!
+! PROTOTYPE:
+!
+!   x
+!
+! IMPLICIT INPUTS:  None.
+!
+! IMPLICIT OUTPUTS: None.
+!
+! COMPLETION CODES:
+!
+!   SS$_NORMAL:	    	normal successful completion.
+!
+! SIDE EFFECTS:	    None.
+!--
+    BIND
+    	ctx 	= .ctx_a    	    : CTXDEF,
+    	fab 	= ctx [CTX_X_FAB]   : $FAB_DECL,
+    	rab 	= ctx [CTX_X_RAB]   : $RAB_DECL;
+
+    LOCAL
+    	status;
+
+    $DISCONNECT (RAB=rab);
+    $CLOSE (FAB=fab);
+    CH$FILL (%CHAR (0), CTX_S_CTXDEF, ctx);
+
+    SS$_NORMAL
+
+END; ! userauth_close
+
+END
+ELUDOM

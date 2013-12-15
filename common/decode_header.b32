@@ -1,0 +1,519 @@
+%TITLE 'DECODE_HEADER'
+MODULE DECODE_HEADER (IDENT='V1.0', ADDRESSING_MODE (EXTERNAL=LONG_RELATIVE, NONEXTERNAL=LONG_RELATIVE)) =
+BEGIN
+!++
+! FACILITY: 	    MX
+!
+! ABSTRACT: 	    Decodes MIME-encoded headers.
+!
+! MODULE DESCRIPTION:
+!
+!   description
+!
+! AUTHOR:   	    M. Madison
+!
+! Copyright (c) 2008, Matthew Madison.
+! 
+! All rights reserved.
+! 
+! Redistribution and use in source and binary forms, with or without
+! modification, are permitted provided that the following conditions
+! are met:
+! 
+!     * Redistributions of source code must retain the above
+!       copyright notice, this list of conditions and the following
+!       disclaimer.
+!     * Redistributions in binary form must reproduce the above
+!       copyright notice, this list of conditions and the following
+!       disclaimer in the documentation and/or other materials provided
+!       with the distribution.
+!     * Neither the name of the copyright owner nor the names of any
+!       other contributors may be used to endorse or promote products
+!       derived from this software without specific prior written
+!       permission.
+! 
+! THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
+! "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
+! LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
+! A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
+! OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
+! SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
+! LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
+! DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
+! THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
+! (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
+! OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+! CREATION DATE:    02-JAN-2001
+!
+! MODIFICATION HISTORY:
+!
+!   02-JAN-2001	V1.0	Madison	    Initial coding.
+!--
+
+    LIBRARY 'SYS$LIBRARY:STARLET';
+    LIBRARY 'SYS$LIBRARY:TPAMAC';
+    LIBRARY 'MX_SRC_COMMON:MX';
+    LIBRARY 'MX_SRC_COMMON:CHARCONV';
+    LIBRARY 'MX_SRC_COMMON:FIELDS';
+
+    FORWARD ROUTINE
+    	DECODE_HEADER,
+    	dh_store,
+    	pet_store;
+
+
+    !+
+    !	Context carried through the translation
+    !-
+    LITERAL
+    	CTX_S_CHARSET	    = 64;
+
+    _DEF (CTX)
+    	CTX_L_CONVCTX	    = _LONG,
+    	CTX_L_PLAINCTX	    = _LONG,
+    	CTX_A_OUTSTR	    = _LONG,
+    	CTX_A_TMPSTR	    = _LONG,
+    	CTX_A_LASTPOS	    = _LONG,
+    	CTX_L_QPCODE	    = _LONG,
+    	CTX_L_FLAGS 	    = _LONG,
+    	_OVERLAY (CTX_L_FLAGS)
+    	    CTX_V_LASTWASENCODED    = _BIT,
+    	    CTX_V_QP_ENCODING	    = _BIT,
+    	_ENDOVERLAY
+    	CTX_W_CHARSET	    = _WORD,
+    	CTX_T_CHARSET	    = _BYTES (CTX_S_CHARSET)
+    _ENDDEF (CTX);
+    	
+
+    !+
+    !	Extended TPA block definitions, with
+    !	pointer to context block
+    !-
+    MACRO
+    	TPA_A_CTX   	=   TPA$C_LENGTH0+00,0,32,0%;
+
+    LITERAL
+    	TPA_C_LENGTH	=   TPA$C_LENGTH0 + 4,
+    	TPA_K_COUNT 	=   TPA$K_COUNT0  + 1;
+
+    !+
+    !	Main parse table, which breaks up the
+    !	string into tokens
+    !-
+    LITERAL
+    	DH_K__FIRST 	= 1,
+    	DH_K_ENCODED	= DH_K__FIRST,
+    	DH_K_EOS  	= 2,
+    	DH_K_NORMAL 	= 3,
+    	DH_K__LAST  	= DH_K_NORMAL;
+
+    $INIT_STATE (dh_state, dh_key);
+
+    $STATE (start_token,
+    	((encoded_token), after_token, dh_store,,, DH_K_ENCODED),
+    	(TPA$_BLANK, start_token),
+    	(TPA$_EOS, TPA$_EXIT, dh_store,,, DH_K_EOS),
+    	(TPA$_LAMBDA, non_encoded_token, dh_store,,, DH_K_NORMAL));
+    $STATE (non_encoded_token,
+    	(TPA$_EOS, TPA$_EXIT, dh_store,,, DH_K_EOS),
+    	(TPA$_BLANK, start_token),
+    	(TPA$_ANY, non_encoded_token));
+    $STATE (after_token,
+    	(TPA$_EOS, TPA$_EXIT, dh_store,,, DH_K_EOS),
+    	(TPA$_BLANK, start_token),
+    	(TPA$_LAMBDA, non_encoded_token, dh_store,,, DH_K_NORMAL));
+
+    $STATE (encoded_token,
+    	('=', et_1));
+    $STATE (et_1,
+    	('?', et_charset));
+    $STATE (et_charset,
+    	('?', et_encoding),
+    	(TPA$_EOS, TPA$_FAIL),
+    	(TPA$_BLANK, TPA$_FAIL),
+    	(TPA$_ANY, et_charset));
+    $STATE (et_encoding,
+    	('Q', et_encoding_1),
+    	('q', et_encoding_1),
+    	('B', et_encoding_1),
+    	('b', et_encoding_1));
+    $STATE (et_encoding_1,
+    	('?', et_coded_word));
+    $STATE (et_coded_word,
+    	('?', et_end),
+    	(TPA$_EOS, TPA$_FAIL),
+    	(TPA$_BLANK, TPA$_FAIL),
+    	(TPA$_ANY, et_coded_word));
+    $STATE (et_end,
+    	('=', TPA$_EXIT));
+
+
+    !+
+    !	Parse table for encoded words, which
+    ! 	have the form =?charset?encoding-char?encoded-text?=
+    !-
+    LITERAL
+    	PET_K__FIRST	    = 1,
+    	PET_K_CHARSET	    = PET_K__FIRST,
+    	PET_K_QP_ENCODING   = 2,
+    	PET_K_B64_ENCODING  = 3,
+    	PET_K_STRING	    = 4,
+    	PET_K__LAST 	    = PET_K_STRING;
+
+    $INIT_STATE (pet_state, pet_key);
+
+    $STATE (pet_begin,
+    	('=', pet_1));
+    $STATE (pet_1,
+    	('?', pet_charset));
+    $STATE (pet_charset,
+    	((charset_name), pet_charset_1, pet_store,,, PET_K_CHARSET));
+    $STATE (pet_charset_1,
+    	('?', pet_encoding));
+    $STATE (pet_encoding,
+    	('Q', pet_encoding_1, pet_store,,, PET_K_QP_ENCODING),
+    	('q', pet_encoding_1, pet_store,,, PET_K_QP_ENCODING),
+    	('B', pet_encoding_1, pet_store,,, PET_K_B64_ENCODING),
+    	('b', pet_encoding_1, pet_store,,, PET_K_B64_ENCODING));
+    $STATE (pet_encoding_1,
+    	('?', TPA$_EXIT, pet_store,,, PET_K_STRING));
+    $STATE (charset_name,
+    	((csnchar), csn_1));
+    $STATE (csn_1,
+    	((csnchar), csn_1),
+    	(TPA$_LAMBDA, TPA$_EXIT));
+    $STATE (csnchar,
+    	(TPA$_ALPHA, TPA$_EXIT),
+    	(TPA$_DIGIT, TPA$_EXIT),
+    	('-', TPA$_EXIT),
+    	('*', TPA$_EXIT),
+    	('`', TPA$_EXIT),
+    	('~', TPA$_EXIT),
+    	('!', TPA$_EXIT),
+    	('#', TPA$_EXIT),
+    	('$', TPA$_EXIT),
+    	('%', TPA$_EXIT),
+    	('^', TPA$_EXIT),
+    	('&', TPA$_EXIT),
+    	('_', TPA$_EXIT),
+    	('+', TPA$_EXIT),
+    	('{', TPA$_EXIT),
+    	('}', TPA$_EXIT),
+    	('|', TPA$_EXIT),
+    	('\', TPA$_EXIT),
+    	('''', TPA$_EXIT));
+
+    !+
+    !	External references
+    !-
+    EXTERNAL ROUTINE
+    	QP_DECODE_STRING, BASE64_DECODE_STRING,
+    	CHARCONV_BEGIN, CHARCONV_CONVERT, CHARCONV_END,
+    	G_HAT (LIB$TPARSE, LIB$SCOPY_R_DX, STR$APPEND, STR$CASE_BLIND_COMPARE);
+
+    !+
+    !	Constant strings
+    !-
+    BIND
+    	us_ascii_d  = %ASCID'US-ASCII'	: BLOCK [,BYTE];
+
+
+%SBTTL 'DECODE_HEADER'
+GLOBAL ROUTINE DECODE_HEADER (qpcode, str_a, len_a, result_a) = 
+BEGIN
+!++
+! FUNCTIONAL DESCRIPTION:
+!
+!   Performs RFC2047 decoding of headers that may include
+!   the MIME extensions for quoted-printable or base64 encoded
+!   words.
+!
+! RETURNS:  	cond_value, longword (unsigned), write only, by value
+!
+! PROTOTYPE:
+!
+!   DECODE_HEADER  qpcode, str, [len], result
+!
+!   qpcode: 	longword (unsigned), read only, by value
+!   str:    	char_string, read only, by descriptor
+!   len:    	word (unsigned), write only, by reference
+!   result: 	char_string, write only, by descriptor
+!
+! IMPLICIT INPUTS:  None.
+!
+! IMPLICIT OUTPUTS: None.
+!
+! COMPLETION CODES:
+!
+!   SS$_NORMAL:	    	normal successful completion.
+!
+! SIDE EFFECTS:	    None.
+!--
+    BIND
+    	str 	    = .str_a	: BLOCK [,BYTE],
+    	result	    = .result_a	: BLOCK [,BYTE],
+    	len 	    = .len_a	: WORD;
+
+    LOCAL
+    	tpa	    : BLOCK [TPA_C_LENGTH,BYTE],
+    	ctx 	    : CTXDEF,
+    	dsc 	    : BLOCK [DSC$K_S_BLN,BYTE],
+    	tmp 	    : BLOCK [DSC$K_S_BLN,BYTE],
+    	actlen	    : WORD,
+    	status;
+
+    INIT_DYNDESC (dsc, tmp);
+    CH$FILL (%CHAR (0), TPA_C_LENGTH, tpa);
+    CH$FILL (%CHAR (0), CTX_S_CTXDEF, ctx);
+
+    tpa [TPA$L_COUNT] 	    = TPA_K_COUNT;
+    tpa [TPA$L_OPTIONS]	    = TPA$M_BLANKS;
+    tpa [TPA$L_STRINGCNT]   = .str [DSC$W_LENGTH];
+    tpa [TPA$L_STRINGPTR]   = .str [DSC$A_POINTER];
+    tpa [TPA_A_CTX] 	    = ctx;
+
+    ctx [CTX_A_OUTSTR]	    = dsc;
+    ctx [CTX_A_TMPSTR]	    = tmp;
+    ctx [CTX_L_QPCODE]	    = .qpcode;
+    ctx [CTX_A_LASTPOS]	    = .str [DSC$A_POINTER];
+
+    IF NOT CHARCONV_BEGIN (CHARCONV__NETWORK_TO_LOCAL, ctx [CTX_L_PLAINCTX], 0, tmp) THEN
+    	ctx [CTX_L_PLAINCTX] = 0;
+
+    status = LIB$TPARSE (tpa, dh_state, dh_key);
+    IF .status THEN
+    BEGIN
+    	IF .result [DSC$B_CLASS] EQL DSC$K_CLASS_S THEN
+    	    actlen = MINU (.result [DSC$W_LENGTH], .dsc [DSC$W_LENGTH])
+    	ELSE
+    	    actlen = .dsc [DSC$W_LENGTH];
+
+    	status = LIB$SCOPY_R_DX (actlen, .dsc [DSC$A_POINTER], result);
+
+    	IF .status AND len NEQA 0 THEN
+    	    len = .actlen;
+    END;
+
+    FREE_STRINGS (dsc, tmp);
+
+    IF .ctx [CTX_L_PLAINCTX] NEQU 0 THEN
+    	CHARCONV_END (ctx [CTX_L_PLAINCTX]);
+
+    .status
+
+END; ! DECODE_HEADER
+
+
+%SBTTL 'dh_store'
+TPA_ROUTINE (dh_store, (options, stringcnt, stringptr, tokencnt,
+    	    	    	tokenptr, char, number, param, ctx_a))
+
+!++
+! FUNCTIONAL DESCRIPTION:
+!
+!   description
+!
+! RETURNS:  	cond_value, longword (unsigned), write only, by value
+!
+! PROTOTYPE:
+!
+!   x
+!
+! IMPLICIT INPUTS:  None.
+!
+! IMPLICIT OUTPUTS: None.
+!
+! COMPLETION CODES:
+!
+!   SS$_NORMAL:	    	normal successful completion.
+!
+! SIDE EFFECTS:	    None.
+!--
+    BIND
+    	ctx 	= .ctx_a    	    	: CTXDEF,
+    	out 	= .ctx [CTX_A_OUTSTR]	: BLOCK [,BYTE],
+    	tmp 	= .ctx [CTX_A_TMPSTR]	: BLOCK [,BYTE];
+
+    LOCAL
+    	dsc 	: BLOCK [DSC$K_S_BLN,BYTE];
+
+    CASE .param FROM DH_K__FIRST TO DH_K__LAST OF
+    SET
+
+    	[DH_K_ENCODED] :
+    	    BEGIN
+    	    	LOCAL
+    	    	    pet_tpa : BLOCK [TPA_C_LENGTH,BYTE],
+    	    	    status;
+
+    	    	IF NOT .ctx [CTX_V_LASTWASENCODED] THEN
+    	    	BEGIN
+    	    	    INIT_SDESC (dsc, CH$DIFF (.tokenptr, .ctx [CTX_A_LASTPOS]), .ctx [CTX_A_LASTPOS]);
+    	    	    IF .dsc [DSC$W_LENGTH] GTRU 0 THEN
+    	    	    	IF .ctx [CTX_L_PLAINCTX] EQLU 0 THEN
+    	    	    	    STR$APPEND (out, dsc)
+    	    	    	ELSE
+    	    	    	BEGIN
+    	    	    	    IF CHARCONV_CONVERT (ctx [CTX_L_PLAINCTX], dsc, 0, tmp) THEN
+    	    	    	    	STR$APPEND (out, tmp)
+    	    	    	    ELSE
+    	    	    	    	STR$APPEND (out, dsc);
+    	    	    	END;
+    	    	END;
+    	    	CH$FILL (%CHAR (0), TPA_C_LENGTH, pet_tpa);
+    	    	pet_tpa [TPA$L_COUNT] 	    = TPA_K_COUNT;
+    	    	pet_tpa [TPA$L_OPTIONS]	    = TPA$M_BLANKS;
+    	    	pet_tpa [TPA$L_STRINGCNT]   = .tokencnt;
+    	    	pet_tpa [TPA$L_STRINGPTR]   = .tokenptr;
+    	    	pet_tpa [TPA_A_CTX] 	    = ctx;
+    	    	status = LIB$TPARSE (pet_tpa, pet_state, pet_key);
+    	    	ctx [CTX_V_LASTWASENCODED] = .status;
+    	    	IF .status THEN
+    	    	    ctx [CTX_A_LASTPOS] = .stringptr;
+    	    END;
+
+    	[DH_K_EOS] :
+    	    BEGIN
+    	    	INIT_SDESC (dsc, CH$DIFF (.stringptr, .ctx [CTX_A_LASTPOS]), .ctx [CTX_A_LASTPOS]);
+    	    	IF .dsc [DSC$W_LENGTH] GTRU 0 THEN
+    	    	    IF .ctx [CTX_L_PLAINCTX] EQLU 0 THEN
+    	    	    	STR$APPEND (out, dsc)
+    	    	    ELSE
+    	    	    BEGIN
+    	    	    	IF CHARCONV_CONVERT (ctx [CTX_L_PLAINCTX], dsc, 0, tmp) THEN
+    	    	    	    STR$APPEND (out, tmp)
+    	    	    	ELSE
+    	    	    	    STR$APPEND (out, dsc);
+    	    	    END;
+    	    END;
+
+    	[DH_K_NORMAL] :
+    	    ctx [CTX_V_LASTWASENCODED] = 0;
+
+    TES;
+
+    SS$_NORMAL
+
+END; ! dh_store
+
+
+%SBTTL 'pet_store'
+TPA_ROUTINE (pet_store, (options, stringcnt, stringptr, tokencnt,
+    	    	    	 tokenptr, char, number, param, ctx_a))
+
+!++
+! FUNCTIONAL DESCRIPTION:
+!
+!   description
+!
+! RETURNS:  	cond_value, longword (unsigned), write only, by value
+!
+! PROTOTYPE:
+!
+!   x
+!
+! IMPLICIT INPUTS:  None.
+!
+! IMPLICIT OUTPUTS: None.
+!
+! COMPLETION CODES:
+!
+!   SS$_NORMAL:	    	normal successful completion.
+!
+! SIDE EFFECTS:	    None.
+!--
+    BIND
+    	ctx 	= .ctx_a    	    	: CTXDEF,
+    	out 	= .ctx [CTX_A_OUTSTR]	: BLOCK [,BYTE];
+
+    LOCAL
+    	dsc 	: BLOCK [DSC$K_S_BLN,BYTE],
+    	dsc2	: BLOCK [DSC$K_S_BLN,BYTE],
+    	status;
+
+    CASE .param FROM PET_K__FIRST TO PET_K__LAST OF
+    SET
+
+    	[PET_K_CHARSET] :
+    	    BEGIN
+    	    	INIT_SDESC (dsc, .tokencnt, .tokenptr);
+    	    	IF .ctx [CTX_L_CONVCTX] NEQU 0 THEN
+    	    	BEGIN
+    	    	    INIT_SDESC (dsc2, .ctx [CTX_W_CHARSET], ctx [CTX_T_CHARSET]);
+    	    	    IF STR$CASE_BLIND_COMPARE (dsc, dsc2) NEQU 0 THEN
+    	    	    	CHARCONV_END (ctx [CTX_L_CONVCTX]);
+    	    	END;
+    	    	IF STR$CASE_BLIND_COMPARE (dsc, us_ascii_d) EQLU 0 THEN
+    	    	BEGIN
+    	    	    status = SS$_NORMAL;
+    	    	    ctx [CTX_L_CONVCTX] = 0;
+    	    	END
+    	    	ELSE
+    	    	BEGIN
+    	    	    INIT_SDESC (dsc2, CTX_S_CHARSET, ctx [CTX_T_CHARSET]);
+    	    	    status = CHARCONV_BEGIN (CHARCONV__NETWORK_TO_LOCAL, ctx [CTX_L_CONVCTX],
+    	    	    	    	    	    	ctx [CTX_W_CHARSET], dsc2, dsc);
+    	    	    IF .status THEN
+    	    	    BEGIN
+    	    	    	ctx [CTX_W_CHARSET] = MINU (.tokencnt, CTX_S_CHARSET);
+    	    	    	CH$MOVE (.ctx [CTX_W_CHARSET], .tokenptr, ctx [CTX_T_CHARSET]);
+    	    	    END
+    	    	    ELSE
+    	    	    BEGIN
+    	    	    	ctx [CTX_L_CONVCTX] = 0;
+    	    	    	IF STR$CASE_BLIND_COMPARE (dsc, dsc2) EQLU 0 THEN
+    	    	    	    status = SS$_NORMAL;
+    	    	    END;
+    	    	END;
+
+    	    	IF NOT .status THEN
+    	    	    RETURN .status;
+
+    	    END;
+
+    	[PET_K_QP_ENCODING] :
+    	    ctx [CTX_V_QP_ENCODING] = 1;
+
+    	[PET_K_B64_ENCODING] :
+    	    ctx [CTX_V_QP_ENCODING] = 0;
+
+    	[PET_K_STRING] :
+    	    BEGIN
+    	    	LOCAL
+    	    	    buf	    : VECTOR [128,BYTE],
+    	    	    dsc3    : BLOCK [DSC$K_S_BLN,BYTE];
+
+    	    	INIT_SDESC (dsc, .stringcnt - 2, .stringptr);  ! trim off trailing ?= sequence
+    	    	INIT_SDESC (dsc2, %ALLOCATION (buf), buf);
+    	    	INIT_DYNDESC (dsc3);
+    	    	IF .ctx [CTX_V_QP_ENCODING] THEN
+    	    	    status = QP_DECODE_STRING (.ctx [CTX_L_QPCODE], dsc, dsc2 [DSC$W_LENGTH], dsc2)
+    	    	ELSE
+    	    	    status = BASE64_DECODE_STRING (dsc, dsc2 [DSC$W_LENGTH], dsc2);
+    	    	IF NOT .status THEN
+    	    	    RETURN .status;
+    	    	IF .ctx [CTX_L_CONVCTX] NEQU 0 THEN
+    	    	BEGIN
+    	    	    status = CHARCONV_CONVERT (ctx [CTX_L_CONVCTX], dsc2, 0, dsc3);
+    	    	    IF .status THEN
+    	    	    	STR$APPEND (.ctx [CTX_A_OUTSTR], dsc3);
+    	    	END
+    	    	ELSE
+    	    	    STR$APPEND (.ctx [CTX_A_OUTSTR], dsc2);
+
+    	    	FREE_STRINGS (dsc3);
+
+    	    	IF NOT .status THEN
+    	    	    RETURN .status;
+
+    	    END;
+
+    TES;
+
+    SS$_NORMAL
+
+END; ! pet_store
+    	
+
+END
+ELUDOM

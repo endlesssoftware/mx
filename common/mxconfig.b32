@@ -1,0 +1,2082 @@
+%TITLE 'MXCONFIG'
+MODULE MXCONFIG (IDENT='V3.0',
+    	ADDRESSING_MODE (EXTERNAL=LONG_RELATIVE, NONEXTERNAL=LONG_RELATIVE)) =
+BEGIN
+!++
+! FACILITY: 	    MX
+!
+! ABSTRACT: 	    Configuration file I/O routines.
+!
+! MODULE DESCRIPTION:
+!
+!   This module contains routines that read and write MX configuration
+!   files.  These routines are used by MX agents and by MCP.
+!
+! AUTHOR:   	    M. Madison
+!
+! Copyright (c) 2008, Matthew Madison.
+! Copyright (c) 2011, Endless Software Solutions.
+! 
+! All rights reserved.
+! 
+! Redistribution and use in source and binary forms, with or without
+! modification, are permitted provided that the following conditions
+! are met:
+! 
+!     * Redistributions of source code must retain the above
+!       copyright notice, this list of conditions and the following
+!       disclaimer.
+!     * Redistributions in binary form must reproduce the above
+!       copyright notice, this list of conditions and the following
+!       disclaimer in the documentation and/or other materials provided
+!       with the distribution.
+!     * Neither the name of the copyright owner nor the names of any
+!       other contributors may be used to endorse or promote products
+!       derived from this software without specific prior written
+!       permission.
+! 
+! THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
+! "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
+! LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
+! A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
+! OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
+! SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
+! LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
+! DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
+! THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
+! (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
+! OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+!
+! CREATION DATE:    12-DEC-1989
+!
+! MODIFICATION HISTORY:
+!
+!   12-DEC-1989	V1.0	Madison	    Initial coding (from WCFG).
+!   27-JUN-1990	V1.1-1	Madison	    Altered fileserv information.
+!   24-SEP-1990	V1.2	Madison	    Added agent-specific config info.
+!   04-OCT-1990	V1.2-1	Madison	    Added fileserv-mlist links.
+!   12-NOV-1990	V1.3	Madison	    More fileserv-related changes.
+!   05-DEC-1990	V1.4	Madison	    Added Jnet agent config info.
+!   10-DEC-1990	V1.4-1	Madison	    Handle new MLST extensions.
+!   12-DEC-1990	V1.4-2	Madison	    Handle another MLST extension.
+!   11-FEB-1991	V1.5	Madison	    Handle LOCAL_INFO, SMTP_INFO extensions.
+!   20-MAR-1991	V1.6	Madison	    Use MEM routines.
+!   16-OCT-1991	V1.7	Madison	    Handle DNSMTP_INFO; SMTP_INFO changes.
+!   07-NOV-1991	V1.8	Madison	    Handle SITE_INFO.
+!   14-FEB-1992	V1.9	Madison	    JNET_INFO adds UNAMQUE.
+!   18-FEB-1992	V2.0	Greer	    Add XSMTP_INFO.
+!   18-MAR-1993 V2.1	Goatley     Modify READ_MXCONFIG for new AXP version.
+!   15-DEC-1993 V2.2	Goatley     Added MXCONFIG_INSERT_PATH.
+!   14-JAN-1997	V2.3	Madison	    Added MLF info.
+!   17-FEB-1997	V2.4	Madison	    Added SPAM info.
+!   02-APR-1997	V2.5	Madison	    Added LCLDOMS, new MLST MAXFWD field.
+!   13-APR-1997	V2.5-1	Madison	    Fix defaulting of MLST_L_MAXFWD.
+!   30-APR-1997 V2.5-2	Goatley     Added list headers.
+!   05-SEP-1997	V2.6	Madison	    Add extended spam database.
+!   10-SEP-1997	V2.6-1	Madison	    Turn on SYSLCK before attempting $ENQW.
+!   16-OCT-1997	V2.6-2	Madison	    Remove extra call to LIB$FREE_EF in SAVE_ESPAMDB.
+!   05-DEC-1997	V2.6-3	Madison	    Take out lock on reading ESPAM database.
+!   06-DEC-1997	V2.7	Madison	    Revamp merging code.
+!   17-DEC-1997	V2.7-1	Madison	    Explicit check for zero DTREF before LIB$SUB_TIMES.
+!   24-APR-1998	V2.7-2	Madison	    Add RBL domain for SMTP server.
+!   16-MAY-1998	V2.7-3	Madison	    Remove extra conversion code.
+!   09-JUN-1998	V2.8	Madison	    Add heuristics & relay info.
+!   27-JUL-1998	V2.8-1	Madison	    Fix bug in reading heuristics exclusions.
+!   05-AUG-1998	V2.8-2	Madison	    Initialize heuristics structures before opening file.
+!   14-AUG-1998	V2.8-3	Madison	    Always read heuristics.
+!   25-NOV-2000	V2.9	Madison	    Remove Jnet support, new SMTP structure; retry on open.
+!   13-NOV-2000	V2.9-1	Madison	    Was not preserving MAXDNS SMTP setting from pre-5.2.
+!   02-MAR-2002 V2.10   Madison     Mailing list, rewrite, espam changes for V5.3.
+!   27-MAY-2002 V2.11   Madison     Was missing default conf for new heuristics in V5.3.
+!   09-MAR-2003 V2.12   Madison     Need to keep SPAMLASTID updated.
+!   03-FEB-2008 V3.0    Madison     Expunged UUCP, Jnet, and X.25 references.
+!--
+    LIBRARY 'SYS$LIBRARY:STARLET';
+    LIBRARY 'MX';
+    LIBRARY 'FIELDS';
+    LIBRARY 'MX_LCLDEFS';
+    LIBRARY 'MX_OLD_LCLDEFS';
+    LIBRARY 'REGEX';
+
+    FORWARD ROUTINE
+    	LOAD_MXCONFIG,
+    	SAVE_MXCONFIG,
+    	SAVE_ESPAMDB,
+	MXCONFIG_INSERT_PATH : NOVALUE,
+    	espam_match,
+    	new_cell_from_record,
+    	free_cell   	     : NOVALUE;
+
+    EXTERNAL ROUTINE
+    	G_HAT (STR$COPY_DX, STR$COPY_R,	STR$FREE1_DX, LIB$GET_VM,
+    	    LIB$FREE_VM, STR$CASE_BLIND_COMPARE, MEM_GETTXT),
+    	G_HAT (LIB$FIND_FILE, LIB$DELETE_FILE, LIB$FIND_FILE_END, LIB$WAIT,
+    	    LIB$RENAME_FILE, LIB$GET_EF, LIB$FREE_EF, LIB$SUB_TIMES);
+
+    EXTERNAL LITERAL
+    	MX__CFGERR;
+
+    EXTERNAL
+    	RWRULES	    : QUEDEF WEAK,
+    	PATHLIST    : QUEDEF WEAK,
+    	ALIASES	    : QUEDEF WEAK,
+    	MLISTS	    : QUEDEF WEAK,
+    	SYSUSERS    : QUEDEF WEAK,
+    	FSRVQUE	    : QUEDEF WEAK,
+    	SMTP_INFO   : SMTPDEF WEAK,
+    	ROUTER_INFO : ROUTERDEF WEAK,
+    	LOCAL_INFO  : LOCALDEF WEAK,
+    	DNSMTP_INFO : DNSMTPDEF WEAK,
+    	SITE_INFO   : SITEDEF WEAK,
+    	MLF_INFO    : MLFDEF WEAK,
+    	LCLDOMS	    : QUEDEF WEAK,
+    	ESPAMQUE    : QUEDEF WEAK,
+    	RELAYQUE    : QUEDEF WEAK,
+    	GHEUR_INFO  : GHEURDEF WEAK,
+    	HEURTBL	    : HEURDEF_ARRAY (HEUR_K_COUNT) WEAK,
+        SPAMLASTID  : LONG WEAK;
+
+    LITERAL
+    	CFG_K_VERSION	= 32871,
+    	CFG_K_CURRENT	=    13,
+    	CFG_K_EARLIEST_COMPATIBLE = 6,  ! earliest upward-compatible version
+    	CFG_K_RWPRE53	= 14228,
+    	CFG_K_RWRULE	= 14739,
+    	CFG_K_PATH  	= 38114,
+    	CFG_K_ALIAS 	= 21881,
+    	CFG_K_MLISTPRE53= 41771,
+        CFG_K_MLIST     = 41772,
+    	CFG_K_MLOWNER	= 76112,
+    	CFG_K_MLMOD 	= 65190,
+    	CFG_K_SYSUSER	= 12176,
+    	CFG_K_FSINFO	= 87533,
+    	CFG_K_SMTPINFO	= 83174,
+    	CFG_K_SMTPRBL	= 57601,
+    	CFG_K_SMTPPRE52	= 83173,
+    	CFG_K_RTRINFO	= 31175,
+    	CFG_K_LOCALINFO	= 54221,
+    	CFG_K_DNSMTPINFO= 24185,
+    	CFG_K_SITEINFO	= 47298,
+    	CFG_K_MLFINFO	= 60491,
+    	CFG_K_SPAM	= 36527,  ! NOT USED
+    	CFG_K_LCLDOM	= 43906,
+	CFG_K_MLHDR	= 28383,
+    	CFG_K_ESPAM53_ 	= 81932,  ! in REJMAN database (temp for 5.3 dev builds)
+        CFG_K_ESPAM     = 81933,  ! in REJMAN database
+    	CFG_K_ESPAMPRE53= 51964,  ! in REJMAN database
+    	CFG_K_RELAY	= 92748,
+    	CFG_K_GHEURINFO	= 19204,  ! in REJMAN database
+    	CFG_K_HEURINFO	= 66767,  ! in REJMAN database
+    	CFG_K_HEUREXCL	= 17676,  ! in REJMAN database
+        CFG_K_SPAMLAST  = 34217;  ! in REJMAN database
+
+    _DEF (LSB)
+    	LSB_W_STATUS	= _WORD,
+    	LSB_W_RESERVED	= _WORD,
+    	LSB_L_LKID  	= _LONG
+    _ENDDEF (LSB);
+
+    OWN
+    	default_confidence  : VECTOR [HEUR_K_COUNT,LONG] INITIAL (
+    	    	    	    	HEUR_K_DC_NULL_FROM, HEUR_K_DC_NULL_TO, HEUR_K_DC_FROM_TO_SENDER_SAME,
+    	    	    	    	HEUR_K_DC_MSGID_HAS_TO, HEUR_K_DC_INVALID_AOL_ADDRESS, HEUR_K_DC_NUMERIC_ADDRESS,
+    	    	    	    	HEUR_K_DC_RECEIVED_AFTER_FROM, HEUR_K_DC_X_UIDL, HEUR_K_DC_NULL_MSGID,
+    	    	    	    	HEUR_K_DC_INVALID_HOTMAIL_ADDR, HEUR_K_DC_RECEIVED_ALL_ZEROS, HEUR_K_DC_UIDL_AUTH_SENDER,
+    	    	    	    	HEUR_K_DC_PRECEDENCE_BULK, HEUR_K_DC_INVALID_FROM, HEUR_K_DC_INVALID_TO);
+
+
+%SBTTL 'LOAD_MXCONFIG'
+GLOBAL ROUTINE LOAD_MXCONFIG (FSPEC_A, DFSPEC_A, RSPEC_A, XFLAGS, RDT_A, X_HOLDING_LOCK) = 
+BEGIN
+!++
+! FUNCTIONAL DESCRIPTION:
+!
+!   Loads an MX configuration.
+!
+! RETURNS:  	cond_value, longword (unsigned), write only, by value
+!
+! PROTOTYPE:
+!
+!   LOAD_MXCONFIG [filespec] [,defspec] [,rspec]
+!
+! IMPLICIT INPUTS:  None.
+!
+! IMPLICIT OUTPUTS: None.
+!
+! COMPLETION CODES:
+!
+!   SS$_NORMAL:	    	normal successful completion.
+!
+! SIDE EFFECTS:
+!
+!   None.
+!--
+    BUILTIN
+    	ACTUALCOUNT;
+
+    LOCAL
+    	FAB 	: $FAB_DECL,
+    	RAB 	: $RAB_DECL,
+    	NAM 	: $NAM_DECL,
+    	XABFHC	: $XABFHC_DECL,
+    	XABRDT	: $XABRDT_DECL,
+    	FSPEC	: BLOCK [DSC$K_S_BLN,BYTE],
+    	DFSPEC	: BLOCK [DSC$K_S_BLN,BYTE],
+    	RSPEC	: VECTOR [255,BYTE],
+    	CURML	: REF MLSTDEF,
+    	FLAGS	: BLOCK [4,BYTE],
+    	lsb 	: LSBDEF,
+    	do_deq,
+    	holding_lock,
+    	VERSION,
+    	STATUS;
+
+    VERSION = 0;
+
+    IF ACTUALCOUNT () GTR 3 THEN
+    	FLAGS [0,0,32,0] = .XFLAGS
+    ELSE
+    	FLAGS [0,0,32,0] = %X'FFFFFFFF' AND NOT (CFG_M_EXTSPAM OR CFG_M_SPAMHEUR);
+
+    holding_lock = (IF ACTUALCOUNT () GTR 5 THEN .X_HOLDING_LOCK ELSE 0);
+
+    IF .FLAGS [CFG_V_SPAMHEUR] THEN
+    BEGIN
+    	CH$FILL (%CHAR (0), HEUR_K_COUNT*HEUR_S_HEURDEF, HEURTBL);
+    	CH$FILL (%CHAR (0), GHEUR_S_GHEURDEF, GHEUR_INFO);
+    	GHEUR_INFO [GHEUR_W_ACTION] = HEUR_K_ACTION_DROP;
+    	GHEUR_INFO [GHEUR_L_CL_ACCEPT] = HEUR_K_ACCEPT_THRESHOLD_DEFAULT;
+    	GHEUR_INFO [GHEUR_L_CL_REJECT] = HEUR_K_REJECT_THRESHOLD_DEFAULT;
+    	INIT_QUEUE (GHEUR_INFO [GHEUR_Q_GBLEXCL]);
+    	INCR i FROM 0 TO HEUR_K_COUNT-1 DO
+    	BEGIN
+    	    INIT_QUEUE (HEURTBL [.i, HEUR_Q_EXCL]);
+    	    HEURTBL [.i, HEUR_L_INDEX] = .i;
+    	    HEURTBL [.i, HEUR_L_CONFIDENCE] = .default_confidence [.i];
+    	END;
+    END;
+
+    $INIT_DYNDESC (FSPEC);
+    $INIT_DYNDESC (DFSPEC);
+    $FAB_INIT (FAB=FAB, FAC=GET, SHR=SHRGET, XAB=XABFHC, NAM=NAM);
+    $RAB_INIT (RAB=RAB, FAB=FAB);
+    $XABFHC_INIT (XAB=XABFHC);
+    $NAM_INIT (NAM=NAM, RSA=RSPEC, RSS=%ALLOCATION (RSPEC));
+    IF ACTUALCOUNT () GTR 4 AND .RDT_A NEQA 0 THEN
+    BEGIN
+    	$XABRDT_INIT (XAB=XABRDT);
+    	XABFHC [XAB$L_NXT] = XABRDT;
+    END;
+
+    STATUS = (ACTUALCOUNT () GTR 0);
+    IF .STATUS THEN STATUS = (.FSPEC_A NEQA 0);
+    IF .STATUS THEN
+    	STR$COPY_DX (FSPEC, .FSPEC_A)
+    ELSE IF .FLAGS [CFG_V_EXTSPAM] THEN
+    	STR$COPY_DX (FSPEC, %ASCID'MX_REJECTION_DATABASE')
+    ELSE
+    	STR$COPY_DX (FSPEC, %ASCID'MX_CONFIG');
+    FAB [FAB$L_FNA] = .FSPEC [DSC$A_POINTER];
+    FAB [FAB$B_FNS] = MIN (.FSPEC [DSC$W_LENGTH], 255);
+
+    STATUS = (ACTUALCOUNT () GTR 1);
+    IF .STATUS THEN STATUS = (.DFSPEC_A NEQA 0);
+    IF .STATUS THEN
+    	STR$COPY_DX (DFSPEC, .DFSPEC_A)
+    ELSE
+    	STR$COPY_DX (DFSPEC, %ASCID'SYS$DISK:[].MXCFG');
+
+    do_deq = 0;
+    IF .FLAGS [CFG_V_EXTSPAM] AND NOT .holding_lock THEN
+    BEGIN
+    	LOCAL
+    	    prvvec	: BLOCK [8,BYTE],
+    	    oldprv	: BLOCK [8,BYTE],
+    	    efn;
+    	prvvec [0,0,32,0] = prvvec [4,0,32,0] = 0;
+    	prvvec [PRV$V_SYSLCK] = 1;
+
+    	status = $SETPRV (ENBFLG=1, PRVADR=prvvec, PRVPRV=oldprv);
+    	IF NOT .status THEN RETURN .status;
+
+    	status = LIB$GET_EF (efn);
+    	IF NOT .status THEN
+    	BEGIN
+    	    IF NOT .oldprv [PRV$V_SYSLCK] THEN $SETPRV (ENBFLG=0, PRVADR=prvvec);
+    	    RETURN .status;
+    	END;
+
+    	status = $ENQW (EFN=.efn, LKMODE=LCK$K_EXMODE, LKSB=lsb,
+    	    	    FLAGS=LCK$M_SYSTEM, RESNAM=%ASCID'MX_SPAM_DATABASE_LOCK');
+
+    	LIB$FREE_EF (efn);
+    	IF NOT .oldprv [PRV$V_SYSLCK] THEN $SETPRV (ENBFLG=0, PRVADR=prvvec);
+
+    	IF .status THEN status = .lsb [LSB_W_STATUS];
+    	IF NOT .status THEN RETURN .status;
+    	do_deq = 1;
+    END;
+
+    FAB [FAB$L_DNA] = .DFSPEC [DSC$A_POINTER];
+    FAB [FAB$B_DNS] = MIN (.DFSPEC [DSC$W_LENGTH], 255);
+
+    !  Try up to 12 times, 1/4 second apart, just in case
+    !  we're trying to read the file while it's still open
+    INCR i FROM 1 TO 12 DO
+    BEGIN
+    	STATUS = $OPEN (FAB=FAB);
+    	IF .status OR (.status NEQU RMS$_FLK) THEN
+    	    EXITLOOP;
+    	LIB$WAIT (%REF (%E'0.25'));
+    END;
+
+    STR$FREE1_DX (FSPEC);
+    STR$FREE1_DX (DFSPEC);
+
+    IF NOT .STATUS THEN
+    BEGIN
+    	IF .do_deq THEN $DEQ (LKID=.lsb [LSB_L_LKID]);
+    	RETURN .STATUS;
+    END;
+!+
+!  Optimization:
+!  Check the RDT on the file.  If it matches the RDT that was passed
+!  in by the caller, don't bother reading in ESPAM database again -- it
+!  matches what the caller already has in its in-memory copy.
+!-
+    IF .flags [CFG_V_EXTSPAM] AND ACTUALCOUNT () GTR 4 AND .rdt_a NEQA 0 THEN
+    BEGIN
+        IF CH$EQL (8, xabrdt [XAB$Q_RDT], 8, .rdt_a, %CHAR (0)) THEN
+        BEGIN
+            IF .do_deq THEN
+                $DEQ (LKID=.lsb [LSB_L_LKID]);
+            RETURN SS$_NORMAL;
+        END;
+    END;
+
+    IF .flags [CFG_V_EXTSPAM] THEN
+    BEGIN
+    	LOCAL
+            e : REF EXTSPAMDEF;
+
+        SPAMLASTID = 0;
+        IF ACTUALCOUNT () GTR 4 AND .rdt_a NEQA 0 THEN
+            CH$MOVE (8, XABRDT [XAB$Q_RDT], .RDT_A);
+        WHILE NOT REMQUE (.espamque [QUE_L_HEAD], e) DO
+    	    free_cell (.e);
+    END;
+
+    IF ACTUALCOUNT () GTR 2 THEN
+    	IF .RSPEC_A NEQA 0 THEN
+    	    STR$COPY_R (.RSPEC_A, %REF (.NAM [NAM$B_RSL]), RSPEC);
+
+    STATUS = $CONNECT (RAB=RAB);
+    IF NOT .STATUS THEN
+    BEGIN
+    	$CLOSE (FAB=FAB);
+    	IF .do_deq THEN $DEQ (LKID=.lsb [LSB_L_LKID]);
+    	RETURN .STATUS;
+    END;
+
+    RAB [RAB$W_USZ] = (IF .FAB [FAB$W_MRS] EQL 0 THEN
+    	    	    	IF .XABFHC [XAB$W_LRL] EQL 0 THEN 1024
+    	    	    	    ELSE .XABFHC [XAB$W_LRL]
+    	    	    	ELSE .FAB [FAB$W_MRS]);
+
+    STATUS = LIB$GET_VM (%REF (.RAB [RAB$W_USZ]), RAB [RAB$L_UBF]);
+    IF NOT .STATUS THEN
+    BEGIN
+    	$CLOSE (FAB=FAB);
+    	IF .do_deq THEN $DEQ (LKID=.lsb [LSB_L_LKID]);
+    	RETURN .STATUS;
+    END;
+
+    IF .FLAGS [CFG_V_MLFINFO] THEN
+    BEGIN
+    	CH$FILL (%CHAR (0), MLF_S_MLFDEF, MLF_INFO);
+    	MLF_INFO [MLF_L_DELAYDAYS] = -1;
+    END;
+
+    WHILE (STATUS = $GET (RAB=RAB)) DO
+    BEGIN
+    	BIND
+    	    RBF = .RAB [RAB$L_UBF] : VECTOR [,LONG];
+
+    	SELECTONE .RBF [0] OF
+    	SET
+    	    [CFG_K_VERSION] :
+    	    	BEGIN
+    	    	    VERSION = .RBF [1];
+    	    	    IF .VERSION GTR CFG_K_CURRENT OR .VERSION LSS CFG_K_EARLIEST_COMPATIBLE
+    	    	    THEN EXITLOOP;
+    	    	END;
+    	    [CFG_K_SMTPPRE52] :
+    	    	IF .FLAGS [CFG_V_SMTPINFO] THEN
+    	    	BEGIN
+    	    	    LOCAL old_smtp_info : PRE52SMTPDEF;
+    	    	    CH$FILL (%CHAR (0), PRE52SMTP_S_PRE52SMTPDEF, old_smtp_info);
+    	    	    ! SMTPDEF structure changed at version 10
+    	    	    ! to include RBLDOM and to shrink DEFRTR from 255
+    	    	    ! to 128 characters
+    	    	    IF .version LSS 10 THEN
+    	    	    BEGIN
+    	    	    	LOCAL len, defrtrp;
+    	    	    	! Structure is the same up through field SMTP_T_DEFRTR
+    	    	    	len = CH$DIFF (old_smtp_info [PRE52SMTP_T_DEFRTR], old_smtp_info);
+    	    	    	CH$MOVE (.len, RBF, old_smtp_info);
+    	    	    	defrtrp = CH$PLUS (RBF, .len);
+    	    	    	len = MINU (.old_smtp_info [PRE52SMTP_W_DEFRTR], PRE52SMTP_S_DEFRTR);
+    	    	    	CH$MOVE (.len, .defrtrp, old_smtp_info [PRE52SMTP_T_DEFRTR]);
+    	    	    	old_smtp_info [PRE52SMTP_W_DEFRTR] = .len;
+    	    	    END
+    	    	    ELSE
+    	    	    	CH$MOVE (.RAB [RAB$W_RSZ], RBF, old_smtp_info);
+    	    	    CH$FILL (%CHAR (0), SMTP_S_SMTPDEF, smtp_info);
+    	    	    INIT_QUEUE (smtp_info [SMTP_Q_RBLQUE]);
+    	    	    smtp_info [SMTP_L_MAXTRIES] = .old_smtp_info [PRE52SMTP_L_MAXTRIES];
+    	    	    CH$MOVE (8, old_smtp_info [PRE52SMTP_Q_RETRY], smtp_info [SMTP_Q_RETRY]);
+    	    	    smtp_info [SMTP_L_MAXDNS] = .old_smtp_info [PRE52SMTP_L_MAXDNS];
+    	    	    smtp_info [SMTP_L_FLAGS] = .old_smtp_info [PRE52SMTP_L_FLAGS];
+    	    	    smtp_info [SMTP_W_DEFRTR] = .old_smtp_info [PRE52SMTP_W_DEFRTR];
+    	    	    IF .smtp_info [SMTP_W_DEFRTR] NEQ 0 THEN
+    	    	    	CH$MOVE (.smtp_info [SMTP_W_DEFRTR], old_smtp_info [PRE52SMTP_T_DEFRTR], smtp_info [SMTP_T_DEFRTR]);
+    	    	    IF .old_smtp_info [PRE52SMTP_W_RBLDOM] NEQ 0 THEN
+    	    	    BEGIN
+    	    	    	LOCAL txt : REF TXTDEF;
+    	    	    	txt = MEM_GETTXT (.old_smtp_info [PRE52SMTP_W_RBLDOM], old_smtp_info [PRE52SMTP_T_RBLDOM]);
+    	    	    	INSQUE_TAIL (.txt, smtp_info [SMTP_Q_RBLQUE]);
+    	    	    END;
+    	    	END;
+    	    [CFG_K_SMTPINFO] :
+    	    	IF .FLAGS [CFG_V_SMTPINFO] THEN
+    	    	BEGIN
+    	    	    CH$FILL (%CHAR (0), SMTP_S_SMTPDEF, SMTP_INFO);
+    	    	    CH$MOVE (.RAB [RAB$W_RSZ], RBF, SMTP_INFO);
+    	    	    INIT_QUEUE (smtp_info [SMTP_Q_RBLQUE]);
+    	    	END;
+    	    [CFG_K_SMTPRBL] :
+    	    	IF .flags [CFG_V_SMTPINFO] THEN
+    	    	BEGIN
+    	    	    BIND  r = rbf : TXTDEF;
+    	    	    LOCAL txt : REF TXTDEF;
+    	    	    txt = MEM_GETTXT (.r [TXT_W_LEN], r [TXT_T_TEXT]);
+    	    	    INSQUE_TAIL (.txt, smtp_info [SMTP_Q_RBLQUE]);
+    	    	END;
+    	    [CFG_K_DNSMTPINFO] :
+    	    	IF .FLAGS [CFG_V_DNSMTPINFO] THEN
+    	    	BEGIN
+    	    	    CH$FILL (%CHAR (0), DNSMTP_S_DNSMTPDEF, DNSMTP_INFO);
+    	    	    CH$MOVE (.RAB [RAB$W_RSZ], RBF, DNSMTP_INFO);
+    	    	END;
+    	    [CFG_K_SITEINFO] :
+    	    	IF .FLAGS [CFG_V_SITEINFO] THEN
+    	    	BEGIN
+    	    	    CH$FILL (%CHAR (0), SITE_S_SITEDEF, SITE_INFO);
+    	    	    CH$MOVE (.RAB [RAB$W_RSZ], RBF, SITE_INFO);
+    	    	END;
+    	    [CFG_K_RTRINFO] :
+    	    	IF .FLAGS [CFG_V_ROUTERINFO] THEN
+    	    	    CH$MOVE (ROUTER_S_ROUTERDEF, RBF, ROUTER_INFO);
+    	    [CFG_K_LOCALINFO] :
+    	    	IF .FLAGS [CFG_V_LOCALINFO] THEN
+    	    	BEGIN
+    	    	    CH$FILL (%CHAR (0), LOCAL_S_LOCALDEF, LOCAL_INFO);
+    	    	    LOCAL_INFO [LOCAL_L_HDRTOP] = %X'FFFFFFFF';
+    	    	    CH$MOVE (.RAB [RAB$W_RSZ], RBF, LOCAL_INFO);
+    	    	END;
+    	    [CFG_K_MLFINFO] :
+    	    	IF .FLAGS [CFG_V_MLFINFO] THEN
+    	    	BEGIN
+    	    	    CH$FILL (%CHAR (0), MLF_S_MLFDEF, MLF_INFO);
+    	    	    MLF_INFO [MLF_L_DELAYDAYS] = -1;
+    	    	    CH$MOVE (.RAB [RAB$W_RSZ], RBF, MLF_INFO);
+    	    	END;
+    	    [CFG_K_FSINFO] :
+    	    	IF .FLAGS [CFG_V_FSRVINFO] THEN
+    	    	BEGIN
+    	    	    LOCAL F : REF FSRVDEF;
+    	    	    LIB$GET_VM (%REF (FSRV_S_FSRVDEF), F);
+		    CH$MOVE (FSRV_S_FSRVDEF, RBF, .F);
+    	    	    INIT_QUEUE (F [FSRV_Q_HOSTQ], F [FSRV_Q_USERQ]);
+    	    	    F [FSRV_L_SERVCNT] = F [FSRV_L_MLSTPTR] = 0;
+    	    	    INSQUE (.F, .FSRVQUE [QUE_L_TAIL]);
+    	    	END;
+    	    [CFG_K_RWRULE] :
+    	    	IF .FLAGS [CFG_V_RWRULES] THEN
+    	    	BEGIN
+    	    	    LOCAL
+                        R : REF RULEDEF,
+                        T : REF TXTDEF,
+                        OFFSET;
+    	    	    LIB$GET_VM (%REF (RULE_S_RULEDEF), R);
+                    CH$FILL (%CHAR (0), RULE_S_RULEDEF, .R);
+                    CH$MOVE (RULE_S_RULEDEF, RBF, .R);
+                    r [RULE_A_LHSREGEX] = 0;
+                    OFFSET = RULE_S_RULEDEF;
+                    T = MEM_GETTXT (.r [RULE_A_LHS], CH$PLUS (RBF, .OFFSET));
+                    OFFSET = .OFFSET + .r [RULE_A_LHS];
+                    r [RULE_A_LHS] = .T;
+                    T = MEM_GETTXT (.r [RULE_A_RHS], CH$PLUS (RBF, .OFFSET));
+                    OFFSET = .OFFSET + .r [RULE_A_RHS];
+                    r [RULE_A_RHS] = .T;
+    	    	    INSQUE (.R, .RWRULES [QUE_L_TAIL]);
+    	    	END;
+    	    [CFG_K_RWPRE53] :
+    	    	IF .FLAGS [CFG_V_RWRULES] THEN
+    	    	BEGIN
+                    BIND PRE53 = RBF : RULEPRE53DEF;
+                    LOCAL R : REF RULEDEF;
+    	    	    LIB$GET_VM (%REF (RULE_S_RULEDEF), R);
+                    CH$FILL (%CHAR (0), RULE_S_RULEDEF, .R);
+                    R [RULE_A_LHS] = MEM_GETTXT (.pre53 [RULEPRE53_W_LHS], pre53 [RULEPRE53_T_LHS]);
+                    R [RULE_A_RHS] = MEM_GETTXT (.pre53 [RULEPRE53_W_RHS], pre53 [RULEPRE53_T_RHS]);
+    	    	    INSQUE (.R, .RWRULES [QUE_L_TAIL]);
+    	    	END;
+    	    [CFG_K_ALIAS] :
+    	    	IF .FLAGS [CFG_V_ALIASES] THEN
+    	    	BEGIN
+    	    	    LOCAL R : REF RULEPRE53DEF;
+    	    	    LIB$GET_VM (%REF (RULEPRE53_S_RULEPRE53DEF), R);
+		    CH$MOVE (RULEPRE53_S_RULEPRE53DEF, RBF, .R);
+    	    	    INSQUE (.R, .ALIASES [QUE_L_TAIL]);
+    	    	END;
+    	    [CFG_K_PATH] :
+    	    	IF .FLAGS [CFG_V_PATHLIST] THEN
+    	    	BEGIN
+    	    	    LOCAL P : REF PATHDEF;
+    	    	    LIB$GET_VM (%REF (PATH_S_PATHDEF), P);
+		    CH$MOVE (PATH_S_PATHDEF, RBF, .P);
+		    MXCONFIG_INSERT_PATH (p, pathlist);
+    	    	END;
+    	    [CFG_K_SYSUSER] :
+    	    	IF .FLAGS [CFG_V_SYSUSERS] THEN
+    	    	BEGIN
+    	    	    LOCAL T : REF TXTDEF;
+    	    	    BIND S = RBF : TXTDEF;
+    	    	    T = MEM_GETTXT (.S [TXT_W_LEN]);
+    	    	    T [TXT_W_CODE] = .S [TXT_W_CODE];
+    	    	    T [TXT_W_LEN] = .S [TXT_W_LEN];
+    	    	    CH$MOVE (.T [TXT_W_LEN], S [TXT_T_TEXT], T [TXT_T_TEXT]);
+    	    	    INSQUE (.T, .SYSUSERS [QUE_L_TAIL]);
+    	    	END;
+    	    [CFG_K_SPAM] :  ; ! NOTHING - NOT USED
+    	    [CFG_K_LCLDOM] :
+    	    	IF .FLAGS [CFG_V_LCLDOMS] THEN
+    	    	BEGIN
+    	    	    LOCAL S : REF LCLDOMDEF;
+    	    	    LIB$GET_VM (%REF (LCLDOM_S_LCLDOMDEF), S);
+		    CH$MOVE (LCLDOM_S_LCLDOMDEF, RBF, .S);
+    	    	    INSQUE (.S, .LCLDOMS [QUE_L_TAIL]);
+    	    	END;
+    	    [CFG_K_ESPAM,CFG_K_ESPAM53_,CFG_K_ESPAMPRE53] :
+    	    	IF .FLAGS [CFG_V_EXTSPAM] THEN
+    	    	BEGIN
+    	    	    LOCAL
+    	    	    	E : REF EXTSPAMDEF;
+    	    	    e = new_cell_from_record (rbf);
+    	    	    INSQUE (.E, .ESPAMQUE [QUE_L_TAIL]);
+    	    	END;
+    	    [CFG_K_MLIST,CFG_K_MLISTPRE53] :
+    	    	IF .FLAGS [CFG_V_MLISTS] THEN
+    	    	BEGIN
+    	    	    LIB$GET_VM (%REF (MLST_S_MLSTDEF), CURML);
+		    CH$MOVE (.RAB [RAB$W_RSZ], RBF, .CURML);
+    	    	    IF .RAB [RAB$W_RSZ] LSS MLST_S_MLSTDEF THEN
+    	    	    BEGIN
+    	    	    	CH$FILL (%CHAR (0), MLST_S_MLSTDEF-.RAB [RAB$W_RSZ],
+    	    	    	    CH$PLUS (.CURML, .RAB [RAB$W_RSZ]));
+    	    	    	IF .rab [RAB$W_RSZ] LSS %FIELDEXPAND (MLST_L_MAXFWD, 0) THEN
+    	    	    	    CURML [MLST_L_MAXFWD] = -1;
+    	    	    END;
+                    IF .rbf [0] NEQU CFG_K_MLIST THEN
+                        CH$FILL (%CHAR (0), 8, curml [MLST_Q_CONFTIME]);
+
+    	    	    INSQUE (.CURML, .MLISTS [QUE_L_TAIL]);
+    	    	    BEGIN
+    	    	    	BIND
+    	    	    	    OWNQ = CURML [MLST_Q_OWNQ] : QUEDEF,
+    	    	    	    MODQ = CURML [MLST_Q_MODQ] : QUEDEF,
+			    HDRQ = CURML [MLST_Q_HDRQ] : QUEDEF;
+    	    	    	OWNQ [QUE_L_TAIL] = OWNQ [QUE_L_HEAD] = OWNQ;
+    	    	    	MODQ [QUE_L_TAIL] = MODQ [QUE_L_HEAD] = MODQ;
+    	    	    	HDRQ [QUE_L_TAIL] = HDRQ [QUE_L_HEAD] = HDRQ;
+    	    	    END;
+    	    	END;
+    	    [CFG_K_MLOWNER] :
+    	    	IF .FLAGS [CFG_V_MLISTS] THEN
+    	    	BEGIN
+    	    	    LOCAL TXT : REF TXTDEF;
+    	    	    IF .CURML NEQA 0 THEN
+    	    	    BEGIN
+    	    	    	BIND OWNQ = CURML [MLST_Q_OWNQ] : QUEDEF,
+    	    	    	O = RBF : TXTDEF;
+    	    	    	TXT = MEM_GETTXT (.O [TXT_W_LEN]);
+    	    	    	TXT [TXT_W_CODE] = .O [TXT_W_CODE];
+    	    	    	TXT [TXT_W_LEN] = .O [TXT_W_LEN];
+    	    	    	CH$MOVE (.O [TXT_W_LEN], O [TXT_T_TEXT],
+    	    	    	    TXT [TXT_T_TEXT]);
+    	    	    	INSQUE (.TXT, .OWNQ [QUE_L_TAIL]);
+    	    	    END;
+    	    	END;
+
+    	    [CFG_K_MLMOD] :
+    	    	IF .FLAGS [CFG_V_MLISTS] THEN
+    	    	BEGIN
+    	    	    LOCAL TXT : REF TXTDEF;
+    	    	    IF .CURML NEQA 0 THEN
+    	    	    BEGIN
+    	    	    	BIND MODQ = CURML [MLST_Q_MODQ] : QUEDEF,
+    	    	    	O = RBF : TXTDEF;
+    	    	    	TXT = MEM_GETTXT (.O [TXT_W_LEN]);
+    	    	    	TXT [TXT_W_CODE] = .O [TXT_W_CODE];
+    	    	    	TXT [TXT_W_LEN] = .O [TXT_W_LEN];
+    	    	    	CH$MOVE (.O [TXT_W_LEN], O [TXT_T_TEXT],
+    	    	    	    TXT [TXT_T_TEXT]);
+    	    	    	INSQUE (.TXT, .MODQ [QUE_L_TAIL]);
+    	    	    END;
+    	    	END;
+    	    	    
+    	    [CFG_K_MLHDR] :
+    	    	IF .FLAGS [CFG_V_MLISTS] THEN
+    	    	BEGIN
+    	    	    LOCAL TXT : REF TXTDEF;
+    	    	    IF .CURML NEQA 0 THEN
+    	    	    BEGIN
+    	    	    	BIND HDRQ = CURML [MLST_Q_HDRQ] : QUEDEF,
+    	    	    	O = RBF : TXTDEF;
+    	    	    	TXT = MEM_GETTXT (.O [TXT_W_LEN]);
+    	    	    	TXT [TXT_W_CODE] = .O [TXT_W_CODE];
+    	    	    	TXT [TXT_W_LEN] = .O [TXT_W_LEN];
+    	    	    	CH$MOVE (.O [TXT_W_LEN], O [TXT_T_TEXT],
+    	    	    	    TXT [TXT_T_TEXT]);
+    	    	    	INSQUE (.TXT, .HDRQ [QUE_L_TAIL]);
+    	    	    END;
+    	    	END;
+
+    	    [CFG_K_RELAY] :
+    	    	IF .FLAGS [CFG_V_RELAYS] THEN
+    	    	BEGIN
+    	    	    LOCAL r : REF RELAYDEF;
+    	    	    LIB$GET_VM (%REF (RELAY_S_RELAYDEF), r);
+    	    	    CH$MOVE (RELAY_S_RELAYDEF, rbf, .r);
+    	    	    INSQUE (.r, .relayque [QUE_L_TAIL]);
+    	    	END;
+
+    	    [CFG_K_GHEURINFO] :
+    	    	IF .FLAGS [CFG_V_SPAMHEUR] THEN
+    	    	BEGIN
+    	    	    BIND g = rbf : GHEURDEF;
+    	    	    LOCAL len;
+    	    	    len = GHEUR_S_GHEURDEF - GHEUR_S_FWDTO + .g [GHEUR_W_FWDTO];
+    	    	    CH$MOVE (.len, rbf, GHEUR_INFO);
+    	    	    INIT_QUEUE (gheur_info [GHEUR_Q_GBLEXCL]);
+    	    	END;
+
+    	    [CFG_K_HEURINFO] :
+    	    	IF .FLAGS [CFG_V_SPAMHEUR] THEN
+    	    	BEGIN
+    	    	    BIND h = rbf : HEURDEF;
+    	    	    LOCAL i;
+    	    	    i = .h [HEUR_L_INDEX];
+    	    	    IF .i LSS HEUR_K_COUNT THEN
+    	    	    BEGIN
+    	    	    	CH$MOVE (HEUR_S_HEURDEF, rbf, heurtbl [.i,0,0,0,0]);
+    	    	    	INIT_QUEUE (heurtbl [.i, HEUR_Q_EXCL]);
+    	    	    END;
+    	    	END;
+
+    	    [CFG_K_HEUREXCL] :
+    	    	IF .FLAGS [CFG_V_SPAMHEUR] THEN
+    	    	BEGIN
+    	    	    BIND
+    	    	    	h   = RBF   	    	    	    : TXTDEF,
+    	    	    	gq  = GHEUR_INFO [GHEUR_Q_GBLEXCL]   : QUEDEF;
+    	    	    LOCAL
+    	    	    	txt : REF TXTDEF;
+    	    	    IF (.h [TXT_W_CODE] EQL HEUR_K_GLOBAL) OR (.h [TXT_W_CODE] LSSU HEUR_K_COUNT) THEN
+    	    	    BEGIN
+    	    	    	txt = MEM_GETTXT (.h [TXT_W_LEN], h [TXT_T_TEXT]);
+    	    	    	txt [TXT_W_CODE] = .h [TXT_W_CODE];
+    	    	    	IF .h [TXT_W_CODE] EQL HEUR_K_GLOBAL THEN
+    	    	    	    INSQUE (.txt, .gq [QUE_L_TAIL])
+    	    	    	ELSE BEGIN
+    	    	    	    BIND q = HEURTBL [.h [TXT_W_CODE],HEUR_Q_EXCL] : QUEDEF;
+    	    	    	    INSQUE (.txt, .q [QUE_L_TAIL]);
+    	    	    	END;
+    	    	    END;
+    	    	END;
+
+            [CFG_K_SPAMLAST] :
+                IF .FLAGS [CFG_V_EXTSPAM] THEN
+                    SPAMLASTID = .RBF [1];
+
+    	    [OTHERWISE] :;
+    	TES;
+
+    END;
+
+    LIB$FREE_VM (%REF (.RAB [RAB$W_USZ]), RAB [RAB$L_UBF]);
+    $DISCONNECT (RAB=RAB);
+    $CLOSE (FAB=FAB);
+
+    IF .do_deq THEN $DEQ (LKID=.lsb [LSB_L_LKID]);
+
+    IF .VERSION GTR CFG_K_CURRENT
+    	    OR .VERSION LSS CFG_K_EARLIEST_COMPATIBLE THEN RETURN MX__CFGERR;
+
+    IF .FLAGS [CFG_V_FSRVINFO] AND .FLAGS [CFG_V_MLISTS] THEN
+    BEGIN
+    	LOCAL
+    	    F	: REF FSRVDEF,
+    	    M	: REF MLSTDEF,
+    	    S1	: BLOCK [DSC$K_S_BLN,BYTE],
+    	    S2	: BLOCK [DSC$K_S_BLN,BYTE];
+
+    	S1 [DSC$B_DTYPE] = S2 [DSC$B_DTYPE] = DSC$K_DTYPE_T;
+    	S1 [DSC$B_CLASS] = S2 [DSC$B_CLASS] = DSC$K_CLASS_S;
+    	F = .FSRVQUE [QUE_L_HEAD];
+    	WHILE .F NEQA FSRVQUE [QUE_L_HEAD] DO
+    	BEGIN
+    	    IF .F [FSRV_W_MLIST] GTR 0 THEN
+    	    BEGIN
+    	    	S1 [DSC$W_LENGTH] = .F [FSRV_W_MLIST];
+    	    	S1 [DSC$A_POINTER] = F [FSRV_T_MLIST];
+    	    	M = .MLISTS [QUE_L_HEAD];
+    	    	WHILE .M NEQA MLISTS [QUE_L_HEAD] DO
+    	    	BEGIN
+    	    	    S2 [DSC$W_LENGTH] = .M [MLST_W_NAME];
+    	    	    S2 [DSC$A_POINTER] = M [MLST_T_NAME];
+    	    	    IF STR$CASE_BLIND_COMPARE (S1, S2) EQL 0 THEN
+    	    	    BEGIN
+    	    	    	F [FSRV_L_MLSTPTR] = .M;
+    	    	    	EXITLOOP;
+    	    	    END;
+    	    	    M = .M [MLST_L_FLINK];
+    	    	END;
+    	    END;
+    	    F = .F [FSRV_L_FLINK];
+    	END;
+    END;
+
+    SS$_NORMAL
+
+END; ! LOAD_MXCONFIG
+
+%SBTTL 'SAVE_MXCONFIG'
+GLOBAL ROUTINE SAVE_MXCONFIG (FSPEC_A, RSPEC_A) = 
+BEGIN
+!++
+! FUNCTIONAL DESCRIPTION:
+!
+!   Saves a MX configuration.
+!
+! RETURNS:  	cond_value, longword (unsigned), write only, by value
+!
+! PROTOTYPE:
+!
+!   SAVE_MXCONFIG filespec [,resspec]
+!
+! IMPLICIT INPUTS:  None.
+!
+! IMPLICIT OUTPUTS: None.
+!
+! COMPLETION CODES:
+!
+!   SS$_NORMAL:	    	normal successful completion.
+!
+! SIDE EFFECTS:
+!
+!   None.
+!--
+    BUILTIN
+    	ACTUALCOUNT;
+
+    LOCAL
+    	FAB 	: $FAB_DECL,
+    	RAB 	: $RAB_DECL,
+    	NAM 	: $NAM_DECL,
+    	FSPEC	: BLOCK [DSC$K_S_BLN,BYTE],
+    	RSPEC	: VECTOR [255,BYTE],
+    	STATUS;
+
+    $INIT_DYNDESC (FSPEC);
+    $FAB_INIT (FAB=FAB, FAC=PUT, MRS=0, RFM=VAR, NAM=NAM,
+    	DNM='SYS$DISK:[].MXCFG');
+    $RAB_INIT (RAB=RAB, FAB=FAB);
+    $NAM_INIT (NAM=NAM, RSA=RSPEC, RSS=%ALLOCATION (RSPEC));
+
+    STR$COPY_DX (FSPEC, .FSPEC_A);
+    FAB [FAB$L_FNA] = .FSPEC [DSC$A_POINTER];
+    FAB [FAB$B_FNS] = MIN (.FSPEC [DSC$W_LENGTH], 255);
+
+    STATUS = $CREATE (FAB=FAB);
+    STR$FREE1_DX (FSPEC);
+    IF NOT .STATUS THEN RETURN .STATUS;
+
+    IF ACTUALCOUNT () GTR 1 THEN                 
+    	IF .RSPEC_A NEQA 0 THEN
+    	    STR$COPY_R (.RSPEC_A, %REF (.NAM [NAM$B_RSL]), RSPEC);
+
+    STATUS = $CONNECT (RAB=RAB);
+    IF NOT .STATUS THEN
+    BEGIN
+    	$CLOSE (FAB=FAB);
+    	RETURN .STATUS;
+    END;
+
+    IF .STATUS THEN
+    BEGIN
+    	LOCAL BUF : VECTOR [2,LONG];
+    	BUF [0] = CFG_K_VERSION;
+    	BUF [1] = CFG_K_CURRENT;
+    	RAB [RAB$W_RSZ] = 8;
+    	RAB [RAB$L_RBF] = BUF;
+    	STATUS = $PUT (RAB=RAB);
+    END;
+
+    IF .STATUS THEN
+    BEGIN
+    	BIND rblque = smtp_info [SMTP_Q_RBLQUE] : QUEDEF;
+    	SMTP_INFO [SMTP_L_CODE] = CFG_K_SMTPINFO;
+    	RAB [RAB$W_RSZ] = SMTP_S_SMTPDEF;
+    	RAB [RAB$L_RBF] = SMTP_INFO;
+    	STATUS = $PUT (RAB=RAB);
+    	IF .STATUS THEN
+    	BEGIN
+    	    LOCAL txt : REF TXTDEF;
+    	    txt = .rblque [QUE_L_HEAD];
+    	    WHILE .status AND (.txt NEQA rblque) DO
+    	    BEGIN
+    	    	LOCAL flsave;
+    	    	flsave = .txt [TXT_L_FLINK];
+    	    	txt [TXT_L_FLINK] = CFG_K_SMTPRBL;
+    	    	rab [RAB$W_RSZ] = TXT_S_TXTDEF + .txt [TXT_W_LEN];
+    	    	rab [RAB$L_RBF] = .txt;
+    	    	status = $PUT (RAB=rab);
+    	    	txt = (txt [TXT_L_FLINK] = .flsave);
+    	    END;
+    	END;
+    END;
+
+    IF .STATUS THEN
+    BEGIN
+    	DNSMTP_INFO [DNSMTP_L_CODE] = CFG_K_DNSMTPINFO;
+    	RAB [RAB$W_RSZ] = DNSMTP_S_DNSMTPDEF;
+    	RAB [RAB$L_RBF] = DNSMTP_INFO;
+    	STATUS = $PUT (RAB=RAB);
+    END;
+
+    IF .STATUS THEN
+    BEGIN
+    	ROUTER_INFO [ROUTER_L_CODE] = CFG_K_RTRINFO;
+    	RAB [RAB$W_RSZ] = ROUTER_S_ROUTERDEF;
+    	RAB [RAB$L_RBF] = ROUTER_INFO;
+    	STATUS = $PUT (RAB=RAB);
+    END;
+
+    IF .STATUS THEN
+    BEGIN
+    	LOCAL_INFO [LOCAL_L_CODE] = CFG_K_LOCALINFO;
+    	RAB [RAB$W_RSZ] = LOCAL_S_LOCALDEF;
+    	RAB [RAB$L_RBF] = LOCAL_INFO;
+    	STATUS = $PUT (RAB=RAB);
+    END;
+
+    IF .STATUS THEN
+    BEGIN
+    	SITE_INFO [SITE_L_CODE] = CFG_K_SITEINFO;
+    	RAB [RAB$W_RSZ] = SITE_S_SITEDEF;
+    	RAB [RAB$L_RBF] = SITE_INFO;
+    	STATUS = $PUT (RAB=RAB);
+    END;
+
+    IF .STATUS THEN
+    BEGIN
+    	MLF_INFO [MLF_L_CODE] = CFG_K_MLFINFO;
+    	RAB [RAB$W_RSZ] = MLF_S_MLFDEF;
+    	RAB [RAB$L_RBF] = MLF_INFO;
+    	STATUS = $PUT (RAB=RAB);
+    END;
+
+    IF .STATUS THEN
+    BEGIN
+    	LOCAL
+    	    R	    : REF RULEDEF,
+            BUF     : REF VECTOR [,BYTE],
+            BUFSIZ;
+
+        bufsiz = RULE_S_RULEDEF;
+        r = .rwrules [QUE_L_HEAD];
+        WHILE .r NEQA rwrules DO
+        BEGIN
+            BIND
+                lhs = r [RULE_A_LHS] : REF TXTDEF,
+                rhs = r [RULE_A_RHS] : REF TXTDEF;
+            bufsiz = MAXU (.bufsiz, RULE_S_RULEDEF + .lhs [TXT_W_LEN] + .rhs [TXT_W_LEN]);
+            r = .r [RULE_L_FLINK];
+        END;
+
+        status = LIB$GET_VM (bufsiz, buf);
+        IF .status THEN
+        BEGIN
+            RAB [RAB$L_RBF] = .buf;
+            r = .rwrules [QUE_L_HEAD];
+            WHILE .r NEQA rwrules DO
+            BEGIN
+                BIND
+                    rbf = buf  : REF RULEDEF,
+                    lhs = r [RULE_A_LHS] : REF TXTDEF,
+                    rhs = r [RULE_A_RHS] : REF TXTDEF;
+                LOCAL
+                    offset;
+                CH$MOVE (RULE_S_RULEDEF, .r, .rbf);
+                rbf [RULE_L_FLINK] = CFG_K_RWRULE;
+                rbf [RULE_A_LHSREGEX] = 0;
+                rbf [RULE_A_LHS] = .lhs [TXT_W_LEN];
+                rbf [RULE_A_RHS] = .rhs [TXT_W_LEN];
+                offset = RULE_S_RULEDEF;
+                CH$MOVE (.lhs [TXT_W_LEN], lhs [TXT_T_TEXT], CH$PLUS (.buf, .offset));
+                offset = .offset + .lhs [TXT_W_LEN];
+                CH$MOVE (.rhs [TXT_W_LEN], rhs [TXT_T_TEXT], CH$PLUS (.buf, .offset));
+                RAB [RAB$W_RSZ] = .offset + .rhs [TXT_W_LEN];
+                status = $PUT (RAB=RAB);
+                IF NOT .status THEN EXITLOOP;
+                r = .r [RULE_L_FLINK];
+            END;
+            LIB$FREE_VM (bufsiz, buf);
+        END;
+    END;
+
+    IF .STATUS THEN
+    BEGIN
+    	LOCAL
+    	    R	    : REF RULEPRE53DEF;
+
+    	R = .ALIASES [QUE_L_HEAD];
+    	WHILE .R NEQA ALIASES [QUE_L_HEAD] DO
+    	BEGIN
+    	    LOCAL FLINKSAVE;
+    	    FLINKSAVE = .R [RULEPRE53_L_FLINK];
+    	    R [RULEPRE53_L_FLINK] = CFG_K_ALIAS;
+    	    RAB [RAB$W_RSZ] = RULEPRE53_S_RULEPRE53DEF;
+    	    RAB [RAB$L_RBF] = .R;
+    	    STATUS = $PUT (RAB=RAB);
+    	    R = (R [RULEPRE53_L_FLINK] = .FLINKSAVE);
+    	END;
+    END;
+
+    IF .STATUS THEN
+    BEGIN
+    	LOCAL
+    	    T	    : REF TXTDEF;
+
+    	T = .SYSUSERS [QUE_L_HEAD];
+    	WHILE .T NEQA SYSUSERS [QUE_L_HEAD] DO
+    	BEGIN
+    	    LOCAL FLINKSAVE;
+    	    FLINKSAVE = .T [TXT_L_FLINK];
+    	    T [TXT_L_FLINK] = CFG_K_SYSUSER;
+    	    RAB [RAB$W_RSZ] = TXT_S_TXTDEF + .T [TXT_W_LEN];
+    	    RAB [RAB$L_RBF] = .T;
+    	    STATUS = $PUT (RAB=RAB);
+    	    T = (T [TXT_L_FLINK] = .FLINKSAVE);
+    	END;
+    END;
+
+    IF .STATUS THEN
+    BEGIN
+    	LOCAL
+    	    P	: REF PATHDEF;
+
+    	P = .PATHLIST [QUE_L_HEAD];
+    	WHILE .P NEQA PATHLIST [QUE_L_HEAD] DO
+    	BEGIN
+    	    LOCAL FLINKSAVE;
+    	    FLINKSAVE = .P [PATH_L_FLINK];
+    	    P [PATH_L_FLINK] = CFG_K_PATH;
+    	    RAB [RAB$W_RSZ] = PATH_S_PATHDEF;
+    	    RAB [RAB$L_RBF] = .P;
+    	    STATUS = $PUT (RAB=RAB);
+    	    P = (P [PATH_L_FLINK] = .FLINKSAVE);
+    	END;
+    END;
+
+    IF .STATUS THEN
+    BEGIN
+    	LOCAL
+    	    S	: REF LCLDOMDEF;
+
+    	S = .LCLDOMS [QUE_L_HEAD];
+    	WHILE .S NEQA LCLDOMS [QUE_L_HEAD] DO
+    	BEGIN
+    	    LOCAL FLINKSAVE;
+    	    FLINKSAVE = .S [LCLDOM_L_FLINK];
+    	    S [LCLDOM_L_FLINK] = CFG_K_LCLDOM;
+    	    RAB [RAB$W_RSZ] = LCLDOM_S_LCLDOMDEF;
+    	    RAB [RAB$L_RBF] = .S;
+    	    STATUS = $PUT (RAB=RAB);
+    	    S = (S [LCLDOM_L_FLINK] = .FLINKSAVE);
+    	END;
+    END;
+
+    IF .STATUS THEN
+    BEGIN
+    	LOCAL
+    	    S	: REF RELAYDEF;
+
+    	S = .RELAYQUE [QUE_L_HEAD];
+    	WHILE .S NEQA RELAYQUE [QUE_L_HEAD] DO
+    	BEGIN
+    	    LOCAL FLINKSAVE;
+    	    FLINKSAVE = .S [RELAY_L_FLINK];
+    	    S [RELAY_L_FLINK] = CFG_K_RELAY;
+    	    RAB [RAB$W_RSZ] = RELAY_S_RELAYDEF;
+    	    RAB [RAB$L_RBF] = .S;
+    	    STATUS = $PUT (RAB=RAB);
+    	    S = (S [RELAY_L_FLINK] = .FLINKSAVE);
+    	END;
+    END;
+
+    IF .STATUS THEN
+    BEGIN
+    	LOCAL
+    	    M	: REF MLSTDEF,
+    	    T	: REF TXTDEF;
+
+    	M = .MLISTS [QUE_L_HEAD];
+    	WHILE .M NEQA MLISTS [QUE_L_HEAD] DO
+    	BEGIN
+    	    LOCAL FLINKSAVE;
+    	    BIND
+    	    	OWNQ	= M [MLST_Q_OWNQ] 	: QUEDEF,
+    	    	MODQ	= M [MLST_Q_MODQ] 	: QUEDEF,
+		hdrq	= m [MLST_Q_HDRQ]	: QUEDEF;
+
+    	    FLINKSAVE = .M [MLST_L_FLINK];
+    	    M [MLST_L_FLINK] = CFG_K_MLIST;
+    	    RAB [RAB$W_RSZ] = MLST_S_MLSTDEF;
+    	    RAB [RAB$L_RBF] = .M;
+    	    STATUS = $PUT (RAB=RAB);
+
+    	    T = .OWNQ [QUE_L_HEAD];
+    	    WHILE .T NEQA OWNQ [QUE_L_HEAD] DO
+    	    BEGIN
+    	    	LOCAL FLINKSAVE;
+    	    	FLINKSAVE = .T [TXT_L_FLINK];
+    	    	T [TXT_L_FLINK] = CFG_K_MLOWNER;
+    	    	RAB [RAB$W_RSZ] = TXT_S_TXTDEF + .T [TXT_W_LEN];
+    	    	RAB [RAB$L_RBF] = .T;
+    	    	STATUS = $PUT (RAB=RAB);
+    	    	T = (T [TXT_L_FLINK] = .FLINKSAVE);
+    	    END;
+    	    	
+    	    T = .MODQ [QUE_L_HEAD];
+    	    WHILE .T NEQA MODQ [QUE_L_HEAD] DO
+    	    BEGIN
+    	    	LOCAL FLINKSAVE;
+    	    	FLINKSAVE = .T [TXT_L_FLINK];
+    	    	T [TXT_L_FLINK] = CFG_K_MLMOD;
+    	    	RAB [RAB$W_RSZ] = TXT_S_TXTDEF + .T [TXT_W_LEN];
+    	    	RAB [RAB$L_RBF] = .T;
+    	    	STATUS = $PUT (RAB=RAB);
+    	    	T = (T [TXT_L_FLINK] = .FLINKSAVE);
+    	    END;
+
+    	    T = .HDRQ [QUE_L_HEAD];
+    	    WHILE .T NEQA HDRQ [QUE_L_HEAD] DO
+    	    BEGIN
+    	    	LOCAL FLINKSAVE;
+    	    	FLINKSAVE = .T [TXT_L_FLINK];
+    	    	T [TXT_L_FLINK] = CFG_K_MLHDR;
+    	    	RAB [RAB$W_RSZ] = TXT_S_TXTDEF + .T [TXT_W_LEN];
+    	    	RAB [RAB$L_RBF] = .T;
+    	    	STATUS = $PUT (RAB=RAB);
+    	    	T = (T [TXT_L_FLINK] = .FLINKSAVE);
+    	    END;
+
+    	    M = (M [MLST_L_FLINK] = .FLINKSAVE);
+    	END;
+
+    END;
+
+    IF .STATUS THEN
+    BEGIN
+    	LOCAL
+    	    F	: REF FSRVDEF;
+
+    	F = .FSRVQUE [QUE_L_HEAD];
+    	WHILE .F NEQA FSRVQUE [QUE_L_HEAD] DO
+    	BEGIN
+    	    LOCAL FLINKSAVE;
+    	    FLINKSAVE = .F [FSRV_L_FLINK];
+    	    F [FSRV_L_FLINK] = CFG_K_FSINFO;
+    	    RAB [RAB$W_RSZ] = FSRV_S_FSRVDEF;
+    	    RAB [RAB$L_RBF] = .F;
+    	    STATUS = $PUT (RAB=RAB);
+    	    F = (F [FSRV_L_FLINK] = .FLINKSAVE);
+    	END;
+    END;
+
+    $DISCONNECT (RAB=RAB);
+    $CLOSE (FAB=FAB);
+
+    SS$_NORMAL
+
+END; ! SAVE_MXCONFIG
+
+
+%SBTTL 'SAVE_ESPAMDB'
+GLOBAL ROUTINE SAVE_ESPAMDB (FSPEC_A, RDT_A, RSPEC_A, X_UPDATE_ONLY) = 
+BEGIN
+!++
+! FUNCTIONAL DESCRIPTION:
+!
+!   Saves the extended spam database.
+!
+! RETURNS:  	cond_value, longword (unsigned), write only, by value
+!
+! PROTOTYPE:
+!
+!   SAVE_MXCONFIG filespec [,resspec]
+!
+! IMPLICIT INPUTS:  None.
+!
+! IMPLICIT OUTPUTS: None.
+!
+! COMPLETION CODES:
+!
+!   SS$_NORMAL:	    	normal successful completion.
+!
+! SIDE EFFECTS:
+!
+!   None.
+!--
+    BUILTIN
+    	ACTUALCOUNT;
+
+    LOCAL
+    	FAB 	: $FAB_DECL,
+    	ofab	: $FAB_DECL,
+    	RAB 	: $RAB_DECL,
+    	orab	: $RAB_DECL,
+    	NAM 	: $NAM_DECL,
+    	XABRDT	: $XABRDT_DECL,
+    	xabfhc	: $XABFHC_DECL,
+    	FSPEC	: BLOCK [DSC$K_S_BLN,BYTE],
+    	RSPEC	: VECTOR [255,BYTE],
+    	ESPEC	: VECTOR [255,BYTE],
+    	obuf	: REF BLOCK [,BYTE],
+    	lsb 	: LSBDEF,
+    	e   	: REF EXTSPAMDEF,
+    	prvvec	: BLOCK [8,BYTE],
+    	oldprv	: BLOCK [8,BYTE],
+    	osize,
+    	update_only,
+    	merge,
+    	efn,
+    	STATUS;
+
+    prvvec [0,0,32,0] = prvvec [4,0,32,0] = 0;
+    prvvec [PRV$V_SYSLCK] = 1;
+
+    status = $SETPRV (ENBFLG=1, PRVADR=prvvec, PRVPRV=oldprv);
+    IF NOT .status THEN RETURN .status;
+
+    status = LIB$GET_EF (efn);
+    IF NOT .status THEN
+    BEGIN
+    	IF NOT .oldprv [PRV$V_SYSLCK] THEN $SETPRV (ENBFLG=0, PRVADR=prvvec);
+    	RETURN .status;
+    END;
+
+    status = $ENQW (EFN=.efn, LKMODE=LCK$K_EXMODE, LKSB=lsb,
+    	    	    FLAGS=LCK$M_SYSTEM, RESNAM=%ASCID'MX_SPAM_DATABASE_LOCK');
+
+    LIB$FREE_EF (efn);
+    IF NOT .oldprv [PRV$V_SYSLCK] THEN $SETPRV (ENBFLG=0, PRVADR=prvvec);
+
+    IF .status THEN status = .lsb [LSB_W_STATUS];
+    IF NOT .status THEN RETURN .status;
+
+    BEGIN
+    	BIND f = .fspec_a   : BLOCK [,BYTE];
+    	$FAB_INIT (FAB=FAB, FAC=GET, DNM='SYS$DISK:[].MXCFG', XAB=XABRDT, NAM=NAM,
+    	    	   FNA=.f [DSC$A_POINTER], FNS=.f [DSC$W_LENGTH]);
+    END;
+
+    $XABRDT_INIT (XAB=XABRDT, NXT=xabfhc);
+    $XABFHC_INIT (XAB=xabfhc);
+    $RAB_INIT (RAB=RAB, FAB=FAB);
+    $NAM_INIT (NAM=NAM, RSA=RSPEC, RSS=%ALLOCATION (RSPEC),
+    	    	    	ESA=ESPEC, ESS=%ALLOCATION (ESPEC));
+
+    status = $OPEN (FAB=FAB);
+    IF NOT .status AND .status NEQ RMS$_FNF THEN
+    BEGIN
+    	$DEQ (LKID=.lsb [LSB_L_LKID]);
+    	RETURN .status;
+    END;
+
+    update_only = (IF ACTUALCOUNT () GTR 3 THEN .X_UPDATE_ONLY ELSE 0);
+    merge = .status AND (.update_only OR CH$NEQ (8, xabrdt [XAB$Q_RDT], 8, .rdt_a, %CHAR (0)));
+
+! Figure out how big the output buffer should be
+
+    osize = EXTSPAM_S_EXTSPAMDEF;
+    e = .espamque [QUE_L_HEAD];
+    WHILE .e NEQA espamque DO
+    BEGIN
+    	BIND
+    	    ipm = e [EXTSPAM_A_IPMATCH]	: REF TXTDEF,
+    	    frm	= e [EXTSPAM_A_FRMATCH] : REF TXTDEF,
+    	    tom = e [EXTSPAM_A_TOMATCH] : REF TXTDEF,
+    	    hdm = e [EXTSPAM_A_HDMATCH] : REF TXTDEF,
+    	    rwa = e [EXTSPAM_A_RWADDR]  : REF TXTDEF;
+    	LOCAL size;
+    	size = EXTSPAM_S_EXTSPAMDEF;
+    	IF .ipm NEQA 0 THEN size = .size + .ipm [TXT_W_LEN];
+    	IF .frm NEQA 0 THEN size = .size + .frm [TXT_W_LEN];
+    	IF .tom NEQA 0 THEN size = .size + .tom [TXT_W_LEN];
+    	IF .hdm NEQA 0 THEN size = .size + .hdm [TXT_W_LEN];
+    	IF .rwa NEQA 0 THEN size = .size + .rwa [TXT_W_LEN];
+    	IF .size GTR .osize THEN osize = .size;
+    	e = .e [EXTSPAM_L_FLINK];
+    END;
+
+! Figure out how big the input buffer should be
+
+    IF .merge THEN
+    BEGIN
+    	rab [RAB$W_USZ] = (IF .FAB [FAB$W_MRS] EQL 0 THEN
+    	    	    	   IF .XABFHC [XAB$W_LRL] EQL 0 THEN 1024
+    	    	    	    ELSE .XABFHC [XAB$W_LRL]
+    	    	    	   ELSE .FAB [FAB$W_MRS]);
+    	IF .rab [RAB$W_USZ] GTR .osize THEN osize = .rab [RAB$W_USZ];
+
+    	STATUS = LIB$GET_VM (%REF (.RAB [RAB$W_USZ]), RAB [RAB$L_UBF]);
+    	IF NOT .STATUS THEN
+    	BEGIN
+    	    $CLOSE (FAB=FAB);
+    	    $DEQ (LKID=.lsb [LSB_L_LKID]);
+    	    RETURN .STATUS;
+    	END;
+
+    	status = $CONNECT (RAB=rab);
+    	IF NOT .status THEN
+    	BEGIN
+    	    LIB$FREE_VM (%REF (.rab [RAB$W_USZ]), rab [RAB$L_UBF]);
+    	    $CLOSE (FAB=FAB);
+    	    $DEQ (LKID=.lsb [LSB_L_LKID]);
+    	    RETURN .status;
+    	END;
+    END;
+
+    status = LIB$GET_VM (osize, obuf);
+    IF NOT .status THEN
+    BEGIN
+    	LIB$FREE_VM (%REF (.rab [RAB$W_USZ]), rab [RAB$L_UBF]);
+    	$CLOSE (FAB=FAB);
+    	$DEQ (LKID=.lsb [LSB_L_LKID]);
+    	RETURN .status;
+    END;
+
+! Save the file spec (sans version) so we can purge old versions later
+
+    $INIT_DYNDESC (fspec);
+    IF .nam [NAM$L_RSA] EQLA 0 OR .nam [NAM$B_RSL] EQL 0 THEN
+    	STR$COPY_R (fspec, %REF (.nam [NAM$B_ESL]-.nam [NAM$B_VER]), .nam [NAM$L_ESA])
+    ELSE
+    	STR$COPY_R (fspec, %REF (.nam [NAM$B_RSL]-.nam [NAM$B_VER]), .nam [NAM$L_RSA]);
+
+    $FAB_INIT (FAB=ofab, FAC=PUT, DNM='SYS$DISK:[].MXCFG', NAM=NAM,
+    	       FNA=.fspec [DSC$A_POINTER], FNS=.fspec [DSC$W_LENGTH]);
+    $RAB_INIT (RAB=orab, FAB=ofab);
+    $NAM_INIT (NAM=NAM, RSA=RSPEC, RSS=%ALLOCATION (RSPEC));
+
+    STATUS = $CREATE (FAB=ofab);
+    IF NOT .STATUS THEN
+    BEGIN
+    	$CLOSE (FAB=FAB);
+    	LIB$FREE_VM (osize, obuf);
+    	$DEQ (LKID=.lsb [LSB_L_LKID]);
+    	FREE_STRINGS (fspec);
+    	IF .merge THEN
+    	    LIB$FREE_VM (%REF (.rab [RAB$W_USZ]), rab [RAB$L_UBF]);
+    	RETURN .STATUS;
+    END;
+
+    IF ACTUALCOUNT () GTR 2 THEN
+    	IF .RSPEC_A NEQA 0 THEN
+    	    STR$COPY_R (.RSPEC_A, %REF (.NAM [NAM$B_RSL]), RSPEC);
+
+    STATUS = $CONNECT (RAB=orab);
+    IF NOT .STATUS THEN
+    BEGIN
+    	$CLOSE (FAB=FAB);
+    	LIB$FREE_VM (osize, obuf);
+    	$DEQ (LKID=.lsb [LSB_L_LKID]);
+    	FREE_STRINGS (fspec);
+    	IF .merge THEN
+    	    LIB$FREE_VM (%REF (.rab [RAB$W_USZ]), rab [RAB$L_UBF]);
+    	RETURN .STATUS;
+    END;
+
+    IF .STATUS THEN
+    BEGIN
+    	LOCAL BUF : VECTOR [2,LONG];
+    	BUF [0] = CFG_K_VERSION;
+    	BUF [1] = CFG_K_CURRENT;
+    	ORAB [RAB$W_RSZ] = 8;
+    	ORAB [RAB$L_RBF] = BUF;
+    	STATUS = $PUT (RAB=ORAB);
+    END;
+
+!  Non-update-only: make sure we write out the heuristics info.
+!  Note that we DO NOT just copy these records during the merge
+!  below if we are in non-update-only mode.
+
+    IF .status AND NOT .update_only THEN
+    BEGIN
+    	BIND gq = gheur_info [GHEUR_Q_GBLEXCL] : QUEDEF;
+        LOCAL t : REF TXTDEF;
+
+    	gheur_info [GHEUR_L_CODE] = CFG_K_GHEURINFO;
+    	orab [RAB$L_RBF] = gheur_info;
+    	orab [RAB$W_RSZ] = GHEUR_S_GHEURDEF - GHEUR_S_FWDTO + .gheur_info [GHEUR_W_FWDTO];
+    	status = $PUT (RAB=orab);
+    	t = .gq [QUE_L_HEAD];
+    	WHILE .status AND (.t NEQA gq [QUE_L_HEAD]) DO
+    	BEGIN
+    	    LOCAL savelink;
+    	    savelink = .t [TXT_L_FLINK];
+    	    t [TXT_L_FLINK] = CFG_K_HEUREXCL;
+    	    orab [RAB$L_RBF] = .t;
+    	    orab [RAB$W_RSZ] = TXT_S_TXTDEF + .t [TXT_W_LEN];
+    	    status = $PUT (RAB=orab);
+    	    t = t [TXT_L_FLINK] = .savelink;
+    	END;
+
+    	IF .status THEN INCR i FROM 0 TO HEUR_K_COUNT-1 DO
+    	BEGIN
+    	    BIND q = heurtbl [.i,HEUR_Q_EXCL] : QUEDEF;
+    	    heurtbl [.i,HEUR_L_CODE] = CFG_K_HEURINFO;
+    	    orab [RAB$L_RBF] = heurtbl [.i,0,0,0,0];
+    	    orab [RAB$W_RSZ] = HEUR_S_HEURDEF;
+    	    status = $PUT (RAB=orab);
+    	    t = .q [QUE_L_HEAD];
+    	    WHILE .status AND (.t NEQA q [QUE_L_HEAD]) DO
+    	    BEGIN
+    	    	LOCAL savelink;
+    	    	savelink = .t [TXT_L_FLINK];
+    	    	t [TXT_L_FLINK] = CFG_K_HEUREXCL;
+    	    	orab [RAB$L_RBF] = .t;
+    	    	orab [RAB$W_RSZ] = TXT_S_TXTDEF + .t [TXT_W_LEN];
+    	    	status = $PUT (RAB=orab);
+    	    	t = t [TXT_L_FLINK] = .savelink;
+    	    END;
+    	END;
+
+        IF .status THEN
+        BEGIN
+            LOCAL v : VECTOR [2,LONG];
+            v[0] = CFG_K_SPAMLAST;
+            v[1] = .SPAMLASTID;
+            orab [RAB$L_RBF] = v;
+            orab [RAB$W_RSZ] = %ALLOCATION (v);
+            status = $PUT (RAB=orab);
+        END;
+
+    END;  ! non-update-only
+
+! If we're merging in our changes 
+
+    IF .status AND .merge THEN
+    BEGIN
+    	LOCAL
+    	    oldque  : QUEDEF;
+
+    	CH$MOVE (8, espamque, oldque);
+    	e = .oldque [QUE_L_HEAD];
+    	e [EXTSPAM_L_BLINK] = oldque;
+    	e = .oldque [QUE_L_TAIL];
+    	e [EXTSPAM_L_FLINK] = oldque;
+    	INIT_QUEUE (espamque);
+
+
+    	WHILE 1 DO
+    	BEGIN
+    	    BIND ine = .rab [RAB$L_UBF]  : EXTSPAMDEF;
+
+    	    WHILE (status = $GET (RAB=RAB)) DO
+    	    BEGIN
+    	    	IF .ine [EXTSPAM_L_FLINK] EQL CFG_K_ESPAM THEN EXITLOOP;
+                !
+                !   Only copy-through the non-ESPAM records if this
+                !   is an update-only pass.  Also make sure that our
+                !   record of SPAMLASTID matches what's current.
+                !
+                IF .update_only THEN
+                BEGIN
+                    IF .ine [EXTSPAM_L_FLINK] EQL CFG_K_SPAMLAST THEN
+                        spamlastid = .ine [EXTSPAM_L_BLINK];
+    	    	    IF .ine [EXTSPAM_L_FLINK] NEQ CFG_K_VERSION THEN
+    	    	    BEGIN
+    	    	        orab [RAB$L_RBF] = .rab [RAB$L_RBF];
+    	    	        orab [RAB$W_RSZ] = .rab [RAB$W_RSZ];
+    	    	        $PUT (RAB=orab);
+                    END;
+    	    	END;
+    	    END;
+
+    	    IF NOT .status THEN
+    	    BEGIN
+    	    	IF .status EQL RMS$_EOF THEN status = SS$_NORMAL;
+    	    	EXITLOOP;
+    	    END;
+
+    	    e = .oldque [QUE_L_HEAD];
+
+    	    WHILE .e NEQA oldque DO
+    	    BEGIN
+    	    	IF espam_match (.e, ine) THEN EXITLOOP;
+    	    	e = .e [EXTSPAM_L_FLINK];
+    	    END;
+
+! If no match on our list, this must have been added since the last
+! time we read in the file
+
+    	    IF .e EQLA oldque THEN
+    	    BEGIN
+    	    	orab [RAB$L_RBF] = .rab [RAB$L_RBF];
+    	    	orab [RAB$W_RSZ] = .rab [RAB$W_RSZ];
+    	    	status = $PUT (RAB=orab);
+    	    	IF NOT .status THEN EXITLOOP;
+    	    	e = new_cell_from_record (.rab [RAB$L_RBF]);
+    	    	INSQUE (.e, .espamque [QUE_L_TAIL]);
+    	    END
+
+! For update-only (used by SMTP server), just update the reference count and
+! last-referenced date/time stamp (if newer)
+
+    	    ELSE IF .e [EXTSPAM_V_DIRTY] AND NOT .e [EXTSPAM_V_DELETED] AND .update_only THEN
+    	    BEGIN
+    	    	LOCAL junk : VECTOR [2,LONG];
+    	    	ine [EXTSPAM_L_REFCNT] = .ine [EXTSPAM_L_REFCNT] + .e [EXTSPAM_L_REFCNT];
+    	    	IF CH$EQL (8, ine [EXTSPAM_Q_DTREF], 8, UPLIT (0,0)) OR
+    	    	    	LIB$SUB_TIMES (e [EXTSPAM_Q_DTREF], ine [EXTSPAM_Q_DTREF], junk) THEN
+    	    	    CH$MOVE (8, e [EXTSPAM_Q_DTREF], ine [EXTSPAM_Q_DTREF]);
+    	    	orab [RAB$L_RBF] = .rab [RAB$L_RBF];
+    	    	orab [RAB$W_RSZ] = .rab [RAB$W_RSZ];
+    	    	status = $PUT (RAB=orab);
+    	    	IF NOT .status THEN EXITLOOP;
+    	    	e [EXTSPAM_V_WROTE] = 1;
+    	    	REMQUE (.e, e);
+    	    	INSQUE (.e, .espamque [QUE_L_TAIL]);
+    	    END
+
+! Non-update-only merge: move all the data from our record into the output file
+
+    	    ELSE
+    	    BEGIN
+    	    	REMQUE (.e, e);
+    	    	IF .e [EXTSPAM_V_DIRTY] AND NOT .e [EXTSPAM_V_DELETED] THEN
+    	    	BEGIN
+    	    	    BIND
+    	    	    	oute = .obuf 	    	    : EXTSPAMDEF,
+    	    	    	ipm = e [EXTSPAM_A_IPMATCH] : REF TXTDEF,
+    	    	    	frm = e [EXTSPAM_A_FRMATCH] : REF TXTDEF,
+    	    	    	tom = e [EXTSPAM_A_TOMATCH] : REF TXTDEF,
+    	    	    	hdm = e [EXTSPAM_A_HDMATCH] : REF TXTDEF,
+    	    	    	rwa = e [EXTSPAM_A_RWADDR]  : REF TXTDEF;
+    	    	    LOCAL ptr;
+    	    	    CH$MOVE (EXTSPAM_S_EXTSPAMDEF, .e, oute);
+    	    	    oute [EXTSPAM_L_FLINK] = CFG_K_ESPAM;
+    	    	    oute [EXTSPAM_L_BLINK] = 0;
+    	    	    oute [EXTSPAM_V_DIRTY] = oute [EXTSPAM_V_DELETED] = oute [EXTSPAM_V_WROTE] = 0;
+    	    	    ptr = CH$PLUS (.obuf, EXTSPAM_S_EXTSPAMDEF);
+    	    	    IF .ipm NEQA 0 THEN
+    	    	    BEGIN
+    	    	    	CH$MOVE (.ipm [TXT_W_LEN], ipm [TXT_T_TEXT], .ptr);
+    	    	    	ptr = CH$PLUS (.ptr, .ipm [TXT_W_LEN]);
+    	    	    	oute [EXTSPAM_A_IPMATCH] = .ipm [TXT_W_LEN];
+    	    	    END;
+    	    	    IF .frm NEQA 0 THEN
+    	    	    BEGIN
+    	    	    	CH$MOVE (.frm [TXT_W_LEN], frm [TXT_T_TEXT], .ptr);
+    	    	    	ptr = CH$PLUS (.ptr, .frm [TXT_W_LEN]);
+    	    	    	oute [EXTSPAM_A_FRMATCH] = .frm [TXT_W_LEN];
+    	    	    END;
+    	    	    IF .tom NEQA 0 THEN
+    	    	    BEGIN
+    	    	    	CH$MOVE (.tom [TXT_W_LEN], tom [TXT_T_TEXT], .ptr);
+    	    	    	ptr = CH$PLUS (.ptr, .tom [TXT_W_LEN]);
+    	    	    	oute [EXTSPAM_A_TOMATCH] = .tom [TXT_W_LEN];
+    	    	    END;
+    	    	    IF .hdm NEQA 0 THEN
+    	    	    BEGIN
+    	    	    	CH$MOVE (.hdm [TXT_W_LEN], hdm [TXT_T_TEXT], .ptr);
+    	    	    	ptr = CH$PLUS (.ptr, .hdm [TXT_W_LEN]);
+    	    	    	oute [EXTSPAM_A_HDMATCH] = (.hdm [TXT_W_CODE] ^ 16) OR .hdm [TXT_W_LEN];
+    	    	    END;
+    	    	    IF .rwa NEQA 0 THEN
+    	    	    BEGIN
+    	    	    	CH$MOVE (.rwa [TXT_W_LEN], rwa [TXT_T_TEXT], .ptr);
+    	    	    	ptr = CH$PLUS (.ptr, .rwa [TXT_W_LEN]);
+    	    	    	oute [EXTSPAM_A_RWADDR] = .rwa [TXT_W_LEN];
+    	    	    END;
+    	    	    orab [RAB$L_RBF] = .obuf;
+    	    	    orab [RAB$W_RSZ] = CH$DIFF (.ptr, .obuf);
+    	    	END
+
+! Our record not marked dirty, no noeed to merge
+
+    	    	ELSE
+    	    	BEGIN
+    	    	    orab [RAB$L_RBF] = .rab [RAB$L_RBF];
+    	    	    orab [RAB$W_RSZ] = .rab [RAB$W_RSZ];
+    	    	END;
+
+! Write to output file only if the record isn't marked DELETED
+
+    	    	IF NOT .e [EXTSPAM_V_DELETED] THEN
+    	    	BEGIN
+    	    	    status = $PUT (RAB=orab);
+    	    	    IF NOT .status THEN EXITLOOP;
+    	    	    e [EXTSPAM_V_WROTE] = 1;
+    	    	    INSQUE (.e, .espamque [QUE_L_TAIL]);
+    	    	END
+    	    	ELSE free_cell (.e);
+    	    END;
+    	END;
+
+!  Data merged with what's in the file, including records that
+!  have been deleted.  Now add any new ones.
+
+    	IF .status AND NOT .update_only THEN
+    	BEGIN
+    	    WHILE NOT REMQUE (.oldque [QUE_L_HEAD], e) DO
+    	    BEGIN
+    	    	IF .e [EXTSPAM_V_DIRTY] AND NOT .e [EXTSPAM_V_WROTE] AND
+    	    	    NOT .e [EXTSPAM_V_DELETED] THEN
+    	    	BEGIN
+    	    	    BIND
+    	    	    	oute = .obuf 	    	    : EXTSPAMDEF,
+    	    	    	ipm = e [EXTSPAM_A_IPMATCH] : REF TXTDEF,
+    	    	    	frm = e [EXTSPAM_A_FRMATCH] : REF TXTDEF,
+    	    	    	tom = e [EXTSPAM_A_TOMATCH] : REF TXTDEF,
+    	    	    	hdm = e [EXTSPAM_A_HDMATCH] : REF TXTDEF,
+    	    	    	rwa = e [EXTSPAM_A_RWADDR]  : REF TXTDEF;
+    	    	    LOCAL ptr;
+    	    	    CH$MOVE (EXTSPAM_S_EXTSPAMDEF, .e, oute);
+    	    	    oute [EXTSPAM_L_FLINK] = CFG_K_ESPAM;
+    	    	    oute [EXTSPAM_L_BLINK] = 0;
+    	    	    oute [EXTSPAM_V_DIRTY] = oute [EXTSPAM_V_DELETED] = oute [EXTSPAM_V_WROTE] = 0;
+    	    	    ptr = CH$PLUS (.obuf, EXTSPAM_S_EXTSPAMDEF);
+    	    	    IF .ipm NEQA 0 THEN
+    	    	    BEGIN
+    	    	    	CH$MOVE (.ipm [TXT_W_LEN], ipm [TXT_T_TEXT], .ptr);
+    	    	    	ptr = CH$PLUS (.ptr, .ipm [TXT_W_LEN]);
+    	    	    	oute [EXTSPAM_A_IPMATCH] = .ipm [TXT_W_LEN];
+    	    	    END;
+    	    	    IF .frm NEQA 0 THEN
+    	    	    BEGIN
+    	    	    	CH$MOVE (.frm [TXT_W_LEN], frm [TXT_T_TEXT], .ptr);
+    	    	    	ptr = CH$PLUS (.ptr, .frm [TXT_W_LEN]);
+    	    	    	oute [EXTSPAM_A_FRMATCH] = .frm [TXT_W_LEN];
+    	    	    END;
+    	    	    IF .tom NEQA 0 THEN
+    	    	    BEGIN
+    	    	    	CH$MOVE (.tom [TXT_W_LEN], tom [TXT_T_TEXT], .ptr);
+    	    	    	ptr = CH$PLUS (.ptr, .tom [TXT_W_LEN]);
+    	    	    	oute [EXTSPAM_A_TOMATCH] = .tom [TXT_W_LEN];
+    	    	    END;
+    	    	    IF .hdm NEQA 0 THEN
+    	    	    BEGIN
+    	    	    	CH$MOVE (.hdm [TXT_W_LEN], hdm [TXT_T_TEXT], .ptr);
+    	    	    	ptr = CH$PLUS (.ptr, .hdm [TXT_W_LEN]);
+    	    	    	oute [EXTSPAM_A_HDMATCH] = (.hdm [TXT_W_CODE] ^ 16) OR .hdm [TXT_W_LEN];
+    	    	    END;
+    	    	    IF .rwa NEQA 0 THEN
+    	    	    BEGIN
+    	    	    	CH$MOVE (.rwa [TXT_W_LEN], rwa [TXT_T_TEXT], .ptr);
+    	    	    	ptr = CH$PLUS (.ptr, .rwa [TXT_W_LEN]);
+    	    	    	oute [EXTSPAM_A_RWADDR] = .rwa [TXT_W_LEN];
+    	    	    END;
+    	    	    orab [RAB$L_RBF] = .obuf;
+    	    	    orab [RAB$W_RSZ] = CH$DIFF (.ptr, .obuf);
+    	    	    status = $PUT (RAB=orab);
+    	    	    IF NOT .status THEN EXITLOOP .status;
+    	    	END;
+    	    	IF .e [EXTSPAM_V_DELETED] THEN
+    	    	    free_cell (.e)
+    	    	ELSE
+    	    	    INSQUE (.e, .espamque [QUE_L_TAIL]);
+    	    END;
+    	END;
+    END;
+
+!  We don't have to do a merge, which is a lot easier!
+!  Just write the queue out as is.  N.B.: update_only implies merge
+
+    IF .status AND NOT .merge THEN
+    BEGIN
+    	e = .espamque [QUE_L_HEAD];
+    	IF .status THEN WHILE .e NEQA espamque DO
+    	BEGIN
+    	    BIND
+    	    	oute = .obuf 	    	    : EXTSPAMDEF,
+    	    	ipm = e [EXTSPAM_A_IPMATCH] : REF TXTDEF,
+    	    	frm = e [EXTSPAM_A_FRMATCH] : REF TXTDEF,
+    	    	tom = e [EXTSPAM_A_TOMATCH] : REF TXTDEF,
+    	    	hdm = e [EXTSPAM_A_HDMATCH] : REF TXTDEF,
+    	    	rwa = e [EXTSPAM_A_RWADDR]  : REF TXTDEF;
+    	    LOCAL
+    	    	ptr;
+    	    CH$MOVE (EXTSPAM_S_EXTSPAMDEF, .e, oute);
+    	    oute [EXTSPAM_L_FLINK] = CFG_K_ESPAM;
+    	    oute [EXTSPAM_L_BLINK] = 0;
+    	    oute [EXTSPAM_V_DIRTY] = oute [EXTSPAM_V_DELETED] = oute [EXTSPAM_V_WROTE] = 0;
+    	    ptr = CH$PLUS (.obuf, EXTSPAM_S_EXTSPAMDEF);
+    	    IF .ipm NEQA 0 THEN
+    	    BEGIN
+    	    	CH$MOVE (.ipm [TXT_W_LEN], ipm [TXT_T_TEXT], .ptr);
+    	    	ptr = CH$PLUS (.ptr, .ipm [TXT_W_LEN]);
+    	    	oute [EXTSPAM_A_IPMATCH] = .ipm [TXT_W_LEN];
+    	    END;
+    	    IF .frm NEQA 0 THEN
+    	    BEGIN
+    	    	CH$MOVE (.frm [TXT_W_LEN], frm [TXT_T_TEXT], .ptr);
+    	    	ptr = CH$PLUS (.ptr, .frm [TXT_W_LEN]);
+    	    	oute [EXTSPAM_A_FRMATCH] = .frm [TXT_W_LEN];
+    	    END;
+    	    IF .tom NEQA 0 THEN
+    	    BEGIN
+    	    	CH$MOVE (.tom [TXT_W_LEN], tom [TXT_T_TEXT], .ptr);
+    	    	ptr = CH$PLUS (.ptr, .tom [TXT_W_LEN]);
+    	    	oute [EXTSPAM_A_TOMATCH] = .tom [TXT_W_LEN];
+    	    END;
+    	    IF .hdm NEQA 0 THEN
+    	    BEGIN
+    	    	CH$MOVE (.hdm [TXT_W_LEN], hdm [TXT_T_TEXT], .ptr);
+    	    	ptr = CH$PLUS (.ptr, .hdm [TXT_W_LEN]);
+    	    	oute [EXTSPAM_A_HDMATCH] = (.hdm [TXT_W_CODE] ^ 16) OR .hdm [TXT_W_LEN];
+    	    END;
+    	    IF .rwa NEQA 0 THEN
+    	    BEGIN
+    	    	CH$MOVE (.rwa [TXT_W_LEN], rwa [TXT_T_TEXT], .ptr);
+    	    	ptr = CH$PLUS (.ptr, .rwa [TXT_W_LEN]);
+    	    	oute [EXTSPAM_A_RWADDR] = .rwa [TXT_W_LEN];
+    	    END;
+    	    orab [RAB$L_RBF] = .obuf;
+    	    orab [RAB$W_RSZ] = CH$DIFF (.ptr, .obuf);
+    	    IF NOT .e [EXTSPAM_V_DELETED] THEN
+    	    	status = $PUT (RAB=orab);
+    	    IF NOT .status THEN EXITLOOP .status;
+    	    e = .e [EXTSPAM_L_FLINK];
+    	END;
+    END;
+
+    $DISCONNECT (RAB=orab);
+    IF NOT .status THEN ofab [FAB$V_DLT] = 1;
+    $CLOSE (FAB=ofab);
+    LIB$FREE_VM (osize, obuf);
+    IF .merge THEN LIB$FREE_VM (%REF (.rab [RAB$W_USZ]), rab [RAB$L_UBF]);
+
+    $DISCONNECT (RAB=RAB);
+    $CLOSE (FAB=FAB);
+
+    IF .status THEN
+    BEGIN
+    	LOCAL
+    	    fctx,
+    	    cur    : BLOCK [DSC$K_S_BLN,BYTE],
+    	    old	   : BLOCK [DSC$K_S_BLN,BYTE];
+    	fctx = 0;
+    	INIT_DYNDESC (cur, old);
+    	IF LIB$FIND_FILE (fspec, cur, fctx, %ASCID';*') THEN
+    	BEGIN
+    	    WHILE LIB$FIND_FILE (fspec, old, fctx, %ASCID';*') DO
+    	    	LIB$DELETE_FILE (old);
+    	    LIB$RENAME_FILE (cur, %ASCID'*.*;1', 0, 0, 0, 0, 0, 0, 0, 0, old, 0);
+! XXX - "old" now holds the _new_ file's name!!!
+    	    IF ACTUALCOUNT () GTR 2 AND .rspec_a NEQA 0 THEN STR$COPY_DX (.rspec_a, old);
+    	END;
+    	IF .fctx NEQU 0 THEN LIB$FIND_FILE_END (fctx);
+
+! Now make sure that the in-memory copy of the ESPAMQUE and caller's RDT are in synch
+
+    	IF ACTUALCOUNT () GTR 1 AND .rdt_a NEQA 0 THEN
+    	BEGIN
+    	    $XABRDT_INIT (XAB=XABRDT);
+    	    $FAB_INIT (FAB=FAB, FAC=GET, FNA=.old [DSC$A_POINTER], FNS=.old [DSC$W_LENGTH],
+    	    	       	   XAB=XABRDT);
+    	    status = $OPEN (FAB=FAB);
+    	    IF .status THEN CH$MOVE (8, XABRDT [XAB$Q_RDT], .rdt_a);
+    	    $CLOSE (FAB=FAB);
+    	END;
+    	FREE_STRINGS (cur, old);
+    END;
+
+    FREE_STRINGS (fspec);
+
+    $DEQ (LKID=.lsb [LSB_L_LKID]);
+
+    .status
+
+END; ! SAVE_ESPAMDB
+
+
+%SBTTL 'MXCONFIG_INSERT_PATH'
+GLOBAL ROUTINE MXCONFIG_INSERT_PATH (node_a_a, queue_a) : NOVALUE = 
+BEGIN
+!++
+! FUNCTIONAL DESCRIPTION:
+!
+!   Inserts a PATH definition in the PATH queue.  This routine is called
+!   by LOAD_MXCONFIG and by MCP when a path is defined.
+!
+!   PATH definitions are stored in the queue based on their lengths
+!   and by whether or not the domain pattern contains a wildcard.
+!   When all PATHs have been sorted, all non-wildcard domain patterns
+!   will be at the head of the queue, ordered by descending length,
+!   followed by the wildcard patters, also ordered by descending length.
+!   For example, regardless of the order in which they are read from
+!   the file, the path queue will always look like:
+!
+!		Domain-to-path mappings:
+!		  Domain="ALPHA.WKU.EDU", Path=Local
+!		  Domain="[161.6.5.4]", Path=Local
+!		  Domain="ALPHA", Path=Local
+!		  Domain="*.BITNET", Path=SMTP, Route="161.6.5.1"
+!		  Domain="*.SITE", Path=SMTP, Route="161.6.5.1"
+!		  Domain="*", Path=SMTP
+!
+!   Entries are not sorted based on anything but length, which means
+!   that two entries with the same length will always appear in the
+!   same order in which they were DEFINEd.  For example, entries
+!   "*.WKU.EDU" and "*.%KU.EDU" will still be ordered based on which
+!   was defined first.
+!
+! RETURNS:  	cond_value, longword (unsigned), write only, by value
+!
+! PROTOTYPE:
+!
+!   MXCONFIG_INSERT_PATH   node, queue
+!
+! IMPLICIT INPUTS:  None.
+!
+! IMPLICIT OUTPUTS: None.
+!
+! COMPLETION CODES:
+!
+!   SS$_NORMAL:	    	normal successful completion.
+!
+! SIDE EFFECTS:
+!
+!   None.
+!--
+    BIND
+	node	= .node_a_a	: REF PATHDEF,
+	queue	= .queue_a	: QUEDEF;
+
+    MACRO
+	!
+	!  HAS_WILDCARD returns a value of 0 if no wildcard characters are
+	!  present in the domain and 1 if there are wildcard characters.
+	!
+	HAS_WILDCARD (path) =
+	    BEGIN
+	    LOCAL x;
+	    x = CH$FIND_CH(.path [PATH_W_DOMAIN], path [PATH_T_DOMAIN], %C'*');
+	    IF CH$FAIL(.x)
+	    THEN
+		x = CH$FIND_CH (.path [PATH_W_DOMAIN],
+				 path [PATH_T_DOMAIN], %C'%');
+	    !
+	    !  X NEQA 0 if the pattern includes a wildcard.
+	    !
+	    .x NEQA 0				!Make it true/false
+
+	    END%;
+
+    LOCAL
+	ptr			: REF PATHDEF,
+	star, star2;
+
+    !
+    !  See if the domain pattern has a wildcard in it.
+    !  If so, then place it in the proper order in the
+    !  path queue.
+    !
+    star = HAS_WILDCARD (node);
+
+    ptr = .queue [QUE_L_TAIL];			!Start at queue tail
+    WHILE (.ptr NEQA queue [QUE_L_HEAD]) DO
+	BEGIN
+	star2 = HAS_WILDCARD (ptr);		!See if entry has wild card
+
+	IF (.star AND .star2) OR		!Both have wildcards
+	   (NOT(.star) AND NOT(.star2))		!Or neither does
+	THEN
+	    BEGIN
+	    IF (.node [PATH_W_DOMAIN] LEQU .ptr [PATH_W_DOMAIN])
+	    THEN
+		BEGIN
+		INSQUE (.node, .ptr);
+		EXITLOOP;
+		END;
+	    END
+	ELSE
+	    IF (.star AND NOT(.star2))
+	    THEN
+		BEGIN
+		INSQUE (.node, .ptr);
+		EXITLOOP;
+		END;
+	ptr = .ptr [PATH_L_BLINK];
+	END;
+    !
+    !  If ptr is pointing to queue, then we've either
+    !  got an empty queue or no place was found, which
+    !  means the path is to be added to the head of the
+    !  queue.
+    !
+    IF (.ptr EQLA queue [QUE_L_HEAD])
+    THEN
+	INSQUE (.node, queue [QUE_L_HEAD]);
+
+    RETURN;
+
+END;
+
+%SBTTL 'espam_match'
+ROUTINE espam_match (emem_a, edisk_a) = 
+BEGIN
+!++
+! FUNCTIONAL DESCRIPTION:
+!
+!   Checks to see if an in-memory EXTSPAMDEF record matches
+!   one we just read in from disk.
+!
+! RETURNS:  	1 or 0.
+!
+! PROTOTYPE:
+!
+!   ESPAM_MATCH  emem, edisk
+!
+! IMPLICIT INPUTS:  None.
+!
+! IMPLICIT OUTPUTS: None.
+!
+! COMPLETION CODES:
+!
+!   1: match
+!   0: no match
+!
+! SIDE EFFECTS:
+!
+!   None.
+!--
+    BIND
+    	emem	= .emem_a   : EXTSPAMDEF,
+    	ipm 	= emem [EXTSPAM_A_IPMATCH] : REF TXTDEF,
+    	frm	= emem [EXTSPAM_A_FRMATCH] : REF TXTDEF,
+    	tom 	= emem [EXTSPAM_A_TOMATCH] : REF TXTDEF,
+    	hdm 	= emem [EXTSPAM_A_HDMATCH] : REF TXTDEF,
+    	edisk	= .edisk_a  : EXTSPAMDEF,
+    	dbuf	= .edisk_a  : BLOCK [,BYTE];
+
+    LOCAL
+    	dsc1 : BLOCK [DSC$K_S_BLN,BYTE] PRESET (
+    	    	    	[DSC$B_DTYPE] = DSC$K_DTYPE_T,
+    	    	    	[DSC$B_CLASS] = DSC$K_CLASS_S),
+    	dsc2 : BLOCK [DSC$K_S_BLN,BYTE] PRESET (
+    	    	    	[DSC$B_DTYPE] = DSC$K_DTYPE_T,
+    	    	    	[DSC$B_CLASS] = DSC$K_CLASS_S),
+    	ptr;
+
+    MACRO
+    	neq_blind (_len1, _p1, _len2,  _p2) =
+    	    (IF _len1 EQL _len2 THEN
+    	    BEGIN
+    	    	dsc1 [DSC$W_LENGTH] = dsc2 [DSC$W_LENGTH] = _len1;
+    	    	dsc1 [DSC$A_POINTER] = _p1; dsc2 [DSC$A_POINTER] = _p2;
+    	    	STR$CASE_BLIND_COMPARE (dsc1, dsc2) NEQ 0
+    	    END
+    	    ELSE 1)%;
+
+    IF CH$NEQ (8, emem [EXTSPAM_Q_DTADD], 8, edisk [EXTSPAM_Q_DTADD], %CHAR (0)) THEN
+    	RETURN 0;
+
+    ptr = CH$PLUS (dbuf, EXTSPAM_S_EXTSPAMDEF);
+    IF .ipm NEQA 0 THEN
+    BEGIN
+    	IF neq_blind (.edisk [EXTSPAM_A_IPMATCH], .ptr, .ipm [TXT_W_LEN], ipm [TXT_T_TEXT]) THEN RETURN 0;
+    	ptr = CH$PLUS (.ptr, .ipm [TXT_W_LEN]);
+    END
+    ELSE IF .edisk [EXTSPAM_A_IPMATCH] NEQ 0 THEN RETURN 0;
+
+    IF .frm NEQA 0 THEN
+    BEGIN
+    	IF neq_blind (.edisk [EXTSPAM_A_FRMATCH], .ptr, .frm [TXT_W_LEN], frm [TXT_T_TEXT]) THEN RETURN 0;
+    	ptr = CH$PLUS (.ptr, .frm [TXT_W_LEN]);
+    END
+    ELSE IF .edisk [EXTSPAM_A_FRMATCH] NEQ 0 THEN RETURN 0;
+    
+    IF .tom NEQA 0 THEN
+    BEGIN
+    	IF neq_blind (.edisk [EXTSPAM_A_TOMATCH], .ptr, .tom [TXT_W_LEN], tom [TXT_T_TEXT]) THEN RETURN 0;
+    	ptr = CH$PLUS (.ptr, .tom [TXT_W_LEN]);
+    END
+    ELSE IF .edisk [EXTSPAM_A_TOMATCH] NEQ 0 THEN RETURN 0;
+
+    IF .hdm NEQA 0 THEN
+    BEGIN
+    	BIND edh = edisk [EXTSPAM_A_HDMATCH] : VECTOR [2,WORD];
+    	IF .edh [1] NEQ .hdm [TXT_W_CODE] THEN RETURN 0;
+    	IF neq_blind (.edh [0], .ptr, .hdm [TXT_W_LEN], hdm [TXT_T_TEXT]) THEN RETURN 0;
+    	ptr = CH$PLUS (.ptr, .hdm [TXT_W_LEN]);
+    END
+    ELSE IF .edisk [EXTSPAM_A_HDMATCH] NEQ 0 THEN RETURN 0;
+
+    1
+
+END; ! espam_match
+
+%SBTTL 'new_cell_from_record'
+ROUTINE new_cell_from_record (rbf_a) = 
+BEGIN
+!++
+! FUNCTIONAL DESCRIPTION:
+!
+!   description
+!
+! RETURNS:  	cond_value, longword (unsigned), write only, by value
+!
+! PROTOTYPE:
+!
+!   x
+!
+! IMPLICIT INPUTS:  None.
+!
+! IMPLICIT OUTPUTS: None.
+!
+! COMPLETION CODES:
+!
+!   SS$_NORMAL:	    	normal successful completion.
+!
+! SIDE EFFECTS:
+!
+!   None.
+!--
+    BIND
+        rbf = .rbf_a	: BLOCK [,BYTE],
+        rbfl = .rbf_a   : VECTOR [,LONG];
+
+    LOCAL
+    	e : REF EXTSPAMDEF,
+    	T : REF TXTDEF,
+    	OFFSET,
+    	status;
+
+    status = LIB$GET_VM (%REF (EXTSPAM_S_EXTSPAMDEF), E);
+    IF NOT .status THEN SIGNAL_STOP (.status);
+    CH$FILL (%CHAR (0), EXTSPAM_S_EXTSPAMDEF, .E);
+    CH$MOVE (EXTSPAM_S_EXTSPAMDEF, RBF, .E);
+    E [EXTSPAM_L_FLINK] = E [EXTSPAM_L_BLINK] = 0;
+    E [EXTSPAM_A_FRREGEX] = 0;
+    E [EXTSPAM_A_TOREGEX] = 0;
+    E [EXTSPAM_A_HDREGEX] = 0;
+    E [EXTSPAM_V_DIRTY] = E [EXTSPAM_V_WROTE] = E [EXTSPAM_V_DELETED] = 0;
+    OFFSET = EXTSPAM_S_EXTSPAMDEF - (IF .rbfl [0] EQL CFG_K_ESPAM53_ THEN 12 
+                                     ELSE IF .rbfl [0] EQL CFG_K_ESPAMPRE53 THEN 16 ELSE 0);
+    IF .E [EXTSPAM_A_IPMATCH] NEQ 0 THEN
+    BEGIN
+    	T = MEM_GETTXT (.E [EXTSPAM_A_IPMATCH], CH$PLUS (RBF, .OFFSET));
+    	OFFSET = .OFFSET + .E [EXTSPAM_A_IPMATCH];
+    	E [EXTSPAM_A_IPMATCH] = .T;
+    END;
+    IF .E [EXTSPAM_A_FRMATCH] NEQ 0 THEN
+    BEGIN
+    	T = MEM_GETTXT (.E [EXTSPAM_A_FRMATCH], CH$PLUS (RBF, .OFFSET));
+    	OFFSET = .OFFSET + .E [EXTSPAM_A_FRMATCH];
+    	E [EXTSPAM_A_FRMATCH] = .T;
+    END;
+    IF .E [EXTSPAM_A_TOMATCH] NEQ 0 THEN
+    BEGIN
+    	T = MEM_GETTXT (.E [EXTSPAM_A_TOMATCH], CH$PLUS (RBF, .OFFSET));
+    	OFFSET = .OFFSET + .E [EXTSPAM_A_TOMATCH];
+    	E [EXTSPAM_A_TOMATCH] = .T;
+    END;
+    IF .E [EXTSPAM_A_HDMATCH] NEQ 0 THEN
+    BEGIN
+    	BIND hdm = e [EXTSPAM_A_HDMATCH] : VECTOR [2,WORD];
+    	T = MEM_GETTXT (.hdm [0], CH$PLUS (RBF, .OFFSET));
+    	T [TXT_W_CODE] = .hdm [1];
+    	OFFSET = .OFFSET + .hdm [0];
+    	E [EXTSPAM_A_HDMATCH] = .T;
+    END;
+    IF .E [EXTSPAM_A_RWADDR] NEQ 0 THEN
+    BEGIN
+    	T = MEM_GETTXT (.E [EXTSPAM_A_RWADDR], CH$PLUS (RBF, .OFFSET));
+    	OFFSET = .OFFSET + .E [EXTSPAM_A_RWADDR];
+    	E [EXTSPAM_A_RWADDR] = .T;
+    END;
+
+    .E
+
+END; ! new_cell_from_record
+
+%SBTTL 'free_cell'
+ROUTINE free_cell (e_a) : NOVALUE = 
+BEGIN
+!++
+! FUNCTIONAL DESCRIPTION:
+!
+!   Frees an EXTSPAM record.
+!
+! RETURNS:  	cond_value, longword (unsigned), write only, by value
+!
+! PROTOTYPE:
+!
+!   x
+!
+! IMPLICIT INPUTS:  None.
+!
+! IMPLICIT OUTPUTS: None.
+!
+! COMPLETION CODES:
+!
+!   SS$_NORMAL:	    	normal successful completion.
+!
+! SIDE EFFECTS:
+!
+!   None.
+!--
+    BIND
+    	e = .e_a    : EXTSPAMDEF;
+    IF .E [EXTSPAM_A_IPMATCH] NEQA 0 THEN FREETXT (E [EXTSPAM_A_IPMATCH]);
+    IF .E [EXTSPAM_A_FRMATCH] NEQA 0 THEN FREETXT (E [EXTSPAM_A_FRMATCH]);
+    IF .E [EXTSPAM_A_TOMATCH] NEQA 0 THEN FREETXT (E [EXTSPAM_A_TOMATCH]);
+    IF .E [EXTSPAM_A_HDMATCH] NEQA 0 THEN FREETXT (E [EXTSPAM_A_HDMATCH]);
+    IF .E [EXTSPAM_A_FRREGEX] NEQA 0 THEN
+    BEGIN
+        MX_REGFREE (.E [EXTSPAM_A_FRREGEX]);
+        LIB$FREE_VM (%REF (REGEX_S_REGEXDEF), E [EXTSPAM_A_FRREGEX]);
+    END;
+    IF .E [EXTSPAM_A_TOREGEX] NEQA 0 THEN
+    BEGIN
+        MX_REGFREE (.E [EXTSPAM_A_TOREGEX]);
+        LIB$FREE_VM (%REF (REGEX_S_REGEXDEF), E [EXTSPAM_A_TOREGEX]);
+    END;
+    IF .E [EXTSPAM_A_HDREGEX] NEQA 0 THEN
+    BEGIN
+        MX_REGFREE (.E [EXTSPAM_A_HDREGEX]);
+        LIB$FREE_VM (%REF (REGEX_S_REGEXDEF), E [EXTSPAM_A_HDREGEX]);
+    END;
+    LIB$FREE_VM (%REF (EXTSPAM_S_EXTSPAMDEF), %REF (E));
+
+END; ! free_cell
+
+END
+ELUDOM

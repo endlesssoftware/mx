@@ -1,0 +1,1183 @@
+%TITLE 'MX_MAILSHR_PARSING'
+MODULE MX_MAILSHR_PARSING (IDENT='V4.2-1', ADDRESSING_MODE (EXTERNAL=LONG_RELATIVE, NONEXTERNAL=LONG_RELATIVE)) =
+BEGIN
+!++
+! FACILITY: 	    MX_MAILSHR
+!
+! ABSTRACT: 	    Routines for converting between VMS MAIL & RFC822 addresses.
+!
+! MODULE DESCRIPTION:
+!
+!   This module contains routines that parse things.  All of these routines
+!   use LIB$TPARSE to do the major parsing work.  All of the routines also
+!   use extended TPARSE argument blocks for storing things to keep things
+!   modular.  When a token needs to be saved, an action routine is named
+!   in the transition and the user argument is a constant which indicates
+!   to the action routine which argument in the extended argument block
+!   should be modified.  Some of the argument blocks and numbering schemes
+!   are set up so as to allow direct offsetting from the argument pointer
+!   in the action routine (so be careful when modifying).
+!
+! AUTHOR:   	    M. Madison
+!
+! Copyright (c) 2008, Matthew Madison.
+! 
+! All rights reserved.
+! 
+! Redistribution and use in source and binary forms, with or without
+! modification, are permitted provided that the following conditions
+! are met:
+! 
+!     * Redistributions of source code must retain the above
+!       copyright notice, this list of conditions and the following
+!       disclaimer.
+!     * Redistributions in binary form must reproduce the above
+!       copyright notice, this list of conditions and the following
+!       disclaimer in the documentation and/or other materials provided
+!       with the distribution.
+!     * Neither the name of the copyright owner nor the names of any
+!       other contributors may be used to endorse or promote products
+!       derived from this software without specific prior written
+!       permission.
+! 
+! THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
+! "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
+! LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
+! A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
+! OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
+! SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
+! LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
+! DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
+! THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
+! (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
+! OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+!
+! CREATION DATE:    26-APR-1989
+!
+! MODIFICATION HISTORY:
+!
+!   26-APR-1989 V1.0-1  Madison	    Initial coding.
+!   05-DEC-1989 V1.0-2  Madison	    Additional quoting on personal names.
+!   14-DEC-1989 V1.1-3  Madison	    Added MX_TO_VMS.
+!   19-DEC-1989 V1.2-4  Madison	    Added IHMF%"" compatibility.
+!   03-JAN-1990 V1.3-5  Madison	    Added Jnet%"" compatibility.
+!   15-JAN-1990 V1.3-6  Madison	    Spruce up DECnet address support a bit.
+!   22-JAN-1990	V1.4-7	Madison	    Distinguish fake from real address.
+!   05-FEB-1990	V1.5-8	Madison	    Add comma-separated list parsing.
+!   07-FEB-1990	V1.5-9	Madison	    Strip off leading node:: specs.
+!   21-FEB-1990	V1.5-10	Madison	    Add DECnet check.
+!   19-MAR-1990	V1.5-11	Madison	    Add comment check in CSL_PARSE.
+!   28-SEP-1990	V1.6-12	Madison	    Add IN%"", INET%"" compatibility.
+!   03-OCT-1990	V1.7	Madison	    Handle quoting a bit better.
+!   26-OCT-1990	V1.7-1	Madison	    A few more quoting fixes.
+!   10-DEC-1990	V1.7-2	Madison	    Don't do .-$ or $-. on name conversions.
+!   10-FEB-1991	V1.8	Madison	    Add SMTP%, WINS% compatibility.
+!   13-FEB-1991	V1.8-1	Madison	    Switch from addr (name) to "name" addr
+!   13-FEB-1991	V1.8-2	Madison	    Expand domain names.
+!   15-FEB-1991	V1.8-3	Madison	    For JNET%, don't tack sfx on if . in addr.
+!   19-FEB-1991	V1.8-4	Madison	    Filter out comments.
+!   21-FEB-1991	V1.8-5	Madison	    Handle unparseable addresses better.
+!   02-MAR-1991	V1.9	Madison	    Move domain expansion to Router.
+!   06-MAR-1991	V1.9-1	Madison	    Fix quoting problems.
+!   14-MAR-1991	V1.9-2	Madison	    Add UUCP%, VN% support.
+!   02-APR-1991	V1.9-3	Madison	    Add BITNET% support.
+!   03-APR-1991	V1.9-4	Madison	    Unquote personal name before verifying.
+!   06-JUN-1991	V1.9-5	Madison	    Fix DECnet chk when used w/name_conversion.
+!   07-JUN-1991	V1.9-6	Madison	    Allow external definition of From format.
+!   13-JUN-1991	V1.9-7	Madison	    Fix DECnet chk when used w/o name_conversion.
+!   22-OCT-1991	V2.0	Madison	    Allow definable protocol prefix.
+!   17-FEB-1992	V2.0-1	Madison	    Wasn't quoting DECnet addresses correctly.
+!   20-FEB-1992	V2.0-2	Madison	    Add ST% support.
+!   11-MAR-1992	V2.0-3	Madison	    Don't lowercase on conversion.
+!   15-MAY-1992	V2.1	Madison	    Allow for FULL_CONVERT interface.
+!   19-JAN-1993 V2.2	Goatley     Add VMS_TO_ALIAS (stolen from VMS_TO_MX).
+!   10-MAR-1993 V2.3	Goatley     Converted to work on Alpha (Thanks, Matt).
+!   10-JUN-1994 V2.4	Goatley     Modified to accept blanks as To: separators.
+!   21-JUN-1996 V3.0	Goatley     Allow no prefix, fix non-local check, add
+!				    ASCID% BINDs.
+!   30-DEC-1996	V3.1	Madison	    Remove MDMLIB references.
+!   01-MAY-1997	V4.0	Madison	    Revamp VMS_TO_MX, rename it.
+!   05-MAY-1997	V4.0-1	Madison	    Fix did_full_convert case.
+!   05-MAY-1997	V4.0-2	Madison	    Allow host spec on envelope from formatting.
+!    6-MAY-1997 V4.0-3	Goatley	    Fix stripping of "<" from username.
+!   09-MAY-1997	V4.0-4	Madison	    Case retention of username.
+!   05-SEP-1997	V4.1	Madison	    Improvements in handling of special chars
+!   	    	    	    	    and real RFC822 addresses.
+!   20-SEP-1997	V4.1-1	Madison	    Fix handling of leading $.
+!   17-JUN-1998	V4.1-2	Madison	    Fix quoting problem in VMS MAIL personal names.
+!   21-JUL-1998	V4.1-3	Madison	    Fix handling of real RFC822 addresses -- the
+!                                    fake parsing we were doing just wasn't cutting it.
+!   25-NOV-2000	V4.2	Madison	    Remove JNET% support.
+!   31-JAN-2003 V4.2-1  Madison     Only want to run name_conversion on FROM addresses.
+!--
+
+    LIBRARY 'SYS$LIBRARY:STARLET';
+    LIBRARY 'SYS$LIBRARY:TPAMAC';
+    LIBRARY 'MX_SRC_COMMON:MX';
+
+    FORWARD ROUTINE
+    	MX_FMT_LCL_ADDR,
+    	VTM_STORE,
+    	LTR_STORE,
+	VMS_TO_ALIAS,
+    	MX_TO_VMS,
+    	CSL_PARSE,
+    	CSL_STORE,
+    	FIS_ERR_HANDLER;
+
+    EXTERNAL ROUTINE
+    	QUOTE_STRING,
+    	PARSE_MBOX,
+    	MAKE_ADDRESS,
+    	MAKE_ADDR821,
+    	MAKE_TO_ADDRESS,
+    	IS_LOCAL_HOST,
+    	G_HAT (LIB$TPARSE, STR$COPY_DX, LIB$ANALYZE_SDESC,
+    	    STR$COPY_R, STR$CONCAT, LIB$SYS_FAO, LIB$SCOPY_DXDX,
+    	    LIB$FIND_IMAGE_SYMBOL, VERIFY_PHRASE, MEM_GETTXT);
+
+    MACRO
+    	TPA_A_P1    	=   TPA$C_LENGTH0+00,0,32,0%,
+    	TPA_A_P2    	=   TPA$C_LENGTH0+04,0,32,0%,
+    	TPA_A_P3    	=   TPA$C_LENGTH0+08,0,32,0%,
+    	TPA_A_P4    	=   TPA$C_LENGTH0+12,0,32,0%,
+    	TPA_A_P5    	=   TPA$C_LENGTH0+16,0,32,0%,
+    	TPA_A_P6    	=   TPA$C_LENGTH0+20,0,32,0%,
+    	TPA_A_P7    	=   TPA$C_LENGTH0+24,0,32,0%,
+    	TPA_A_P8    	=   TPA$C_LENGTH0+28,0,32,0%,
+    	dxmove (_dstr, _sstr, _maxlen) =
+    	BEGIN
+    	    _sstr [DSC$W_LENGTH] = MINU (_maxlen, ._dstr [DSC$W_LENGTH]);
+    	    CH$MOVE (._sstr [DSC$W_LENGTH], ._dstr [DSC$A_POINTER], ._sstr [DSC$A_POINTER]);
+    	END%;
+
+    BIND
+	null_string			= %ASCID'',
+	mx_site_name_conversion		= %ASCID'MX_SITE_NAME_CONVERSION',
+	ascid_langle			= %ASCID'<',
+	ascid_rangle			= %ASCID'>',
+	ascid_atsign			= %ASCID'@',
+	ascid_doublequote		= %ASCID'"';
+
+
+%SBTTL 'State table for VMS_TO_MX'
+
+    $INIT_STATE (VTM_STATE, VTM_KEY);
+
+    $STATE (START0,
+    	((HDRSTUF), START),
+    	(TPA$_LAMBDA, START));
+
+    $STATE (START,
+    	(TPA$_BLANK, START),
+    	('"', PREQUOTED),
+    	(TPA$_LAMBDA, NONQUOTED));
+
+    $STATE (NONQUOTED,
+    	(TPA$_BLANK, NONQ1),
+    	('\', NONQLIT),
+    	('@', NONQ0),
+    	('"', NONQQ, VTM_STORE,,,1),
+    	(TPA$_EOS, TPA$_EXIT),
+    	(TPA$_ANY, NONQUOTED, VTM_STORE,,,1));
+    $STATE (NONQLIT,
+    	(TPA$_ANY, NONQUOTED, VTM_STORE,,,1));
+    $STATE (NONQ0,
+    	(TPA$_BLANK, NONQ1),
+    	(TPA$_EOS, TPA$_EXIT),
+    	(TPA$_ANY, NONQ0, VTM_STORE,,,2));
+    $STATE (NONQ1,
+    	(TPA$_BLANK, NONQ1),
+    	('"', NONQ2),
+    	(TPA$_EOS, TPA$_EXIT));
+    $STATE (NONQ2,
+    	(TPA$_EOS, TPA$_EXIT),
+    	('"', NONQ2A),
+    	(TPA$_ANY, NONQ2, VTM_STORE,,,3));
+    $STATE (NONQ2A,
+    	(TPA$_EOS, TPA$_EXIT),
+    	(TPA$_ANY, NONQ2, VTM_STORE,,,3));
+    $STATE (NONQQ,
+    	('"', NONQUOTED, VTM_STORE,,,1),
+    	(TPA$_ANY, NONQQ, VTM_STORE,,,1));
+
+    $STATE (HDRSTUF,
+    	((DNETNODE), HDRSTUF),
+    	((MXPERCENT), TPA$_EXIT));
+
+    $STATE (DNETNODE,
+    	(TPA$_ALPHA, DNETNODE),
+    	(TPA$_DIGIT, DNETNODE),
+    	(':', DNETNOD1));
+    $STATE (DNETNOD1,
+    	(':', TPA$_EXIT));
+
+    $STATE (MXPERCENT,
+    	('M', MXPCT1), ('m', MXPCT1),
+    	('I', IHMFPCT1), ('i', IHMFPCT1),
+    	('S', SMTPPCT1), ('s', SMTPPCT1),
+    	('W', WINSPCT1), ('w', WINSPCT1),
+    	('U', UUCPPCT1), ('u', UUCPPCT1),
+    	('V', VNPCT1), ('v', VNPCT1),
+    	(TPA$_LAMBDA, TPA$_FAIL));
+    $STATE (MXPCT1,
+    	('X', MXPCT2),
+    	('x', MXPCT2),
+    	(TPA$_LAMBDA, TPA$_FAIL));
+    $STATE (IHMFPCT1,
+    	('H', IHMFPCT2),
+    	('h', IHMFPCT2),
+    	('N', INPCT3),
+    	('n', INPCT3));
+    $STATE (IHMFPCT2,
+    	('M', IHMFPCT3),
+    	('m', IHMFPCT3));
+    $STATE (IHMFPCT3,
+    	('F', MXPCT2),
+    	('f', MXPCT2));
+    $STATE (INPCT3,
+    	('%', TPA$_EXIT, VTM_STORE,,, 5),
+    	('E', INETPCT4),
+    	('e', INETPCT4));
+    $STATE (INETPCT4,
+    	('T', MXPCT2),
+    	('t', MXPCT2));
+    $STATE (SMTPPCT1,
+    	('T', MXPCT2),
+    	('M',), ('m',));
+    $STATE (, ('T',), ('t',));
+    $STATE (, ('P', MXPCT2), ('p', MXPCT2));
+    $STATE (WINSPCT1,
+    	('I',), ('i',));
+    $STATE (, ('N',), ('n',));
+    $STATE (, ('S', MXPCT2), ('s', MXPCT2));
+    $STATE (UUCPPCT1,
+    	('U',), ('u',));
+    $STATE (, ('C',), ('c',));
+    $STATE (, ('P', MXPCT2), ('p', MXPCT2));
+    $STATE (VNPCT1,
+    	('N', MXPCT2), ('n', MXPCT2));
+    $STATE (MXPCT2,
+    	('%', TPA$_EXIT, VTM_STORE,,, 5),
+    	(TPA$_LAMBDA, TPA$_FAIL));
+    $STATE (PREQUOTED,
+    	(TPA$_BLANK, PREQUOTED),
+    	(TPA$_LAMBDA, QUOTED, VTM_STORE,,, 8));
+    $STATE (QUOTED,
+    	('\', QLIT),
+    	('"', NONQ1),
+    	('''', QUOTED, VTM_STORE,,, 7),
+    	(TPA$_EOS, TPA$_EXIT),
+    	((COMMENT), QUOTED),
+    	(TPA$_ANY, QUOTED, VTM_STORE,,,6));
+    $STATE (QLIT,
+    	(TPA$_ANY, QUOTED, VTM_STORE,,,6));
+    $STATE (COMMENT,
+    	('(', COM1),
+    	(TPA$_ANY, TPA$_FAIL));
+    $STATE (COM1,
+    	((COMMENT), COM1),
+    	(TPA$_BLANK, COM1),
+    	('\', COMLIT),
+    	(')', TPA$_EXIT),
+    	(TPA$_EOS, TPA$_FAIL),
+    	(TPA$_ANY, COM1));
+    $STATE (COMLIT,
+    	(TPA$_ANY, COM1));
+
+
+%SBTTL 'State table for VMS_TO_MX (part II - local-to-RFC-compliant)'
+
+    $INIT_STATE (LTR_STATE, LTR_KEY);
+
+    $STATE (LTRSTART,
+    	(TPA$_EOS, TPA$_EXIT),
+    	('"', LTRQUOTE, LTR_STORE,,, 0),
+    	('_', LTRSTART, LTR_STORE,,, 0),
+    	('$', LTRSTART, LTR_STORE,,, 2),
+    	('.', LTRSTART, LTR_STORE,,, 0),
+    	('-', LTRSTART, LTR_STORE,,, 0),
+    	('%', LTRSTART, LTR_STORE,,, 0),
+    	('^', LTRSTART, LTR_STORE,,, 0),
+    	('#', LTRSTART, LTR_STORE,,, 0),
+    	('*', LTRSTART, LTR_STORE,,, 0),
+    	('&', LTRSTART, LTR_STORE,,, 0),
+    	('!', LTRSTART, LTR_STORE,,, 0),
+    	('+', LTRSTART, LTR_STORE,,, 0),
+    	('=', LTRSTART, LTR_STORE,,, 0),
+    	('{', LTRSTART, LTR_STORE,,, 0),
+    	('}', LTRSTART, LTR_STORE,,, 0),
+    	('|', LTRSTART, LTR_STORE,,, 0),
+    	('/', LTRSTART, LTR_STORE,,, 0),
+    	('?', LTRSTART, LTR_STORE,,, 0),
+    	(TPA$_ALPHA, LTRSTART, LTR_STORE,,, 1),
+    	(TPA$_DIGIT, LTRSTART, LTR_STORE,,, 1),
+    	(TPA$_ANY, LTRSTART, LTR_STORE,,, 4));
+    $STATE (LTRQUOTE,
+    	('"', LTRSTART, LTR_STORE,,, 0),
+    	('\', LTRLIT, LTR_STORE,,, 0),
+    	(TPA$_ANY, LTRQUOTE, LTR_STORE,,, 0));
+    $STATE (LTRLIT,
+    	(TPA$_ANY, LTRQUOTE, LTR_STORE,,, 0));
+
+%SBTTL 'State table for CSL_PARSE'
+
+    $INIT_STATE (CSL_STATE, CSL_KEY);
+
+    $STATE (CSLSTART,
+    	(TPA$_BLANK, CSLSTART, CSL_STORE,,, 2),
+    	(TPA$_EOS, TPA$_EXIT, CSL_STORE,,, 2),
+    	('!', TPA$_EXIT, CSL_STORE,,, 2),
+    	(',', CSLSTART, CSL_STORE,,, 2),
+    	('"', CSLQUO1, CSL_STORE,,, 1),
+    	(TPA$_ANY, CSLSTART, CSL_STORE,,, 1));
+
+    $STATE (CSLQUO1,
+    	('"', CSLQUO2, CSL_STORE,,, 1),
+    	(TPA$_EOS, TPA$_EXIT, CSL_STORE,,, 2),
+    	(TPA$_ANY, CSLQUO1, CSL_STORE,,, 1));
+
+    $STATE (CSLQUO2,
+    	('"', CSLQUO1, CSL_STORE,,, 1),
+    	(TPA$_EOS, TPA$_EXIT, CSL_STORE,,, 2),
+    	(TPA$_LAMBDA, CSLSTART));
+
+
+%SBTTL 'MX_FMT_LCL_ADDR'
+GLOBAL ROUTINE MX_FMT_LCL_ADDR (XFMT_TYPE, VSTR_A, MXSTR_A, NAM_A, FLAGS_A, ENVFROMHOST_A) =
+BEGIN
+!++
+! FUNCTIONAL DESCRIPTION:
+!
+!   Formats a "local" address (either an address specified in VMS MAIL or
+!   a plain user/mailbox name) into an appropriate format for the mail
+!   system (RFC822 or RFC821).
+!
+! RETURNS:  	cond_value, longword (unsigned), write only, by value
+!
+! PROTOTYPE:
+!
+!   MX_FMT_LCL_ADDR  fmt_type, vstr, mxstr [,nam] [,flags]
+!
+!   fmt_type:	longword (unsigned), read only, by value
+!   vstr:   	char_string, read only, by descriptor
+!   mxstr:  	char_string, write only, by descriptor
+!   nam:    	char_string, read only, by descriptor
+!   flags:  	longword mask (unsigned), write only, by reference
+!
+! IMPLICIT INPUTS:  None.
+!
+! IMPLICIT OUTPUTS: None.
+!
+! COMPLETION CODES:
+!
+!   SS$_NORMAL:	    	normal successful completion.
+!
+! SIDE EFFECTS:
+!
+!   None.
+!--
+    BUILTIN
+    	ACTUALCOUNT;
+
+    BIND
+    	VSTR	    = .VSTR_A   : BLOCK [,BYTE],
+    	MXSTR	    = .MXSTR_A  : BLOCK [,BYTE],
+    	fmt_type    = XFMT_TYPE	: BLOCK [,BYTE];
+
+    ENABLE
+    	FIS_ERR_HANDLER;
+
+    LITERAL
+    	TPA_C_LENGTH	= TPA$C_LENGTH0 + 32,
+    	TPA_K_COUNT 	= TPA$K_COUNT0 + 8;
+
+    LOCAL
+    	vmsbuf	: BLOCK [512,BYTE],
+    	USRBUF	: BLOCK [256,BYTE],
+    	DOMBUF	: BLOCK [256,BYTE],
+    	NAMBUF	: BLOCK [256,BYTE],
+    	vmsdsc	: BLOCK [DSC$K_S_BLN,BYTE],
+    	usrdsc	: BLOCK [DSC$K_S_BLN,BYTE],
+    	domdsc	: BLOCK [DSC$K_S_BLN,BYTE],
+    	namdsc	: BLOCK [DSC$K_S_BLN,BYTE],
+    	INIT, FULL_CONVERT, CONVERT, CLEANUP, CTX,
+    	STATUS,
+    	NONLCL,
+    	FLAGS,
+    	TPABLK	: BLOCK [TPA_C_LENGTH,BYTE],
+    	CONVERTED, DID_FULL_CONVERT;
+
+    INIT_SDESC (vmsdsc, 0, vmsbuf);
+    INIT_SDESC (domdsc, 0, dombuf);
+    INIT_SDESC (namdsc, 0, nambuf);
+
+    NONLCL = 0;
+    TPABLK [TPA$L_COUNT] = TPA_K_COUNT;
+    TPABLK [TPA$L_OPTIONS] = 0;
+    TPABLK [TPA$V_BLANKS] = 1;
+    TPABLK [TPA$L_STRINGCNT] = .VSTR [DSC$W_LENGTH];
+    TPABLK [TPA$L_STRINGPTR] = .VSTR [DSC$A_POINTER];
+    TPABLK [TPA_A_P1] = %ALLOCATION (vmsbuf);
+    TPABLK [TPA_A_P2] = vmsdsc;
+    TPABLK [TPA_A_P3] = %ALLOCATION (dombuf);
+    TPABLK [TPA_A_P4] = domdsc;
+    TPABLK [TPA_A_P5] = %ALLOCATION (nambuf);
+    TPABLK [TPA_A_P6] = namdsc;
+    TPABLK [TPA_A_P7] = 0;
+    TPABLK [TPA_A_P8] = NONLCL;
+
+    STATUS = LIB$TPARSE (TPABLK, VTM_STATE, VTM_KEY);
+    IF NOT .STATUS THEN RETURN .STATUS;
+
+    !
+    !	If the first-pass parser was presented with MX%"some-address",
+    !	try parsing that address now.
+    !
+    IF .nonlcl EQL 3 THEN
+    BEGIN
+    	LOCAL
+    	    lclp : BLOCK [DSC$K_S_BLN,BYTE],
+    	    domp : BLOCK [DSC$K_S_BLN,BYTE],
+    	    namp : BLOCK [DSC$K_S_BLN,BYTE];
+    	INIT_DYNDESC (lclp, domp, namp);
+    	status = PARSE_MBOX (vmsdsc, lclp, domp, namp);
+    	IF NOT .status THEN
+    	BEGIN
+    	    !
+    	    !  Try again after appending a fake domain name, just to
+    	    !  make the parser happy
+    	    !
+    	    IF .vmsdsc [DSC$W_LENGTH] LSS %ALLOCATION (vmsbuf)-2 THEN
+    	    BEGIN
+    	    	CH$WCHAR (%C'@', CH$PLUS (vmsbuf, .vmsdsc [DSC$W_LENGTH]));
+    	    	CH$WCHAR (%C'x', CH$PLUS (vmsbuf, .vmsdsc [DSC$W_LENGTH]+1));
+    	    	vmsdsc [DSC$W_LENGTH] = .vmsdsc [DSC$W_LENGTH] + 2;
+    	    	status = PARSE_MBOX (vmsdsc, lclp, domp, namp);
+    	    	vmsdsc [DSC$W_LENGTH] = .vmsdsc [DSC$W_LENGTH] - 2;
+    	    	FREE_STRINGS (domp);  ! get rid of fake domain if it checks out OK
+    	    END;
+    	END;
+    	IF NOT .status THEN
+    	BEGIN
+    	    FREE_STRINGS (lclp, domp, namp);
+    	    RETURN .status;
+    	END;
+    	vmsdsc [DSC$W_LENGTH] = MINU (.lclp [DSC$W_LENGTH], %ALLOCATION (vmsbuf));
+    	CH$MOVE (.vmsdsc [DSC$W_LENGTH], .lclp [DSC$A_POINTER], vmsbuf);
+    	domdsc [DSC$W_LENGTH] = MINU (.domp [DSC$W_LENGTH], %ALLOCATION (dombuf));
+    	IF .domdsc [DSC$W_LENGTH] NEQ 0 THEN
+    	    CH$MOVE (.domdsc [DSC$W_LENGTH], .domp [DSC$A_POINTER], dombuf);
+    	namdsc [DSC$W_LENGTH] = MINU (.namp [DSC$W_LENGTH], %ALLOCATION (nambuf));
+    	IF .namdsc [DSC$W_LENGTH] NEQ 0 THEN
+    	    CH$MOVE (.namdsc [DSC$W_LENGTH], .namp [DSC$A_POINTER], nambuf);
+    	FREE_STRINGS (lclp, domp, namp);
+    	nonlcl = 1;
+    END;
+    !
+    !  It used to be that all non-local addresses had to be prefixed
+    !  with a string like MX%, but with the VMS MAILSHR "@" patches,
+    !  the SET TRANSPORT command, and the builtin VMS Mail Internet
+    !  support in VMS V6.x and higher, non-local addresses aren't
+    !  necessarily prefixed anymore.  To avoid doing name conversions
+    !  on addresses that are truly non-local, check to see if there's
+    !  a domain name for non-prefixed addresses and, if so, compare it
+    !  to the local host name.
+    !
+    IF NOT (.nonlcl) AND (.domdsc [DSC$W_LENGTH] NEQU 0) THEN
+    	nonlcl = NOT is_local_host (.fmt_type [FMT_V_TYPE], domdsc);
+
+    !
+    !  Strip leading "<" from username, if it's there.
+    !
+    IF .vmsdsc [DSC$W_LENGTH] GTRU 1 AND CH$RCHAR (.vmsdsc [DSC$A_POINTER]) EQL %C'<' THEN
+    BEGIN
+    	INIT_SDESC (usrdsc, .vmsdsc [DSC$W_LENGTH] - 1, usrbuf);
+    	CH$MOVE (.usrdsc [DSC$W_LENGTH], CH$PLUS (vmsbuf, 1), usrbuf);
+    END
+    ELSE
+    BEGIN
+    	INIT_SDESC (usrdsc, .vmsdsc [DSC$W_LENGTH], usrbuf);
+    	CH$MOVE (.usrdsc [DSC$W_LENGTH], vmsbuf, usrbuf);
+    END;
+
+    IF .nonlcl THEN
+    	FLAGS = MX_M_FMT_NON_LOCAL
+    ELSE
+    	FLAGS = 0;
+
+
+    CONVERTED = DID_FULL_CONVERT = 0;
+    IF .fmt_type [FMT_V_TYPE] NEQU MX__FMT_TO AND NOT .nonlcl THEN
+    BEGIN
+    	STATUS = $TRNLNM (LOGNAM=mx_site_name_conversion, TABNAM=%ASCID'LNM$FILE_DEV',
+    	    	    	    ACMODE=%REF (PSL$C_EXEC));
+    	IF .STATUS THEN
+    	    STATUS = LIB$FIND_IMAGE_SYMBOL (mx_site_name_conversion,
+    	    	%ASCID'INIT', INIT);
+    	IF .STATUS THEN
+    	BEGIN
+    	    IF NOT LIB$FIND_IMAGE_SYMBOL (mx_site_name_conversion,
+    	    	%ASCID'FULL_CONVERT', FULL_CONVERT) THEN FULL_CONVERT = 0;
+    	    LIB$FIND_IMAGE_SYMBOL (mx_site_name_conversion,
+    	    	%ASCID'CONVERT', CONVERT);
+    	    LIB$FIND_IMAGE_SYMBOL (mx_site_name_conversion,
+    	    	%ASCID'CLEANUP', CLEANUP);
+    	    (.INIT) (CTX);
+    	    IF .FULL_CONVERT NEQA 0 THEN
+    	    BEGIN
+    	    	LOCAL
+    	    	    str : BLOCK [DSC$K_S_BLN,BYTE];
+    	    	INIT_DYNDESC (str);
+    	    	CONVERTED = (.FULL_CONVERT) (CTX, %REF (2), usrdsc, str);
+    	    	IF .CONVERTED THEN
+    	    	BEGIN
+    	    	    LOCAL
+    	    	    	tmpu : BLOCK [DSC$K_S_BLN,BYTE],
+    	    	    	tmpd : BLOCK [DSC$K_S_BLN,BYTE],
+    	    	    	tmpn : BLOCK [DSC$K_S_BLN,BYTE];
+    	    	    INIT_DYNDESC (tmpu, tmpd, tmpn);
+    	    	    DID_FULL_CONVERT = 1;
+    	    	    PARSE_MBOX (STR, tmpu, tmpd, tmpn);
+    	    	    dxmove (tmpu, usrdsc, %ALLOCATION (usrbuf));
+    	    	    dxmove (tmpd, domdsc, %ALLOCATION (dombuf));
+    	    	    IF .tmpn [DSC$W_LENGTH] NEQ 0 THEN dxmove (tmpn, namdsc, %ALLOCATION (nambuf));
+    	    	    FREE_STRINGS (tmpu, tmpd, tmpn);
+    	    	END;
+    	    	FREE_STRINGS (str);
+    	    END;
+    	    IF NOT .CONVERTED THEN
+    	    BEGIN
+    	    	LOCAL
+    	    	    str	    :  BLOCK [DSC$K_S_BLN,BYTE];
+    	    	INIT_DYNDESC (str);
+    	    	CONVERTED = (.CONVERT) (CTX, %REF (2), usrdsc, str);
+    	    	IF .converted THEN dxmove (str, usrdsc, %ALLOCATION (usrbuf));
+    	    	FREE_STRINGS (str);
+    	    END;
+    	    (.CLEANUP) (CTX);
+    	END;
+    END;
+
+    IF NOT .did_full_convert AND .domdsc [DSC$W_LENGTH] EQL 0 THEN
+    BEGIN
+    	LITERAL
+    	    TPA_C_LENGTH    = TPA$C_LENGTH0 + 20,
+    	    TPA_K_COUNT	    = TPA$K_COUNT0 + 5;
+
+    	LOCAL
+    	    buf	    : BLOCK [64,BYTE],
+    	    len,
+    	    IS_DECNET,
+    	    MUST_QUOTE,
+    	    TPABLK  : BLOCK [TPA_C_LENGTH,BYTE];
+
+    	len = MIN (.usrdsc [DSC$W_LENGTH], %ALLOCATION (buf));
+    	CH$MOVE (.len, .usrdsc [DSC$A_POINTER], buf);
+    	IF .usrdsc [DSC$B_CLASS] EQL DSC$K_CLASS_D THEN FREE_STRINGS (usrdsc);
+    	INIT_SDESC (usrdsc, 0, usrbuf);
+    	TPABLK [TPA$L_COUNT] = TPA_K_COUNT;
+    	TPABLK [TPA$L_OPTIONS] = 0;
+    	TPABLK [TPA$V_BLANKS] = 1;
+    	TPABLK [TPA$L_STRINGCNT] = .len;
+    	TPABLK [TPA$L_STRINGPTR] = buf;
+    	TPABLK [TPA_A_P1] = %ALLOCATION (usrbuf);
+    	TPABLK [TPA_A_P2] = usrdsc;
+    	TPABLK [TPA_A_P3] = MUST_QUOTE;
+    	TPABLK [TPA_A_P4] = IS_DECNET;
+    	TPABLK [TPA_A_P5] = .CONVERTED OR NOT .fmt_type [FMT_V_LOWERCASE];
+
+    	MUST_QUOTE = IS_DECNET = 0;
+    	STATUS = LIB$TPARSE (TPABLK, LTR_STATE, LTR_KEY);
+    	IF .STATUS THEN
+    	BEGIN
+    	    IF .MUST_QUOTE THEN
+    	    BEGIN
+    	    	LOCAL
+    	    	    str 	: BLOCK [DSC$K_S_BLN,BYTE];
+    	    	INIT_DYNDESC (str);
+    	    	QUOTE_STRING (str, .usrdsc [DSC$W_LENGTH], .usrdsc [DSC$A_POINTER], 1);
+    	    	dxmove (str, usrdsc, %ALLOCATION (usrbuf));
+    	    	FREE_STRINGS (str);
+    	    END;
+
+    	    IF .CONVERTED THEN   ! must re-do with real username for
+    	    BEGIN                ! DECnet check
+    	    	TPABLK [TPA$L_COUNT] = TPA_K_COUNT;
+    	    	TPABLK [TPA$L_OPTIONS] = 0;
+    	    	TPABLK [TPA$V_BLANKS] = 1;
+    	    	TPABLK [TPA$L_STRINGCNT] = .vmsdsc [DSC$W_LENGTH];
+    	    	TPABLK [TPA$L_STRINGPTR] = .vmsdsc [DSC$A_POINTER];
+    	    	TPABLK [TPA_A_P1] = 0;  ! don't want the output
+    	    	TPABLK [TPA_A_P2] = usrdsc;
+    	    	TPABLK [TPA_A_P3] = MUST_QUOTE;
+    	    	TPABLK [TPA_A_P4] = IS_DECNET;
+    	    	TPABLK [TPA_A_P5] = .CONVERTED;
+    	    	MUST_QUOTE = IS_DECNET = 0;
+    	    	STATUS = LIB$TPARSE (TPABLK, LTR_STATE, LTR_KEY);
+    	    END;
+    	    IF .STATUS AND .IS_DECNET THEN FLAGS = .FLAGS OR MX_M_FMT_DECNET;
+    	END;
+
+    	IF .namdsc [DSC$W_LENGTH] EQL 0 AND ACTUALCOUNT () GTR 3 AND .nam_a NEQA 0 THEN
+    	BEGIN
+    	    LOCAL ptr, len : WORD;
+    	    IF LIB$ANALYZE_SDESC (.nam_a, len, ptr) THEN
+    	    BEGIN
+    	    	namdsc [DSC$W_LENGTH] = MINU (%ALLOCATION (nambuf), .len);
+    	    	CH$MOVE (.namdsc [DSC$W_LENGTH], .ptr, nambuf);
+    	    END
+    	END;
+
+    	SELECTONE .fmt_type [FMT_V_TYPE] OF
+    	SET
+    	[MX__FMT_FROM] :
+    	    status = MAKE_ADDRESS (usrdsc, namdsc, mxstr);
+    	[MX__FMT_ENVFROM] :
+    	    IF ACTUALCOUNT () GTR 5 AND .envfromhost_a NEQA 0 THEN
+    	    	status = MAKE_ADDR821 (usrdsc, mxstr, 0, .envfromhost_a)
+    	    ELSE
+    	    	status = MAKE_ADDR821 (usrdsc, mxstr, 0);
+    	[MX__FMT_TO] :
+    	    status = MAKE_TO_ADDRESS (usrdsc, mxstr);
+    	[OTHERWISE] :  ! assume from
+    	    status = MAKE_ADDRESS (usrdsc, namdsc, mxstr);
+    	TES;
+    END
+    ELSE
+    BEGIN
+    	IF NOT .did_full_convert THEN
+    	BEGIN
+    	    IF CH$RCHAR (CH$PLUS (dombuf, .domdsc [DSC$W_LENGTH]-1)) EQL %C'>' THEN
+    	    	domdsc [DSC$W_LENGTH] = .domdsc [DSC$W_LENGTH] - 1;
+    	END;
+    	IF .fmt_type [FMT_V_TYPE] EQL MX__FMT_ENVFROM THEN
+    	    status = LIB$SYS_FAO (%ASCID'<!AS@!AS>', 0, mxstr, usrdsc, domdsc)
+    	ELSE
+    	    status = LIB$SYS_FAO (%ASCID'!AS@!AS', 0, mxstr, usrdsc, domdsc);
+    END;
+
+    IF .status AND ACTUALCOUNT () GTR 4 AND .flags_a NEQA 0 THEN
+    	.flags_a = .flags;
+
+    .status
+
+END; ! VMS_TO_MX;
+
+%SBTTL 'VTM_STORE'
+TPA_ROUTINE (VTM_STORE, (OPTIONS, STRLEN, STRPTR, TOKLEN, TOKPTR, CH,
+    	    NUMBER, PARAM, umax, udsc_a, dmax, ddsc_a,
+    	    nmax, ndsc_a, JNET_A, NONLCL_A))
+!++
+! FUNCTIONAL DESCRIPTION:
+!
+!   Stores values for VMS_TO_MX.
+!
+! RETURNS:  	cond_value, longword (unsigned), write only, by value
+!
+! PROTOTYPE:
+!
+!   VTM_STORE blah
+!
+! IMPLICIT INPUTS:  None.
+!
+! IMPLICIT OUTPUTS: None.
+!
+! COMPLETION CODES:
+!
+!   SS$_NORMAL:	    	normal successful completion.
+!
+! SIDE EFFECTS:
+!
+!   None.
+!--
+    BIND
+	CHAR	= CH	    	    	: BYTE,
+    	udsc	= .udsc_a   	    	: BLOCK [,BYTE],
+    	ddsc	= .ddsc_a   	    	: BLOCK [,BYTE],
+    	ndsc	= .ndsc_a   	    	: BLOCK [,BYTE],
+    	ULEN	= udsc [DSC$W_LENGTH]	: WORD,
+    	UBUF	= .udsc [DSC$A_POINTER]	: VECTOR [,BYTE],
+    	DLEN	= ddsc [DSC$W_LENGTH]	: WORD,
+    	DBUF	= .ddsc [DSC$A_POINTER]	: VECTOR [,BYTE],
+    	NLEN	= ndsc [DSC$W_LENGTH]	: WORD,
+    	NBUF	= .ndsc [DSC$A_POINTER]	: VECTOR [,BYTE];
+
+    CASE .PARAM FROM 1 TO 8 OF
+    SET
+    	[1] :
+    	    	IF .ULEN LSS .umax THEN
+    	    	    UBUF [(ULEN = .ULEN+1)-1] =
+    	    	    	    (IF .CHAR EQL %C'''' THEN %C'"' ELSE .CHAR);
+
+    	[2] : 
+    	    	IF .DLEN LSS .dmax THEN
+    	    	    DBUF [(DLEN = .DLEN+1)-1] = .CHAR;
+
+    	[3] :
+    	    	SELECTONE .CHAR OF
+    	    	SET
+    	    	[%C'\', %CHAR (13)] :
+    	    	    IF .NLEN LSS .nmax-1 THEN
+    	    	    BEGIN
+    	    	    	NBUF [(NLEN = .NLEN+1)-1] = %C'\';
+    	    	    	NBUF [(NLEN = .NLEN+1)-1] = .CHAR;
+    	    	    END;
+    	    	[OTHERWISE] :
+    	    	    IF .NLEN LSS .nmax THEN
+    	    	    	NBUF [(NLEN = .NLEN+1)-1] = .CHAR;
+    	    	TES;
+
+    	[4] : ;
+    	[5] : .NONLCL_A = 1;
+    	[6] :  IF .ULEN LSS .umax THEN
+    	    	    UBUF [(ULEN = .ULEN+1)-1] = .CHAR;
+    	[7] :  IF .ULEN LSS .umax THEN
+    	    	    UBUF [(ULEN = .ULEN+1)-1] = %C'"';
+    	[8] : .NONLCL_A = ..NONLCL_A OR 2;
+    TES;
+
+    SS$_NORMAL
+
+END; ! VTM_STORE
+
+%SBTTL 'LTR_STORE'
+TPA_ROUTINE (LTR_STORE, (OPTIONS, STRLEN, STRPTR, TOKLEN, TOKPTR, CH,
+    	    NUMBER, PARAM, bmax, bdsc_a, MUSTQ_A, ISNET_A, CONVERTED))
+!++
+! FUNCTIONAL DESCRIPTION:
+!
+!   Stores values for VMS_TO_MX.
+!
+! RETURNS:  	cond_value, longword (unsigned), write only, by value
+!
+! PROTOTYPE:
+!
+!   LTR_STORE blah
+!
+! IMPLICIT INPUTS:  None.
+!
+! IMPLICIT OUTPUTS: None.
+!
+! COMPLETION CODES:
+!
+!   SS$_NORMAL:	    	normal successful completion.
+!
+! SIDE EFFECTS:
+!
+!   None.
+!--
+    BIND
+	CHAR	    = CH	    	    : BYTE,
+    	bdsc	    = .bdsc_a	    	    : BLOCK [,BYTE],
+    	LEN	    = bdsc [DSC$W_LENGTH]   : WORD,
+    	BUF	    = .bdsc [DSC$A_POINTER] : VECTOR [,BYTE],
+    	MUST_QUOTE  = .MUSTQ_A,
+    	ISNET	    = .ISNET_A;
+
+    CASE .PARAM FROM 0 TO 4 OF
+    SET
+    	[0] :
+    	    	IF .LEN LSS .bmax THEN
+    	    	    BUF [(LEN = .LEN+1)-1] = .CHAR;   ! literal
+
+    	[1] :
+    	    	IF .LEN LSS .bmax THEN
+    	    	    BUF [(LEN = .LEN+1)-1] = (IF .CONVERTED THEN .CHAR
+    	    	    	    ELSE IF .CHAR GEQ 'A' AND
+    	    	    	    .CHAR LEQ 'Z' THEN .CHAR+32 ELSE .CHAR);
+
+    	[2] : 
+    	    	IF .LEN LSS .bmax THEN
+    	    	BEGIN
+    	    	    IF .LEN EQL 0 THEN MUST_QUOTE = 1;
+    	    	    BUF [(LEN = .LEN+1)-1] = %C'.';  ! $-to-. translation
+    	    	END;
+
+    	[3] : 
+    	    	IF .LEN LSS .bmax-1 THEN
+    	    	BEGIN
+    	    	    BUF [.LEN] = %C'\';	    	    ! quote marks to be quoted
+    	    	    BUF [.LEN+1] = %C'"';
+    	    	    LEN = .LEN + 2;
+    	    	END;
+
+    	[4] :
+    	    	BEGIN
+    	    	    MUST_QUOTE = 1;
+    	    	    IF .CHAR EQL %C':' THEN ISNET = 1;
+    	    	    IF .LEN LSS .bmax THEN
+    	    	    	BUF [(LEN = .LEN+1)-1] = .CHAR;
+    	    	END;
+    TES;
+
+    SS$_NORMAL
+
+END; ! LTR_STORE
+
+%SBTTL 'VMS_TO_ALIAS'
+GLOBAL ROUTINE VMS_TO_ALIAS (VSTR_A, ALIASSTR_A) =
+BEGIN
+!++
+! FUNCTIONAL DESCRIPTION:
+!
+!	This routine converts a VMS format address (which may or may not
+!	include the MX% and double-quotes) to an MX alias (just the
+!	user portion of the address).  It uses the same TPARSE tables
+!	as VMS_TO_MX, but all it does is copy the user portion to
+!	ALIASSTR_A.
+!
+! RETURNS:  	cond_value, longword (unsigned), write only, by value
+!
+! PROTOTYPE:
+!
+!   VMS_TO_ALIAS vmsstr, aliasstr
+!
+! IMPLICIT INPUTS:  None.
+!
+! IMPLICIT OUTPUTS: None.
+!
+! COMPLETION CODES:
+!
+!   SS$_NORMAL:	    	normal successful completion.
+!
+! SIDE EFFECTS:
+!
+!   None.
+!--
+    BIND
+    	VSTR		= .VSTR_A	: $BBLOCK,
+    	ALIASSTR	= .ALIASSTR_A	: $BBLOCK;
+
+    LITERAL
+    	TPA_C_LENGTH	= TPA$C_LENGTH0 + 32,
+    	TPA_K_COUNT 	= TPA$K_COUNT0 + 8;
+
+    LOCAL
+    	USRBUF	: BLOCK [256,BYTE],
+    	usrdsc	: BLOCK [DSC$K_S_BLN,BYTE],
+    	STATUS,
+    	NONLCL	: VOLATILE,
+    	TPABLK	: BLOCK [TPA_C_LENGTH,BYTE];
+
+    INIT_SDESC (usrdsc, 0, usrbuf);
+
+    ! Set up the TPARSE block
+    NONLCL = 0;
+    TPABLK [TPA$L_COUNT] = TPA_K_COUNT;
+    TPABLK [TPA$L_OPTIONS] = 0;
+    TPABLK [TPA$V_BLANKS] = 1;
+    TPABLK [TPA$L_STRINGCNT] = .VSTR [DSC$W_LENGTH];
+    TPABLK [TPA$L_STRINGPTR] = .VSTR [DSC$A_POINTER];
+    TPABLK [TPA_A_P1] = %ALLOCATION (usrbuf);
+    TPABLK [TPA_A_P2] = usrdsc;
+    TPABLK [TPA_A_P3] = 0;
+    TPABLK [TPA_A_P4] = usrdsc;  ! need something here
+    TPABLK [TPA_A_P5] = 0;
+    TPABLK [TPA_A_P6] = usrdsc;  ! need something here
+    TPABLK [TPA_A_P7] = 0;
+    TPABLK [TPA_A_P8] = NONLCL;
+
+    !
+    !  Parse the VMS string using the VTM tables.
+    !
+    STATUS = LIB$TPARSE (TPABLK, VTM_STATE, VTM_KEY);
+    IF NOT .STATUS THEN RETURN .STATUS;
+
+    !
+    !  If the USRBUF is wrapped in "<>", then remove them.  The string
+    !  is returned to the caller by copying it to ALIASSTR.
+    !
+    IF .usrdsc [DSC$W_LENGTH] GTR 1 AND
+    	    CH$RCHAR (.usrdsc [DSC$A_POINTER]) EQL %C'<' THEN
+    BEGIN
+    	usrdsc [DSC$A_POINTER] = CH$PLUS (.usrdsc [DSC$A_POINTER], 1);
+    	usrdsc [DSC$W_LENGTH] = .usrdsc [DSC$W_LENGTH] - 2;
+    END;
+
+    LIB$SCOPY_DXDX (usrdsc, aliasstr)
+
+END; ! VMS_TO_ALIAS;
+
+%SBTTL 'MX_TO_VMS'
+GLOBAL ROUTINE MX_TO_VMS (MXADR_A, VMSADR_A) = 
+BEGIN
+!++
+! FUNCTIONAL DESCRIPTION:
+!
+!   Converts an MX (RFC822-type) address into a VMS MAIL-compatible
+!   string with an MX% transport prefix.
+!
+! RETURNS:  	cond_value, longword (unsigned), write only, by value
+!
+! PROTOTYPE:
+!
+!   MX_TO_VMS  mxaddr, vmsaddr
+!
+! IMPLICIT INPUTS:  None.
+!
+! IMPLICIT OUTPUTS: None.
+!
+! COMPLETION CODES:
+!
+!   SS$_NORMAL:	    	normal successful completion.
+!
+! SIDE EFFECTS:
+!
+!   None.
+!--
+    EXTERNAL ROUTINE
+    	G_HAT (PARSE_ADDRLIST);
+
+    LOCAL
+    	STR 	: BLOCK [DSC$K_S_BLN,BYTE],
+    	PFX 	: BLOCK [DSC$K_S_BLN,BYTE],
+    	PFXBUF	: VECTOR [256,BYTE],
+    	outbuf	: VECTOR [1024,BYTE],
+    	LNMLST	: $ITMLST_DECL (ITEMS=1),
+    	TXTQ	: QUEDEF,
+    	TXT 	: REF TXTDEF;
+
+    INIT_SDESC (PFX, %ALLOCATION (PFXBUF), PFXBUF);
+    $ITMLST_INIT (ITMLST=LNMLST,
+    	(ITMCOD=LNM$_STRING, BUFSIZ=%ALLOCATION (PFXBUF),
+    	    BUFADR=PFXBUF, RETLEN=PFX [DSC$W_LENGTH]));
+
+    IF NOT $TRNLNM (LOGNAM=%ASCID'MX_PROTOCOL_PREFIX',
+    	    	TABNAM=%ASCID'LNM$FILE_DEV', ITMLST=LNMLST) THEN
+    BEGIN
+    	PFXBUF [0] = %C'M';
+    	PFXBUF [1] = %C'X';
+    	PFXBUF [2] = %C'%';
+    	PFX [DSC$W_LENGTH] = 3;
+    END;
+
+    INIT_QUEUE (TXTQ);
+    IF NOT PARSE_ADDRLIST (.MXADR_A, TXTQ, 0) THEN
+    BEGIN
+    	STR$CONCAT (.VMSADR_A, PFX, %ASCID'"(Error: could not parse address ',
+    	    .MXADR_A, %ASCID')"');
+    	RETURN SS$_NORMAL;
+    END;
+
+    REMQUE (.TXTQ [QUE_L_HEAD], TXT);
+    STR [DSC$B_DTYPE] = DSC$K_DTYPE_T;
+    STR [DSC$B_CLASS] = DSC$K_CLASS_S;
+    STR [DSC$A_POINTER] = TXT [TXT_T_TEXT];
+    STR [DSC$W_LENGTH] = .TXT [TXT_W_LEN];
+
+    !
+    !  Special case: in VMS V6.2 and later, VMS Mail supports Internet-style
+    !  addressing.  If MX_PROTOCOL_PREFIX is defined as a blank,
+    !  no prefix is added to the MXADR_A string, unless it contains
+    !  double-quote or "!" characters.  In those cases, the string must be
+    !  prefixed, or VMS Mail won't handle it correctly.
+    !
+    IF (.pfx [DSC$W_LENGTH] EQLU 1) AND
+	(CH$RCHAR(pfxbuf) EQLU %CHAR(32)) AND
+	(CH$FAIL(CH$FIND_CH(.str [DSC$W_LENGTH],
+			.str [DSC$A_POINTER], %C'"'))) AND
+	(CH$FAIL(CH$FIND_CH(.str [DSC$W_LENGTH],
+			.str [DSC$A_POINTER], %C''''))) AND
+	(CH$FAIL(CH$FIND_CH(.str [DSC$W_LENGTH],
+			.str [DSC$A_POINTER], %C'\'))) AND
+	(CH$FAIL(CH$FIND_CH(.str [DSC$W_LENGTH], .str [DSC$A_POINTER], %C'!')))
+    THEN
+	STR$COPY_DX (.vmsadr_a, str)
+    ELSE
+    BEGIN
+    	LOCAL OP, LEN;
+    	OP = OUTBUF;
+    	LEN = MIN (.txt [TXT_W_LEN], %ALLOCATION (outbuf));
+    	INCR CP FROM txt [TXT_T_TEXT] TO CH$PLUS (txt [TXT_T_TEXT], .LEN-1) DO
+    	BEGIN
+    	    LOCAL
+    	    	CH : BYTE;
+    	    CH = CH$RCHAR (.CP);
+    	    SELECTONE .CH OF
+    	    SET
+    	    	[%C'"']	 :
+    	    	    CH$WCHAR_A (%C'''', OP);
+    	    	[%C'''', %C'\'] :
+    	    	    BEGIN
+    	    	    	CH$WCHAR_A (%C'\', OP);
+    	    	    	CH$WCHAR_A (.CH, OP);
+    	    	    END;
+    	    	[OTHERWISE] :
+    	    	    CH$WCHAR_A (.CH, OP);
+    	    TES;
+    	END;
+    	INIT_SDESC (str, CH$DIFF (.OP, OUTBUF), OUTBUF);
+	STR$CONCAT (.VMSADR_A, PFX, ascid_doublequote, STR, ascid_doublequote);
+    END;
+
+    FREETXT (TXT);
+    WHILE NOT REMQUE (.TXTQ [QUE_L_HEAD], TXT) DO FREETXT (TXT);
+
+    SS$_NORMAL
+
+END; ! MX_TO_VMS
+
+%SBTTL 'CSL_PARSE'
+GLOBAL ROUTINE CSL_PARSE (STR_A, QUE_A) = 
+BEGIN
+!++
+! FUNCTIONAL DESCRIPTION:
+!
+!   Parses a comma-separated list of things, possibly quoted.
+!
+! RETURNS:  	cond_value, longword (unsigned), write only, by value
+!
+! PROTOTYPE:
+!
+!   CSL_PARSE  string, queue
+!
+! IMPLICIT INPUTS:  None.
+!
+! IMPLICIT OUTPUTS: None.
+!
+! COMPLETION CODES:
+!
+!   SS$_NORMAL:	    	normal successful completion.
+!
+! SIDE EFFECTS:
+!
+!   None.
+!--
+    BIND
+    	STR 	= .STR_A    : BLOCK [,BYTE],
+    	QUE 	= .QUE_A    : QUEDEF;
+
+    LITERAL
+    	TPA_C_LENGTH	= TPA$C_LENGTH0 + 12,
+    	TPA_K_COUNT 	= TPA$K_COUNT0 + 3;
+
+    LOCAL
+    	TPABLK	: BLOCK [TPA_C_LENGTH,BYTE],
+    	STRBUF	: BLOCK [1024, BYTE],
+    	STRLEN	: WORD,
+    	STATUS;
+
+    STRLEN = 0;
+    TPABLK [TPA$L_COUNT] = TPA_K_COUNT;
+    TPABLK [TPA$L_OPTIONS] = 0;
+    TPABLK [TPA$V_BLANKS] = 1;
+    TPABLK [TPA$L_STRINGCNT] = .STR [DSC$W_LENGTH];
+    TPABLK [TPA$L_STRINGPTR] = .STR [DSC$A_POINTER];
+    TPABLK [TPA_A_P1] = QUE;
+    TPABLK [TPA_A_P2] = STRBUF;
+    TPABLK [TPA_A_P3] = STRLEN;
+
+    LIB$TPARSE (TPABLK, CSL_STATE, CSL_KEY)
+
+END; ! CSL_PARSE
+
+%SBTTL 'CSL_STORE'
+TPA_ROUTINE (CSL_STORE, (OPTIONS, STRLEN, STRPTR, TOKLEN, TOKPTR, CH,
+    	    NUMBER, PARAM, QUE_A, SBUF_A, SLEN_A))
+!++
+! FUNCTIONAL DESCRIPTION:
+!
+!   Store routine for CSL_PARSE.
+!
+! RETURNS:  	cond_value, longword (unsigned), write only, by value
+!
+! PROTOTYPE:
+!
+!   CSL_STORE
+!
+! IMPLICIT INPUTS:  None.
+!
+! IMPLICIT OUTPUTS: None.
+!
+! COMPLETION CODES:
+!
+!   SS$_NORMAL:	    	normal successful completion.
+!
+! SIDE EFFECTS:
+!
+!   None.
+!--
+    BIND
+	CHAR	= CH	    : BYTE,
+    	QUE 	= .QUE_A    : QUEDEF,
+    	SBUF	= .SBUF_A   : VECTOR [,BYTE],
+    	SLEN	= .SLEN_A   : WORD;
+
+    SELECTONE .PARAM OF
+    SET
+
+    [1]	:
+    	IF (.SLEN LSS 1024) THEN
+    	BEGIN
+    	    SBUF [.SLEN] = .CHAR;
+    	    SLEN = .SLEN + 1;
+    	END;
+
+    [2] :
+    	BEGIN
+    	    LOCAL TXT : REF TXTDEF;
+	    IF (.slen NEQU 0)		!If string is null, don't copy!
+	    THEN
+		BEGIN
+		TXT = MEM_GETTXT (.SLEN);
+		TXT [TXT_W_LEN] = .SLEN;
+		TXT [TXT_W_CODE] = 0;
+		CH$MOVE (.SLEN, SBUF, TXT [TXT_T_TEXT]);
+		INSQUE (.TXT, .QUE [QUE_L_TAIL]);
+		SLEN = 0;
+		END;
+    	END;
+    TES;
+
+    SS$_NORMAL
+
+END; ! CSL_STORE
+
+%SBTTL 'FIS_ERR_HANDLER'
+GLOBAL ROUTINE FIS_ERR_HANDLER (SIG : REF VECTOR [,LONG],
+    	    	    MECH : REF VECTOR [,LONG], ENBL : REF VECTOR [,LONG]) =
+BEGIN
+!++
+! FUNCTIONAL DESCRIPTION:
+!
+!   Condition handler for LIB$FIND_IMAGE_SYMBOL errors.
+!
+! RETURNS:  	cond_value, longword (unsigned), write only, by value
+!
+! PROTOTYPE:
+!
+!   FIS_ERR_HANDLER
+!
+! IMPLICIT INPUTS:  None.
+!
+! IMPLICIT OUTPUTS: None.
+!
+! COMPLETION CODES:
+!
+!   SS$_NORMAL:	    	normal successful completion.
+!
+! SIDE EFFECTS:
+!
+!   None.
+!--
+    BIND
+    	COND = SIG [1] : BLOCK [,BYTE];
+
+    EXTERNAL LITERAL
+    	LIB$_KEYNOTFOU;
+
+    LOCAL
+    	TEST1	: BLOCK [4,BYTE] INITIAL (SS$_UNWIND),
+    	TEST2	: BLOCK [4,BYTE] INITIAL (LIB$_KEYNOTFOU);
+
+    SELECTONE .COND [STS$V_COND_ID] OF
+    SET
+    	[.TEST1 [STS$V_COND_ID], .TEST2 [STS$V_COND_ID]] : SS$_NORMAL;
+    	[OTHERWISE] : SS$_RESIGNAL;
+    TES
+
+END;
+    
+END
+ELUDOM

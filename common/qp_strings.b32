@@ -1,0 +1,501 @@
+%TITLE 'QP_STRINGS'
+MODULE QP_STRINGS (IDENT='V1.0', ADDRESSING_MODE (EXTERNAL=LONG_RELATIVE, NONEXTERNAL=LONG_RELATIVE)) =
+BEGIN
+!++
+! FACILITY: 	    MX
+!
+! ABSTRACT: 	    Quoted-printable string buffer encode/decode routines.
+!
+! MODULE DESCRIPTION:
+!
+!   description
+!
+! AUTHOR:   	    M. Madison
+!
+! Copyright (c) 2008, Matthew Madison.
+! 
+! All rights reserved.
+! 
+! Redistribution and use in source and binary forms, with or without
+! modification, are permitted provided that the following conditions
+! are met:
+! 
+!     * Redistributions of source code must retain the above
+!       copyright notice, this list of conditions and the following
+!       disclaimer.
+!     * Redistributions in binary form must reproduce the above
+!       copyright notice, this list of conditions and the following
+!       disclaimer in the documentation and/or other materials provided
+!       with the distribution.
+!     * Neither the name of the copyright owner nor the names of any
+!       other contributors may be used to endorse or promote products
+!       derived from this software without specific prior written
+!       permission.
+! 
+! THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
+! "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
+! LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
+! A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
+! OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
+! SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
+! LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
+! DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
+! THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
+! (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
+! OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+!
+! CREATION DATE:    31-DEC-2000
+!
+! MODIFICATION HISTORY:
+!
+!   31-DEC-2000	V1.0	Madison	    Initial coding.
+!--
+
+    LIBRARY 'SYS$LIBRARY:STARLET';
+    LIBRARY 'QP';
+
+    FORWARD ROUTINE
+    	qp_encode_string,
+    	qp_decode_string;
+
+    EXTERNAL ROUTINE
+    	STR$GET1_DX 	: BLISS ADDRESSING_MODE (GENERAL),
+    	STR$FREE1_DX	: BLISS ADDRESSING_MODE (GENERAL);
+
+    LITERAL
+    	QP_M_CODEMASK	= %X'FF';
+
+    BIND
+    	hexchars    	= UPLIT ('0123456789ABCDEF')	: VECTOR [,BYTE],
+    	hexcharslo  	= UPLIT ('0123456789abcdef')	: VECTOR [,BYTE];
+
+    MACRO
+    	hexval (ch__) =
+    	BEGIN
+    	    LOCAL hp__;
+    	    hp__ = CH$FIND_CH (16, hexchars, ch__);
+    	    IF CH$FAIL (.hp__) THEN
+    	    BEGIN
+    	    	hp__ = CH$FIND_CH (16, hexcharslo, ch__);
+    	    	IF CH$FAIL (.hp__) THEN
+    	    	    -1
+    	    	ELSE
+    	    	    CH$DIFF (.hp__, hexcharslo)
+    	    END
+    	    ELSE
+    	    	CH$DIFF (.hp__, hexchars)
+    	END%;
+
+    BIND
+    	good_body_chars = UPLIT (
+    	    0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, ! 00 (NUL) - 0F (SI)
+    	    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, ! 10 (DLE) - 1F (US)
+    	    1, 0, 0, 1, 0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, ! 20 (' ') - 2F ('/')
+    	    1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0, 1, 1, ! 30 ('0') - 3F ('?')
+    	    0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, ! 40 ('@') - 4F ('O')
+    	    1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0, 0, 0, 0, 1, ! 50 ('P') - 5F ('_')
+    	    0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, ! 60 ('`') - 6F ('o')
+    	    1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0, 0, 0, 0, 0, ! 70 ('p') - 7F (DEL)
+    	    REP 128 OF (0)) : VECTOR [256,LONG],    	    ! 80       - FF
+    	good_hdr_text_chars = UPLIT (
+    	    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, ! 00 (NUL) - 0F (SI)
+    	    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, ! 10 (DLE) - 1F (US)
+    	    0, 0, 0, 1, 0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, ! 20 (' ') - 2F ('/')
+    	    1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0, 1, 0, ! 30 ('0') - 3F ('?')
+    	    0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, ! 40 ('@') - 4F ('O')
+    	    1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0, 0, 0, 0, 0, ! 50 ('P') - 5F ('_')
+    	    0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, ! 60 ('`') - 6F ('o')
+    	    1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0, 0, 0, 0, 0, ! 70 ('p') - 7F (DEL)
+    	    REP 128 OF (0)) : VECTOR [256,LONG],    	    ! 80       - FF
+    	good_hdr_ctext_chars = UPLIT (
+    	    0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, ! 00 (NUL) - 0F (SI)
+    	    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, ! 10 (DLE) - 1F (US)
+    	    0, 0, 0, 1, 0, 1, 1, 1, 0, 0, 1, 1, 1, 1, 1, 1, ! 20 (' ') - 2F ('/')
+    	    1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0, 1, 0, ! 30 ('0') - 3F ('?')
+    	    0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, ! 40 ('@') - 4F ('O')
+    	    1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0, 0, 0, 0, 0, ! 50 ('P') - 5F ('_')
+    	    0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, ! 60 ('`') - 6F ('o')
+    	    1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0, 0, 0, 0, 0, ! 70 ('p') - 7F (DEL)
+    	    REP 128 OF (0)) : VECTOR [256,LONG],    	    ! 80       - FF
+    	good_hdr_word_chars = UPLIT (
+    	    0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, ! 00 (NUL) - 0F (SI)
+    	    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, ! 10 (DLE) - 1F (US)
+    	    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 0, 1, 0, 1, ! 20 (' ') - 2F ('/')
+    	    1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0, ! 30 ('0') - 3F ('?')
+    	    0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, ! 40 ('@') - 4F ('O')
+    	    1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0, 0, 0, 0, 0, ! 50 ('P') - 5F ('_')
+    	    0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, ! 60 ('`') - 6F ('o')
+    	    1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0, 0, 0, 0, 0, ! 70 ('p') - 7F (DEL)
+    	    REP 128 OF (0)) : VECTOR [256,LONG];    	    ! 80       - FF
+
+
+%SBTTL 'qp_encode_string'
+GLOBAL ROUTINE qp_encode_string (code, in_a, len_a, out_a) = 
+BEGIN
+!++
+! FUNCTIONAL DESCRIPTION:
+!
+!   Encodes a buffer using quoted-printable.
+!
+! RETURNS:  	cond_value, longword (unsigned), write only, by value
+!
+! PROTOTYPE:
+!
+!   	qp_encode_string  code, in, [len], out
+!
+!   code:   longword (unsigned), read only, by value
+!   in:	    character_string, read only, by descriptor
+!   len:    word (unsigned), write only, by reference
+!   out:    character_string, write only, by descriptor
+!
+! IMPLICIT INPUTS:  None.
+!
+! IMPLICIT OUTPUTS: None.
+!
+! COMPLETION CODES:
+!
+!   SS$_NORMAL:	    	normal successful completion.
+!
+! SIDE EFFECTS:	    None.
+!--
+    BIND
+    	indsc  	= .in_a	    : BLOCK [DSC$K_S_BLN,BYTE],
+    	len 	= .len_a    : WORD,
+    	outdsc	= .out_a    : BLOCK [DSC$K_S_BLN,BYTE];
+
+    LOCAL
+    	good_char   : REF VECTOR [256,LONG],
+    	soft_break,
+    	eol,
+    	outp,
+    	outlen,
+    	eolch,
+    	ch;
+
+    eol = (.code AND QP_M_CODEMASK) EQLU QP__BODY AND (.code AND QP_M_BODY_EOL) NEQU 0;
+    code = .code AND QP_M_CODEMASK;
+    IF .code LSSU QP__BODY OR .code GTRU QP__HDR_WORD THEN
+    	RETURN SS$_BADPARAM;
+    good_char = (CASE .code FROM QP__BODY TO QP__HDR_WORD OF
+    	    	    SET
+    	    	    	[QP__BODY]  	: good_body_chars;
+    	    	    	[QP__HDR_TEXT]	: good_hdr_text_chars;
+    	    	    	[QP__HDR_CTEXT]	: good_hdr_ctext_chars;
+    	    	    	[QP__HDR_WORD]	: good_hdr_word_chars
+    	    	    TES);
+
+    !+
+    !	Compute length of output string.  Worst case would be that all
+    !	characters need to be quoted, making the output string three times
+    !	the size of the input string.
+    !-
+    outlen = .indsc [DSC$W_LENGTH];
+    INCRA cp FROM .indsc [DSC$A_POINTER] TO CH$PLUS (.indsc [DSC$A_POINTER], .indsc [DSC$W_LENGTH]-1) DO
+    	IF NOT .good_char [CH$RCHAR (.cp)] THEN
+    	    IF .code EQLU QP__BODY OR CH$RCHAR (.cp) NEQU %C' ' THEN
+    	    	outlen = .outlen + 2;
+    !+
+    !	Now check to see if we have to convert the character at the end of the
+    !	string, when the string ends a line and has a blank or tab as its
+    !	last character.
+    !-
+    soft_break = 0;
+    IF .indsc [DSC$W_LENGTH] GTRU 0 AND .code EQLU QP__BODY THEN
+    BEGIN
+    	ch = CH$RCHAR (CH$PLUS (.indsc [DSC$A_POINTER], .indsc [DSC$W_LENGTH]-1));
+    	IF .eol THEN
+    	BEGIN
+    	    IF .ch EQLU %C' ' OR .ch EQLU %CHAR (9) THEN
+    	    BEGIN
+    	    	outlen = .outlen + 3;
+    	    	eolch = .ch;
+    	    END
+    	    ELSE
+    	    	eol = 0;
+    	END
+    	ELSE
+    	BEGIN
+    	    outlen = .outlen + 1;
+    	    soft_break = 1;
+    	END;
+    END
+    ELSE
+    	eol = 0;
+
+    IF .outlen GTRU 65535 THEN
+    	RETURN SS$_BADPARAM;	! can't fit output string into a descriptor
+
+    IF .outdsc [DSC$B_CLASS] EQL DSC$K_CLASS_D THEN
+    	STR$GET1_DX (outlen, outdsc)
+    ELSE IF .outdsc [DSC$W_LENGTH] LSSU .outlen THEN
+    	RETURN SS$_BADPARAM;
+
+    IF .outlen EQLU 0 THEN
+    BEGIN
+    	IF len NEQA 0 THEN
+    	    len = .outlen;
+    	RETURN SS$_NORMAL;
+    END;
+
+    !+
+    !	Now convert the string
+    !-
+    outp = .outdsc [DSC$A_POINTER];
+
+    !+
+    !	Short-cut when no quoting required
+    !-
+    IF .outlen EQLU .indsc [DSC$W_LENGTH] THEN
+    BEGIN
+    	CH$MOVE (.indsc [DSC$W_LENGTH], .indsc [DSC$A_POINTER], .outp);
+    	outp = CH$PLUS (.outp, .indsc [DSC$W_LENGTH]);
+    END
+    ELSE
+    	INCRA inp FROM .indsc [DSC$A_POINTER] TO CH$PLUS (.indsc [DSC$A_POINTER], .indsc [DSC$W_LENGTH]-1) DO
+    	BEGIN
+    	    ch = CH$RCHAR (.inp);
+    	    IF .good_char [.ch] THEN
+    	    	CH$WCHAR_A (.ch, outp)
+    	    ELSE IF .code NEQU QP__BODY AND .ch EQLU %C' ' THEN
+    	    	CH$WCHAR_A (%C'_', outp)
+    	    ELSE
+    	    BEGIN
+    	    	CH$WCHAR_A (%C'=', outp);
+    	    	CH$WCHAR_A (.hexchars [.ch<4,4,0>], outp);
+    	    	CH$WCHAR_A (.hexchars [.ch<0,4,0>], outp);
+    	    END;
+    	END;
+
+    !+
+    !	Write the end-of-line '=', if required
+    !-
+    IF .eol THEN
+    BEGIN
+    	CH$WCHAR_A (%C'=', outp);
+    	CH$WCHAR_A (.hexchars [.eolch<4,4,0>], outp);
+    	CH$WCHAR   (.hexchars [.eolch<0,4,0>], .outp);
+    END
+    ELSE IF .soft_break THEN
+    	CH$WCHAR   (%C'=', .outp);
+
+    IF len NEQA 0 THEN
+    	len = .outlen;
+
+    SS$_NORMAL
+
+END; ! qp_encode_string    	
+    	
+
+%SBTTL 'qp_decode_string'
+GLOBAL ROUTINE qp_decode_string (code, in_a, len_a, out_a, soft_break_a) = 
+BEGIN
+!++
+! FUNCTIONAL DESCRIPTION:
+!
+!   Decodes a quoted-printable buffer.
+!
+! RETURNS:  	cond_value, longword (unsigned), write only, by value
+!
+! PROTOTYPE:
+!
+!   	qp_decode_string  code, in, [len], out [,soft_break]
+!
+!   code:   longword (unsigned), read only, by value
+!   in:	    character_string, read only, by descriptor
+!   len:    word (unsigned), write only, by reference
+!   out:    character_string, write only, by descriptor
+!   soft_break: longword (unsigned), write only, by reference
+!
+! IMPLICIT INPUTS:  None.
+!
+! IMPLICIT OUTPUTS: None.
+!
+! COMPLETION CODES:
+!
+!   SS$_NORMAL:	    	normal successful completion.
+!
+! SIDE EFFECTS:	    None.
+!--
+    BUILTIN
+    	ACTUALCOUNT;
+
+    BIND
+    	indsc  	= .in_a	    : BLOCK [DSC$K_S_BLN,BYTE],
+    	len 	= .len_a    : WORD,
+    	outdsc	= .out_a    : BLOCK [DSC$K_S_BLN,BYTE];
+
+    LOCAL
+    	is_line,
+    	inp,
+    	cp,
+    	anchor,
+    	outp,
+    	inremain,
+    	inlen,
+    	outlen;
+
+    is_line = (.code AND QP_M_CODEMASK) EQLU QP__BODY AND (.code AND QP_M_BODY_EOL) NEQU 0;
+
+    inlen = .indsc [DSC$W_LENGTH];
+    inp = .indsc [DSC$A_POINTER];
+    
+    !+
+    !	Subtract off any trailing blanks, if this is a line
+    !-
+    IF .is_line THEN
+    BEGIN
+    	IF ACTUALCOUNT () GTRU 3 AND .soft_break_a NEQA 0 THEN
+    	    .soft_break_a = 0;  ! initialize this to zero
+
+    	WHILE .inlen GTRU 0 DO
+    	    IF CH$RCHAR (CH$PLUS (.inp, .inlen-1)) EQLU %C' ' THEN
+    	    	inlen = .inlen - 1
+    	    ELSE
+    	    	EXITLOOP;
+    END;
+
+    outlen = inremain = .inlen;
+    anchor = .inp;
+    WHILE .inremain GTRU 0 DO
+    BEGIN
+
+    	cp = CH$FIND_CH (.inremain, .anchor, %C'=');
+    	IF CH$FAIL (.cp) THEN
+    	    EXITLOOP;
+
+    	inremain = .inremain - CH$DIFF (.cp, .anchor);
+    	!+
+    	!   If the last character is '=' and this is a "line", then
+    	!   the '=' represents a soft line break.  Otherwise, it's invalid.
+    	!-
+    	IF .inremain EQLU 1 THEN
+    	BEGIN
+    	    IF .is_line THEN
+    	    BEGIN
+    	    	IF ACTUALCOUNT () GTRU 3 AND .soft_break_a NEQA 0 THEN
+    	    	    .soft_break_a = 1;
+    	    	inlen = .inlen - 1; 	! subtract it off the input length
+    	    	outlen = .outlen - 1;   ! as well as the output length
+    	    	EXITLOOP;
+    	    END;
+    	    RETURN SS$_BADPARAM;
+    	END
+    	ELSE IF .inremain EQLU 2 THEN   ! could be '==', which is OK
+    	BEGIN
+    	    IF CH$RCHAR (CH$PLUS (.cp, 1)) NEQU %C'=' THEN
+    	    	RETURN SS$_BADPARAM;
+    	    outlen = .outlen - 1;
+    	    anchor = CH$PLUS (.cp, 2);
+    	    inremain = .inremain - 2;
+    	END
+    	ELSE IF CH$RCHAR (CH$PLUS (.cp, 1)) EQLU %C'=' THEN  ! at least 3 chars left
+    	BEGIN
+    	    outlen = .outlen - 1;
+    	    anchor = CH$PLUS (.cp, 2);
+    	    inremain = .inremain - 2;
+    	END
+    	ELSE
+    	BEGIN
+    	    LOCAL
+    	    	hex1, hex2;
+    	    hex1 = hexval(CH$RCHAR (CH$PLUS (.cp, 1)));
+    	    hex2 = hexval(CH$RCHAR (CH$PLUS (.cp, 2)));
+    	    IF .hex1 LSS 0 OR .hex2 LSS 0 THEN
+    	    	RETURN SS$_BADPARAM;
+
+    	    outlen = .outlen - 2;
+    	    anchor = CH$PLUS (.cp, 3);
+    	    inremain = .inremain - 3;
+    	 END;
+    END;
+
+    !+
+    !	Don't have to do the 64K check here, since the length of the
+    !	output string will always be <= the length of the input string
+    !-
+    IF .outdsc [DSC$B_CLASS] EQL DSC$K_CLASS_D THEN
+    	STR$GET1_DX (outlen, outdsc)
+    ELSE IF .outdsc [DSC$W_LENGTH] LSSU .outlen THEN
+    	RETURN SS$_BADPARAM;
+
+    IF .outlen EQLU 0 THEN
+    BEGIN
+    	IF len NEQA 0 THEN
+    	    len = 0;
+    	RETURN SS$_NORMAL;
+    END;
+
+    outp = .outdsc [DSC$A_POINTER];
+
+    !+
+    !	Shortcut -- when the strings are the same length, there are
+    !	no decodings to be done.  Otherwise, loop through again,
+    !	looking for the '=' signs.  Skip the syntax check in this
+    !	loop -- we've already verified everything.
+    !-
+    IF .outlen EQLU .inlen AND (.code EQLU QP__BODY OR CH$FAIL (CH$FIND_CH (.inlen, .inp, %C'_'))) THEN
+    	CH$MOVE (.outlen, .inp, .outp)
+    ELSE
+    BEGIN
+    	anchor = .inp;
+    	inremain = .inlen;
+    	WHILE .inremain GTRU 0 DO
+    	BEGIN
+    	    LOCAL
+    	    	skipped;
+
+    	    cp = CH$FIND_CH (.inremain, .anchor, %C'=');
+    	    IF CH$FAIL (.cp) THEN
+    	    	skipped = .inremain
+    	    ELSE
+    	    	skipped = CH$DIFF (.cp, .anchor);
+
+    	    CH$MOVE (.skipped, .anchor, .outp);
+    	    inremain = .inremain - .skipped;
+    	    !+
+    	    !	In header QP encodings, '_' can substitute for ' '.
+    	    !-
+    	    IF .code NEQU QP__BODY THEN
+    	    BEGIN
+    	    	LOCAL
+    	    	    up;
+    	    	WHILE NOT CH$FAIL (up = CH$FIND_CH (.skipped, .outp, %C'_')) DO
+    	    	BEGIN
+    	    	    CH$WCHAR (%C' ', .up);
+    	    	    skipped = .skipped - CH$DIFF (.up, .outp);
+    	    	    outp = .up;
+    	    	END;
+    	    END;
+    	    outp = CH$PLUS (.outp, .skipped);
+
+    	    IF .inremain EQLU 0 THEN
+    	    	EXITLOOP;
+    	    
+    	    IF CH$RCHAR (CH$PLUS (.cp, 1)) EQLU %C'=' THEN
+    	    BEGIN
+    	    	CH$WCHAR_A (%C'=', outp);
+    	    	anchor = CH$PLUS (.cp, 2);
+    	    	inremain = .inremain - 2;
+    	    END
+    	    ELSE
+    	    BEGIN
+    	    	LOCAL
+    	    	    ch;
+    	    	ch<4,4,0> = hexval(CH$RCHAR (CH$PLUS (.cp, 1)));
+    	    	ch<0,4,0> = hexval(CH$RCHAR (CH$PLUS (.cp, 2)));
+    	    	CH$WCHAR_A (.ch, outp);
+    	    	anchor = CH$PLUS (.cp, 3);
+    	    	inremain = .inremain - 3;
+    	    END;
+    	END;
+    END;
+
+    IF .len_a NEQA 0 THEN
+    	len = .outlen;
+
+    SS$_NORMAL
+
+END; ! qp_decode_string    	
+    
+END
+ELUDOM

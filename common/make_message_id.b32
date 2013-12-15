@@ -1,0 +1,128 @@
+%TITLE 'MAKE_MESSAGE_ID'
+MODULE MAKE_MESSAGE_ID (IDENT='V1.0', ADDRESSING_MODE (EXTERNAL=LONG_RELATIVE,NONEXTERNAL=LONG_RELATIVE)) =
+BEGIN
+!++
+! FACILITY: 	    MX
+!
+! ABSTRACT: 	    Routines for forming the Message-ID: header.
+!
+! MODULE DESCRIPTION:
+!
+!
+! AUTHOR:   	    Hunter Goatley
+!
+! Copyright (c) 2012, Hunter Goatley
+! 
+! All rights reserved.
+! 
+! Redistribution and use in source and binary forms, with or without
+! modification, are permitted provided that the following conditions
+! are met:
+! 
+!     * Redistributions of source code must retain the above
+!       copyright notice, this list of conditions and the following
+!       disclaimer.
+!     * Redistributions in binary form must reproduce the above
+!       copyright notice, this list of conditions and the following
+!       disclaimer in the documentation and/or other materials provided
+!       with the distribution.
+!     * Neither the name of the copyright owner nor the names of any
+!       other contributors may be used to endorse or promote products
+!       derived from this software without specific prior written
+!       permission.
+! 
+! THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
+! "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
+! LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
+! A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
+! OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
+! SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
+! LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
+! DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
+! THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
+! (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
+! OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+!
+! CREATION DATE:     9-FEB-2012
+!
+! MODIFICATION HISTORY:
+!
+!    9-FEB-2012 V1.0  	Goatley	    Initial coding.
+!--
+
+    LIBRARY 'SYS$LIBRARY:STARLET';
+    LIBRARY 'MX_SRC_COMMON:MX';
+
+    FORWARD ROUTINE
+    	MAKE_MESSAGE_ID;
+
+    EXTERNAL ROUTINE
+    	VERIFY_PHRASE,
+    	G_HAT (STR$COPY_DX, STR$COPY_R, STR$CONCAT, LIB$SYS_FAO,
+    	       LIB$SCOPY_DXDX, STR$CASE_BLIND_COMPARE);
+
+    BIND
+    	mx_node_name	= %ASCID'MX_NODE_NAME'	: BLOCK [,BYTE],
+	lnm$system_d	= %ASCID'LNM$SYSTEM'	: BLOCK [,BYTE];
+
+
+%SBTTL 'MAKE_MESSAGE_ID'
+GLOBAL ROUTINE MAKE_MESSAGE_ID (entnum_a, msgid_a) =
+BEGIN
+!++
+! FUNCTIONAL DESCRIPTION:
+!
+!   Formats an RFC822 Message-ID: header.
+!
+! RETURNS:  	cond_value, longword (unsigned), write only, by value
+!
+! PROTOTYPE:
+!
+!   MAKE_MESSAGE_ID  entnum, outstr
+!
+! IMPLICIT INPUTS:  None.
+!
+! IMPLICIT OUTPUTS: None.
+!
+! COMPLETION CODES:
+!
+!   SS$_NORMAL:	    	normal successful completion.
+!
+! SIDE EFFECTS:
+!
+!   None.
+!--
+    BIND
+    	msgid	= .msgid_a   : BLOCK [DSC$K_S_BLN,BYTE],
+	entnum	= .entnum_a	: LONG;
+
+    LOCAL
+    	mxnode	: BLOCK [DSC$K_S_BLN,BYTE],
+	lnmlst  : $ITMLST_DECL (ITEMS=1),
+	lnmlen  : WORD,
+	lnmbuf  : VECTOR [256,BYTE],
+	timvec	: VECTOR [2, LONG],
+    	STATUS;
+
+    INIT_DYNDESC (mxnode);
+
+    $ITMLST_INIT (ITMLST=lnmlst,
+		 (ITMCOD=LNM$_STRING,BUFSIZ=%ALLOCATION (lnmbuf),
+		  BUFADR=lnmbuf, RETLEN=lnmlen));
+    status = $TRNLNM (LOGNAM=%ASCID'MX_NODE_NAME', TABNAM=lnm$system_d,
+		ACMODE=%REF (PSL$C_EXEC), ITMLST=lnmlst);
+
+    IF NOT (.status) THEN RETURN (.status);
+
+    STR$COPY_R (mxnode, lnmlen, lnmbuf);
+
+    $GETTIM (TIMADR=TIMVEC);
+    status = LIB$SYS_FAO (%ASCID'<!XL.!XL.!UL@!AS>', 0, msgid, .timvec[1],
+                    .timvec[0], .entnum, mxnode);
+
+    RETURN (.status);
+
+END; ! MAKE_MESSAGE_ID
+
+END
+ELUDOM

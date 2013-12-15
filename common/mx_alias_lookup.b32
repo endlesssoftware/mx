@@ -1,0 +1,247 @@
+%TITLE	'MX_ALIAS_LOOKUP'
+MODULE MX_ALIAS_LOOKUP (IDENT = '01-002') = 
+BEGIN
+!++
+!
+!  Facility:	MX_ALIAS_LOOKUP
+!
+!  Author:	Hunter Goatley
+!
+! Copyright (c) 2008, Matthew Madison and Hunter Goatley.
+! 
+! All rights reserved.
+! 
+! Redistribution and use in source and binary forms, with or without
+! modification, are permitted provided that the following conditions
+! are met:
+! 
+!     * Redistributions of source code must retain the above
+!       copyright notice, this list of conditions and the following
+!       disclaimer.
+!     * Redistributions in binary form must reproduce the above
+!       copyright notice, this list of conditions and the following
+!       disclaimer in the documentation and/or other materials provided
+!       with the distribution.
+!     * Neither the name of the copyright owner nor the names of any
+!       other contributors may be used to endorse or promote products
+!       derived from this software without specific prior written
+!       permission.
+! 
+! THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
+! "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
+! LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
+! A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
+! OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
+! SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
+! LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
+! DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
+! THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
+! (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
+! OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+!
+!  Date:	January 18, 1993
+!
+!  Abstract:
+!
+!	This module contains routines used by MX_MAILSHR to lookup
+!	alias definitions in the user's MX_ALIAS_DEF alias database.
+!
+!  Modified by:
+!
+!	01-002		Hunter Goatley		17-JUL-1997 11:58
+!		Allow a global MX alias database too.
+!
+!	01-001		Hunter Goatley		 3-JAN-1994 13:39
+!		Don't lock the record!
+!
+!	01-000		Hunter Goatley		18-JAN-1993 13:57
+!		Original version.
+!
+!--
+LIBRARY 'SYS$LIBRARY:STARLET';			!Pull stuff from STARLET
+LIBRARY 'MX_SRC_COMMON:MX_LCLDEFS';		!MX structure definitions
+
+SWITCHES ADDRESSING_MODE (EXTERNAL = GENERAL, NONEXTERNAL = WORD_RELATIVE);
+
+FORWARD ROUTINE
+	mx_alias_lookup				!The lookup routine
+	;
+
+EXTERNAL ROUTINE
+	STR$COPY_R,				!Copy string by reference
+	STR$FREE1_DX,				!Free a dynamic string
+	STR$TRIM,				!Trim trailing blanks
+	STR$UPCASE				!Convert string to uppercase
+	;
+
+
+%SBTTL	'MX_ALIAS_LOOKUP'
+GLOBAL ROUTINE mx_alias_lookup (alias_a, addr_a) =	!Check for LCLHST?
+BEGIN
+!+
+!
+!  Routine:	MX_ALIAS_LOOKUP
+!
+!  Functional Description:
+!
+!	This routine attempts to look up an alias in the user's MX_ALIAS_DEF
+!	alias database.
+!
+!  Environment:
+!
+!	Called from MX_MAILSHR, user-mode, no privileges.
+!
+!  Formal parameters:
+!
+!	None.
+!
+!  Implicit inputs:
+!
+!	None.
+!
+!  Outputs:
+!
+!	None.
+!
+!  Returns:
+!
+!	R0	- Status
+!
+!  Side effects:
+!
+!
+!-
+BIND
+	the_alias	= .alias_a	: $BBLOCK,
+	addr	= .addr_a	: $BBLOCK;
+
+OWN
+	alias_buffer : $BBLOCK[alias_s_maxrec],
+	alias_fab : $FAB (			!FAB for input file
+		FNM = mx_alias_file_spec,	!File name (from MX_LCLDEFS)
+		DNM = mx_alias_file_def,	!Default file spec (MX_LCLDEFS)
+		FAC = (GET),			!Access is read-only
+		ORG = IDX,			!File organization - sequential
+		SHR = (GET,PUT,UPD,DEL,MSE)	!Allow other access
+		),
+	alias_rab : $RAB (			!Indexed RAB for input file
+		FAB = alias_fab,		!The related FAB
+		RAC = KEY,			!Record access is keyed
+		ROP = (RRL,NLK),		!Read regardless of lock,no lock
+		KRF = 0,			!Referenced via primary key
+		KSZ = alias_s_alias,		!Size of key is 8
+		KBF = alias_buffer,
+		UBF = alias_buffer,
+		USZ = alias_s_maxrec
+		),
+	galias_fab : $FAB (			!FAB for input file
+		FNM = mx_galias_file_spec,	!File name (from MX_LCLDEFS)
+		DNM = mx_alias_file_def,	!Default file spec (MX_LCLDEFS)
+		FAC = (GET),			!Access is read-only
+		ORG = IDX,			!File organization - sequential
+		SHR = (GET,PUT,UPD,DEL,MSE)	!Allow other access
+		),
+	galias_rab : $RAB (			!Indexed RAB for input file
+		FAB = galias_fab,		!The related FAB
+		RAC = KEY,			!Record access is keyed
+		ROP = (RRL,NLK),		!Read regardless of lock,no lock
+		KRF = 0,			!Referenced via primary key
+		KSZ = alias_s_alias,		!Size of key is 8
+		KBF = alias_buffer,
+		UBF = alias_buffer,
+		USZ = alias_s_maxrec
+		);
+
+LOCAL
+	tmpstr		: $BBLOCK[DSC$K_S_BLN],
+	ptr		: REF $BBLOCK,
+	length;
+
+REGISTER
+	gstatus		: UNSIGNED LONG,
+	status		: UNSIGNED LONG;
+
+    $INIT_DYNDESC (tmpstr);
+
+    !
+    !  Make sure the alias string is uppercase and has no trailing blanks.
+    !
+    STR$UPCASE (tmpstr, the_alias);
+    STR$TRIM (tmpstr, tmpstr);
+
+    !
+    !  If the length is invalid, then return an error.
+    !
+    IF (.tmpstr[DSC$W_LENGTH] EQLU 0) OR
+       (.tmpstr[DSC$W_LENGTH] GTRU alias_s_alias)
+    THEN
+	RETURN (SS$_NOSUCHID);
+
+    status = gstatus = SS$_NORMAL;		!Assume success
+
+    IF (.alias_fab [FAB$W_IFI] EQLU 0)		!The IFI is 0 if the file is
+    THEN					!... not open
+	BEGIN
+	status = $OPEN (FAB = alias_fab);	!Try to open the alias database
+	IF (.status)				!If the database was opened,
+	THEN					!... then connect the RAB
+	    status = $CONNECT (RAB = alias_rab);
+	END;
+
+    !
+    !  Open the global database, if there is one.
+    !
+    IF (.galias_fab [FAB$W_IFI] EQLU 0)		!The IFI is 0 if the file is
+    THEN					!... not open
+	BEGIN
+	gstatus = $OPEN (FAB = galias_fab);	!Try to open the alias database
+	IF (.gstatus)				!If the database was opened,
+	THEN					!... then connect the RAB
+	    BEGIN
+	    gstatus = $CONNECT (RAB = galias_rab);
+	    IF NOT(.gstatus) THEN $CLOSE (FAB = galias_fab);
+	    END;
+	END;
+
+    !
+    !  If neither database was opened, just return the error from the
+    !  personal database.
+    !
+    IF NOT(.status) AND NOT(.gstatus)		!If any error occurred
+    THEN					!... opening the database,
+	RETURN (.status);			!... just return it
+
+    !
+    !  Here, we successfully opened the alias file(s).  Now set up the key
+    !  and see if there is a matching record in the alias file(s).
+    !
+    CH$COPY (.tmpstr[DSC$W_LENGTH], .tmpstr[DSC$A_POINTER], %C' ',
+		alias_s_alias, alias_buffer);
+
+    STR$FREE1_DX (tmpstr);			!Free space held by copy
+
+    status = $GET (RAB = alias_rab);		!Try to read the record
+    IF NOT(.status) AND (.galias_fab [FAB$W_IFI] NEQU 0)
+    THEN					!If error and there's a global,
+	status = $GET (RAB = galias_rab);	!... try it
+
+    IF NOT(.status)
+    THEN
+	RETURN (.status);
+
+    !
+    !  The record was found, so return the e-mail address to the caller.
+    !
+    ptr = CH$PLUS (alias_buffer, alias_s_alias);
+    length = CH$RCHAR_A (ptr);
+    STR$COPY_R (addr, length, .ptr);
+
+    !
+    !  Just let the image rundown routines close the database file.
+    !
+    RETURN (SS$_NORMAL);			!Set success status
+
+END;						!End of routine
+
+END						!End of module BEGIN
+ELUDOM						!End of module

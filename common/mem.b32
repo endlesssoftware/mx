@@ -1,0 +1,617 @@
+%TITLE 'MEM'
+MODULE MEM (IDENT='V1.2-2',
+    ADDRESSING_MODE (EXTERNAL=GENERAL, NONEXTERNAL=LONG_RELATIVE)) =
+BEGIN
+!++
+! FACILITY: 	    MX
+!
+! ABSTRACT: 	    Memory management routines
+!
+! MODULE DESCRIPTION:
+!
+!   This module contains memory management routines used by MX.
+!
+! AUTHOR:   	    M. Madison
+!
+! Copyright (c) 2008, Matthew Madison.
+! 
+! All rights reserved.
+! 
+! Redistribution and use in source and binary forms, with or without
+! modification, are permitted provided that the following conditions
+! are met:
+! 
+!     * Redistributions of source code must retain the above
+!       copyright notice, this list of conditions and the following
+!       disclaimer.
+!     * Redistributions in binary form must reproduce the above
+!       copyright notice, this list of conditions and the following
+!       disclaimer in the documentation and/or other materials provided
+!       with the distribution.
+!     * Neither the name of the copyright owner nor the names of any
+!       other contributors may be used to endorse or promote products
+!       derived from this software without specific prior written
+!       permission.
+! 
+! THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
+! "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
+! LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
+! A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
+! OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
+! SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
+! LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
+! DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
+! THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
+! (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
+! OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+!
+! CREATION DATE:    20-MAR-1991
+!
+! MODIFICATION HISTORY:
+!
+!   20-MAR-1991	V1.0	Madison	    Initial coding.
+!   29-AUG-1997	V1.1	Madison	    Restructured RCPT, added MLE routines.
+!   28-JUN-1998	V1.2	Madison	    Another RCPT change.
+!   25-JUL-1998	V1.2-1	Madison	    Add debugging code.
+!   28-JAN-2001 V1.2-2  Madison     Make sure we don't run into sign problems.
+!--
+    LIBRARY 'SYS$LIBRARY:STARLET';
+    LIBRARY 'MX';
+    LIBRARY 'MX_LCLDEFS';
+
+    COMPILETIME
+    	debug	    = %VARIANT AND 1;
+
+    FORWARD ROUTINE
+    	MEM_GETTXT,
+    	MEM_FREETXT,
+    	MEM_GETRCPT,
+    	MEM_FREERCPT,
+    	MEM_GETMLE,
+    	MEM_FREEMLE;
+
+%IF debug %THEN
+
+    FORWARD ROUTINE
+    	mem_debug   : NOVALUE;
+
+    EXTERNAL ROUTINE
+    	LIB$SHOW_VM, LIB$SHOW_VM_ZONE, LIB$AST_IN_PROG, LIB$SUB_TIMES,
+    	LIB$SYS_FAO, LIB$PUT_OUTPUT, LIB$CVT_DTB;
+
+    LITERAL
+    	MEM_K_ALLOVHD	= 16;
+
+    MACRO
+    	MEM_L_FLINK 	= 0,0,32,0%,
+    	MEM_L_BLINK 	= 4,0,32,0%,
+    	MEM_L_SIZE1 	= 8,0,32,0%,
+    	MEM_L_SIZE2 	=12,0,32,0%;
+
+    OWN
+    	txtallque   	: QUEDEF PRESET ([QUE_L_HEAD]=txtallque, [QUE_L_TAIL]=txtallque);
+%ELSE
+
+    LITERAL
+    	MEM_K_ALLOVHD	= 8;
+
+    MACRO
+    	MEM_L_SIZE1 	= 0,0,32,0%,
+    	MEM_L_SIZE2 	= 4,0,32,0%;
+
+%FI
+
+    EXTERNAL ROUTINE
+    	LIB$CREATE_VM_ZONE, LIB$GET_VM, LIB$FREE_VM;
+
+    EXTERNAL LITERAL
+    	MX__MEMALLOC;
+
+    OWN
+    	TXTZONE	: INITIAL (0),
+    	RCPZONE	: INITIAL (0),
+    	MLEZONE : INITIAL (0),
+    	RCPT_ALLOSIZE,
+    	MLE_ALLOSIZE,
+    	MLE_EXTRA;
+%IF debug %THEN
+    OWN
+    	lasttime    : VECTOR [2,LONG] INITIAL (0,0),
+    	oneminute   : VECTOR [2,LONG] INITIAL (0,0),
+    	do_debug    : INITIAL (0);
+
+    BIND
+    	debug_d = %ASCID'MX_MEM_DEBUG',
+    	tabnam  = %ASCID'LNM$FILE_DEV';
+%FI
+
+
+%SBTTL 'MEM_GETTXT'
+GLOBAL ROUTINE MEM_GETTXT (SIZE, dataptr) = 
+BEGIN
+!++
+! FUNCTIONAL DESCRIPTION:
+!
+!   Allocates a TXT string out of the TXT zone.
+!
+! RETURNS:  	pointer to TXT structure
+!
+! PROTOTYPE:
+!
+!   MEM_GETTXT SIZE
+!
+! IMPLICIT INPUTS:  None.
+!
+! IMPLICIT OUTPUTS: None.
+!
+! COMPLETION CODES:
+!
+!   non-0: TXT allocated
+!   0:     allocation failure
+!
+! SIDE EFFECTS:
+!
+!   Creates TXT zone on first invocation.
+!
+!--
+    BUILTIN
+    	ACTUALCOUNT;
+
+    LOCAL
+    	ALLOSIZE,
+    	ASTSTAT,
+    	STATUS,
+    	BLK 	    : REF BLOCK [,BYTE];
+%IF debug %THEN
+    LOCAL
+    	lnmlst	    : $ITMLST_DECL (ITEMS=1),
+    	lnmbuf	    : VECTOR [32,BYTE],
+    	lnmlen	    : WORD;
+%FI
+
+    IF .TXTZONE EQL 0 THEN
+    BEGIN
+    	ASTSTAT = $SETAST (ENBFLG=0);  ! double check when non-interruptible
+    	IF .TXTZONE EQL 0 THEN
+    	BEGIN
+    	    STATUS = LIB$CREATE_VM_ZONE (TXTZONE, %REF (LIB$K_VM_FREQ_SIZES),
+    	    	%REF (4), %REF (LIB$M_VM_GET_FILL0 OR LIB$M_VM_EXTEND_AREA),
+    	    	%REF (4), %REF (16), %REF (32), %REF (8), 0, 0,
+    	    	%ASCID'MX_TXT_ZONE');
+    	    IF NOT .STATUS THEN SIGNAL_STOP (.STATUS);
+    	END;
+%IF debug %THEN
+    	$BINTIM (TIMBUF=%ASCID'0 00:01:00.00', TIMADR=oneminute);
+    	$GETTIM (TIMADR=lasttime);
+    	$ITMLST_INIT (ITMLST=lnmlst, (ITMCOD=LNM$_STRING, BUFADR=lnmbuf, BUFSIZ=%ALLOCATION (lnmbuf), RETLEN=lnmlen));
+    	do_debug = $TRNLNM (LOGNAM=debug_d, TABNAM=tabnam, ITMLST=lnmlst);
+    	IF .do_debug THEN
+    	    IF NOT LIB$CVT_DTB (.lnmlen, lnmbuf, do_debug) THEN do_debug = 1;
+%FI
+    	IF .ASTSTAT EQL SS$_WASSET THEN $SETAST (ENBFLG=1);
+    END;
+
+    ALLOSIZE = .SIZE + TXT_S_TXTDEF;
+
+    IF .ALLOSIZE GTRU 65536 THEN
+        SIGNAL_STOP (MX__MEMALLOC, 1, %ASCID'TXTZONE', SS$_RESULTOVF);
+
+    IF .ALLOSIZE LEQU 32-MEM_K_ALLOVHD THEN ALLOSIZE = 32
+    ELSE IF .ALLOSIZE LEQU 64-MEM_K_ALLOVHD THEN ALLOSIZE = 64
+    ELSE IF .ALLOSIZE LEQU 128-MEM_K_ALLOVHD THEN ALLOSIZE = 128
+    ELSE IF .ALLOSIZE LEQU 256-MEM_K_ALLOVHD THEN ALLOSIZE = 256
+    ELSE ALLOSIZE = .ALLOSIZE + MEM_K_ALLOVHD;
+
+    STATUS = LIB$GET_VM (ALLOSIZE, BLK, TXTZONE);
+    IF NOT .STATUS THEN SIGNAL_STOP (MX__MEMALLOC, 1, %ASCID'TXTZONE', .STATUS);
+%IF debug %THEN
+    INSQUE (.blk, .txtallque [QUE_L_TAIL]);
+%FI
+    BLK [MEM_L_SIZE1] = BLK [MEM_L_SIZE2] = .ALLOSIZE;  ! for sanity check on free
+    IF ACTUALCOUNT () GTR 1 THEN
+    BEGIN
+    	BIND txt = .BLK + MEM_K_ALLOVHD : TXTDEF;
+    	txt [TXT_W_LEN] = .size;
+    	CH$MOVE (.size, .dataptr, txt [TXT_T_TEXT]);
+    END;
+
+    .BLK + MEM_K_ALLOVHD
+
+END; ! MEM_GETTXT
+
+%SBTTL 'MEM_FREETXT'
+GLOBAL ROUTINE MEM_FREETXT (TXT_A_A) = 
+BEGIN
+!++
+! FUNCTIONAL DESCRIPTION:
+!
+!   Frees a text block allocated with MEM_GETTXT.
+!
+! RETURNS:  	cond_value, longword (unsigned), write only, by value
+!
+! PROTOTYPE:
+!
+!   MEM_FREETXT txt
+!
+! IMPLICIT INPUTS:  None.
+!
+! IMPLICIT OUTPUTS: None.
+!
+! COMPLETION CODES:
+!
+!   SS$_NORMAL:	    	normal successful completion.
+!
+! SIDE EFFECTS:
+!
+!   None.
+!--
+    LOCAL
+    	SIZE,
+    	BLK 	: REF BLOCK [,BYTE],
+    	status;
+%IF debug %THEN
+    LOCAL
+    	aststat,
+    	b   	: REF BLOCK [,BYTE];
+%FI
+
+    BLK = ..TXT_A_A - MEM_K_ALLOVHD;
+%IF debug %THEN
+    aststat = (IF LIB$AST_IN_PROG () THEN 0 ELSE $SETAST (ENBFLG=0));
+    b = .txtallque [QUE_L_HEAD];
+    WHILE .b NEQA txtallque DO
+    BEGIN
+    	IF .b EQLA .blk THEN EXITLOOP;
+    	b = .b [MEM_L_FLINK];
+    END;
+    IF .b EQLA txtallque THEN SIGNAL_STOP (SS$_BADPARAM);
+    REMQUE (.blk, blk);
+    IF .aststat EQL SS$_WASSET THEN $SETAST (ENBFLG=1);
+%FI
+    IF .BLK [MEM_L_SIZE1] NEQ .BLK [MEM_L_SIZE2] THEN SIGNAL_STOP (SS$_BADPARAM);
+    SIZE = .BLK [MEM_L_SIZE1];
+    status = LIB$FREE_VM (SIZE, BLK, TXTZONE);
+    .TXT_A_A = 0;
+
+%IF debug %THEN IF .do_debug THEN mem_debug (); %FI
+
+    .status
+
+END; ! MEM_FREETXT
+
+%SBTTL 'MEM_GETRCPT'
+GLOBAL ROUTINE MEM_GETRCPT (RCPT_A_A, addrlen, rtelen) = 
+BEGIN
+!++
+! FUNCTIONAL DESCRIPTION:
+!
+!   Allocates a RCPTDEF structure out of the RCPT zone.
+!
+! RETURNS:  	pointer to RCPT structure
+!
+! PROTOTYPE:
+!
+!   MEM_GETRCPT  rcpt
+!
+! IMPLICIT INPUTS:  None.
+!
+! IMPLICIT OUTPUTS: None.
+!
+! COMPLETION CODES:
+!
+!   any of those from LIB$GET_VM.
+!
+! SIDE EFFECTS:
+!
+!   Creates RCPZONE on first invocation.
+!
+!--
+    BUILTIN
+    	ACTUALCOUNT;
+
+    BIND
+    	RCPT	= .RCPT_A_A 	: REF RCPTDEF;
+
+    LOCAL
+    	ASTSTAT,
+    	STATUS;
+
+    IF .RCPZONE EQL 0 THEN
+    BEGIN
+    	ASTSTAT = $SETAST (ENBFLG=0);  ! double check when non-interruptible
+    	IF .RCPZONE EQL 0 THEN
+    	BEGIN
+!
+!   Find an even power of 2 size (min 16) that is GEQ block size
+!
+    	    INCR I FROM 4 DO
+    	    	IF (1 ^ .I) GEQ RCPT_S_RCPTDEF THEN
+    	    	    EXITLOOP (RCPT_ALLOSIZE = 1 ^ .I);
+    	    STATUS = LIB$CREATE_VM_ZONE (RCPZONE, %REF (LIB$K_VM_FIXED),
+    	    	RCPT_ALLOSIZE,
+    	    	%REF (LIB$M_VM_GET_FILL0 OR LIB$M_VM_EXTEND_AREA),
+    	    	%REF (4), %REF (4), RCPT_ALLOSIZE, %REF (8), 0, 0,
+    	    	%ASCID'MX_RCPT_ZONE');
+    	    IF NOT .STATUS THEN SIGNAL_STOP (.STATUS);
+    	END;
+    	IF .ASTSTAT EQL SS$_WASSET THEN $SETAST (ENBFLG=1);
+    END;
+
+    STATUS = LIB$GET_VM (RCPT_ALLOSIZE, RCPT, RCPZONE);
+    IF NOT .STATUS THEN
+    	SIGNAL_STOP (MX__MEMALLOC, 1, %ASCID'RCPTZONE', .STATUS);
+
+    INIT_QUEUE (rcpt [RCPT_Q_DIAGTXTQUE]);
+
+    IF ACTUALCOUNT () GTR 1 THEN
+    BEGIN
+    	BIND rcpadr = RCPT [RCPT_A_ADDR]    : REF TXTDEF;
+    	rcpadr = MEM_GETTXT (.addrlen);
+    	rcpadr [TXT_W_LEN] = .addrlen;
+    END;
+    	
+    IF ACTUALCOUNT () GTR 2 THEN
+    BEGIN
+    	BIND rcprte = RCPT [RCPT_A_ROUTE]    : REF TXTDEF;
+    	rcprte = MEM_GETTXT (.rtelen);
+    	rcprte [TXT_W_LEN] = .rtelen;
+    END;
+
+    .STATUS
+
+END; ! MEM_GETRCPT
+
+%SBTTL 'MEM_FREERCPT'
+GLOBAL ROUTINE MEM_FREERCPT (RCPT_A_A) = 
+BEGIN
+!++
+! FUNCTIONAL DESCRIPTION:
+!
+!   Frees a RCPTDEF block allocated with MEM_GETRCPT.
+!
+! RETURNS:  	cond_value, longword (unsigned), write only, by value
+!
+! PROTOTYPE:
+!
+!   MEM_FREERCPT txt
+!
+! IMPLICIT INPUTS:  None.
+!
+! IMPLICIT OUTPUTS: None.
+!
+! COMPLETION CODES:
+!
+!   SS$_NORMAL:	    	normal successful completion.
+!
+! SIDE EFFECTS:
+!
+!   None.
+!--
+    BIND
+    	rcpt	= .rcpt_a_a : REF RCPTDEF;
+    BIND_RCPT_FIELDS (rcpt);
+
+    LOCAL
+    	t   	: REF TXTDEF,
+    	status;
+
+    FREETXT (route, addr, ortype, oraddr, remotemta);
+    WHILE NOT REMQUE (.diagtxtque [QUE_L_HEAD], t) DO FREETXT (t);
+    status = LIB$FREE_VM (RCPT_ALLOSIZE, rcpt, RCPZONE);
+    rcpt = 0;
+
+    .status
+
+END; ! MEM_FREERCPT
+
+%SBTTL 'MEM_GETMLE'
+GLOBAL ROUTINE MEM_GETMLE (MLE_A_A, addrlen, namelen) = 
+BEGIN
+!++
+! FUNCTIONAL DESCRIPTION:
+!
+!   Allocates a MLEDEF structure out of the MLE zone.
+!
+! RETURNS:  	pointer to MLE structure
+!
+! PROTOTYPE:
+!
+!   MEM_GETMLE  mle
+!
+! IMPLICIT INPUTS:  None.
+!
+! IMPLICIT OUTPUTS: None.
+!
+! COMPLETION CODES:
+!
+!   any of those from LIB$GET_VM.
+!
+! SIDE EFFECTS:
+!
+!   Creates MLEZONE on first invocation.
+!
+!--
+    BUILTIN
+    	ACTUALCOUNT;
+
+    BIND
+    	MLE	= .MLE_A_A 	: REF MLEDEF;
+
+    LOCAL
+    	ASTSTAT,
+    	STATUS;
+
+    IF .MLEZONE EQL 0 THEN
+    BEGIN
+    	ASTSTAT = $SETAST (ENBFLG=0);  ! double check when non-interruptible
+    	IF .MLEZONE EQL 0 THEN
+    	BEGIN
+!
+!   Find an even power of 2 size (min 16) that is GEQ block size
+!
+    	    INCR I FROM 4 DO
+    	    	IF (1 ^ .I) GEQU MLE_S_MLEDEF THEN
+    	    	    EXITLOOP (MLE_ALLOSIZE = 1 ^ .I);
+    	    MLE_EXTRA = .MLE_ALLOSIZE - MLE_S_MLEDEF;
+    	    STATUS = LIB$CREATE_VM_ZONE (MLEZONE, %REF (LIB$K_VM_FIXED),
+    	    	MLE_ALLOSIZE,
+    	    	%REF (LIB$M_VM_GET_FILL0 OR LIB$M_VM_EXTEND_AREA),
+    	    	%REF (4), %REF (4), MLE_ALLOSIZE, %REF (8), 0, 0,
+    	    	%ASCID'MX_MLE_ZONE');
+    	    IF NOT .STATUS THEN SIGNAL_STOP (.STATUS);
+    	END;
+    	IF .ASTSTAT EQL SS$_WASSET THEN $SETAST (ENBFLG=1);
+    END;
+
+    STATUS = LIB$GET_VM (MLE_ALLOSIZE, MLE, MLEZONE);
+    IF NOT .STATUS THEN
+    	SIGNAL_STOP (MX__MEMALLOC, 1, %ASCID'MLEZONE', .STATUS);
+
+    IF ACTUALCOUNT () GTR 1 THEN
+    BEGIN
+    	BIND mleadr = MLE [MLE_A_ADDR] : REF TXTDEF;
+    	mleadr = MEM_GETTXT (.addrlen);
+    	mleadr [TXT_W_LEN] = .addrlen;
+    END;
+
+    IF ACTUALCOUNT () GTR 2 THEN
+    BEGIN
+    	BIND mlenam = MLE [MLE_A_NAME] : REF TXTDEF;
+    	IF .namelen LEQ (.MLE_EXTRA - TXT_S_TXTDEF) THEN
+    	BEGIN
+    	    BIND txt = CH$PLUS (.MLE, MLE_S_MLEDEF) : TXTDEF;
+    	    txt [TXT_W_LEN] = .namelen;
+    	    mlenam = txt;
+    	END
+    	ELSE
+    	BEGIN
+    	    mlenam = MEM_GETTXT (.namelen);
+    	    mlenam [TXT_W_LEN] = .namelen;
+    	END;
+    END;
+
+    .STATUS
+
+END; ! MEM_GETMLE
+
+%SBTTL 'MEM_FREEMLE'
+GLOBAL ROUTINE MEM_FREEMLE (MLE_A_A) = 
+BEGIN
+!++
+! FUNCTIONAL DESCRIPTION:
+!
+!   Frees a MLEDEF block allocated with MEM_GETMLE.
+!
+! RETURNS:  	cond_value, longword (unsigned), write only, by value
+!
+! PROTOTYPE:
+!
+!   MEM_FREEMLE txt
+!
+! IMPLICIT INPUTS:  None.
+!
+! IMPLICIT OUTPUTS: None.
+!
+! COMPLETION CODES:
+!
+!   SS$_NORMAL:	    	normal successful completion.
+!
+! SIDE EFFECTS:
+!
+!   None.
+!--
+    BIND
+    	mle 	= .MLE_A_A  : REF MLEDEF;
+
+    LOCAL
+    	status;
+
+    IF .mle [MLE_A_NAME] NEQA 0 THEN
+    	IF .mle [MLE_A_NAME] NEQA CH$PLUS (.mle, MLE_S_MLEDEF) THEN FREETXT (mle [MLE_A_NAME]);
+    IF .mle [MLE_A_ADDR] NEQA 0 THEN FREETXT (mle [MLE_A_ADDR]);
+    mle [MLE_A_NAME] = mle [MLE_A_ADDR] = 0;
+    status = LIB$FREE_VM (MLE_ALLOSIZE, mle, MLEZONE);
+    mle = 0;
+
+    .status
+
+END; ! MEM_FREEMLE
+%IF debug %THEN
+
+%SBTTL 'mem_debug'
+ROUTINE mem_debug : NOVALUE = 
+BEGIN
+!++
+! FUNCTIONAL DESCRIPTION:
+!
+!   description
+!
+! RETURNS:  	cond_value, longword (unsigned), write only, by value
+!
+! PROTOTYPE:
+!
+!   x
+!
+! IMPLICIT INPUTS:  None.
+!
+! IMPLICIT OUTPUTS: None.
+!
+! COMPLETION CODES:
+!
+!   SS$_NORMAL:	    	normal successful completion.
+!
+! SIDE EFFECTS:
+!
+!   None.
+!--
+    LOCAL
+    	now 	: VECTOR [2,LONG],
+    	diff	: VECTOR [2,LONG],
+    	junk	: VECTOR [2,LONG],
+    	status;
+
+    IF LIB$AST_IN_PROG () THEN RETURN;
+
+    $GETTIM (TIMADR=now);
+    LIB$SUB_TIMES (now, lasttime, diff);
+
+    status = $SETAST (ENBFLG=0);
+
+    IF .do_debug<1,1,0> THEN
+    BEGIN
+    	LOCAL
+    	    b	: REF BLOCK [,BYTE],
+    	    str	: BLOCK [DSC$K_S_BLN,BYTE];
+
+    	INIT_DYNDESC (str);
+    	b = .txtallque [QUE_L_HEAD];
+    	WHILE .b NEQA txtallque DO
+    	BEGIN
+    	    BIND txt = .b + MEM_K_ALLOVHD	: TXTDEF;
+    	    LIB$SYS_FAO (%ASCID'[!%D] Allocated TXTDEF block at !XL (allosize=!UL): !AD', 0, str,
+    	    	    	now, .b, .b [MEM_L_SIZE1], .txt [TXT_W_LEN], txt [TXT_T_TEXT]);
+    	    LIB$PUT_OUTPUT (str);
+    	    b = .b [MEM_L_FLINK];
+    	END;
+    	FREE_STRINGS (str);
+    END;
+
+    IF QUEUE_EMPTY (txtallque) OR LIB$SUB_TIMES (diff, oneminute, junk) THEN
+    BEGIN
+    	IF .TXTZONE NEQ 0 THEN
+    	    LIB$SHOW_VM_ZONE (TXTZONE, %REF (3));
+    	IF .RCPZONE NEQ 0 THEN
+    	    LIB$SHOW_VM_ZONE (RCPZONE, %REF (3));
+    	IF .MLEZONE NEQ 0 THEN
+    	    LIB$SHOW_VM_ZONE (MLEZONE, %REF (3));
+    	LIB$SHOW_VM (%REF (0));
+    	lasttime [0] = .now [0];
+    	lasttime [1] = .now [1];
+    END;
+    IF .status EQL SS$_WASSET THEN $SETAST (ENBFLG=1);
+
+END; ! mem_debug
+%FI
+
+END
+ELUDOM

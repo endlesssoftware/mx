@@ -1,0 +1,109 @@
+%TITLE 'CHECK_REFS_ZERO'
+MODULE CHECK_REFS_ZERO (IDENT='V1.4') =
+BEGIN
+!++
+! FACILITY: 	    MX
+!
+! ABSTRACT: 	    Routine for checking the completion of an MX queue entry.
+!
+! MODULE DESCRIPTION:
+!
+!   This routine must be used to check for completion of MX processing
+!   on a queue entry, rather than checking the individual forward
+!   reference fields in the entry.
+!
+! AUTHOR:   	    M. Madison
+!
+! Copyright (c) 2008, Matthew Madison.
+! 
+! All rights reserved.
+! 
+! Redistribution and use in source and binary forms, with or without
+! modification, are permitted provided that the following conditions
+! are met:
+! 
+!     * Redistributions of source code must retain the above
+!       copyright notice, this list of conditions and the following
+!       disclaimer.
+!     * Redistributions in binary form must reproduce the above
+!       copyright notice, this list of conditions and the following
+!       disclaimer in the documentation and/or other materials provided
+!       with the distribution.
+!     * Neither the name of the copyright owner nor the names of any
+!       other contributors may be used to endorse or promote products
+!       derived from this software without specific prior written
+!       permission.
+! 
+! THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
+! "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
+! LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
+! A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
+! OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
+! SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
+! LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
+! DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
+! THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
+! (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
+! OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+! CREATION DATE:    26-JUN-1990
+!
+! MODIFICATION HISTORY:
+!
+!   26-JUN-1990	V1.0	Madison	    Initial coding.
+!   16-OCT-1991	V1.1	Madison	    Add DNSMTP check.
+!   18-FEB-1992	V1.2	Madison	    Add XSMTP check.
+!   14-MAY-1994	V1.3	Altmayer    Add LSV check.
+!   11-NOV-2000	V1.4	Madison	    Add HOLDx checks.
+!--
+    LIBRARY 'SYS$LIBRARY:STARLET';
+    LIBRARY 'MX_SRC_COMMON:FLQ';
+    LIBRARY 'MX_SRC_COMMON:MX';
+
+%SBTTL 'CHECK_REFS_ZERO'
+GLOBAL ROUTINE CHECK_REFS_ZERO (QENT_A) = 
+BEGIN
+!++
+! FUNCTIONAL DESCRIPTION:
+!
+!   Routine to be called when determining whether processing of
+!   an MX queue entry has been finished.
+!
+! RETURNS:  	cond_value, longword (unsigned), write only, by value
+!
+! PROTOTYPE:
+!
+!   CHECK_REFS_ZERO
+!
+! IMPLICIT INPUTS:  None.
+!
+! IMPLICIT OUTPUTS: None.
+!
+! COMPLETION CODES:
+!
+!   1:	    	    	normal successful completion; all references zero.
+!   0:                  processing of entry has not been completed.
+!
+! SIDE EFFECTS:
+!
+!   None.
+!--
+    BIND
+    	QENT	= .QENT_A   	    	    	: QENTDEF,
+    	HOLDREF = QENT [MXQ_L_HOLDQREF_BASE]    : VECTOR [,LONG];
+
+    IF (.QENT [MXQ_L_SMTPREF] OR .QENT [MXQ_L_LOCALREF] OR
+	.QENT [MXQ_L_JNETREF] OR .QENT [MXQ_L_UUCPREF] OR
+    	.QENT [MXQ_L_MLFREF] OR .QENT [MXQ_L_X400REF] OR
+    	.QENT [MXQ_L_SITEREF] OR .QENT [MXQ_L_DNSMTPREF] OR
+    	.QENT [MXQ_L_XSMTPREF] OR .QENT [MXQ_L_LSVREF]) NEQU 0 THEN
+    	RETURN 0;
+
+    INCR i FROM 0 TO MX_K_HOLDQ_MAX-1 DO
+    	IF .holdref [.i] NEQU 0 THEN
+    	    RETURN 0;
+    1
+
+END;
+
+END
+ELUDOM

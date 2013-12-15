@@ -1,0 +1,461 @@
+%TITLE 'CHARCONV'
+MODULE CHARCONV (IDENT='V1.2', ADDRESSING_MODE (EXTERNAL=LONG_RELATIVE, NONEXTERNAL=LONG_RELATIVE)) =
+BEGIN
+!++
+! FACILITY: 	    MX
+!
+! ABSTRACT: 	    Character conversion routines
+!
+! MODULE DESCRIPTION:
+!
+!   description
+!
+! AUTHOR:   	    M. Madison
+!
+! Copyright (c) 2008, Matthew Madison.
+! 
+! All rights reserved.
+! 
+! Redistribution and use in source and binary forms, with or without
+! modification, are permitted provided that the following conditions
+! are met:
+! 
+!     * Redistributions of source code must retain the above
+!       copyright notice, this list of conditions and the following
+!       disclaimer.
+!     * Redistributions in binary form must reproduce the above
+!       copyright notice, this list of conditions and the following
+!       disclaimer in the documentation and/or other materials provided
+!       with the distribution.
+!     * Neither the name of the copyright owner nor the names of any
+!       other contributors may be used to endorse or promote products
+!       derived from this software without specific prior written
+!       permission.
+! 
+! THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
+! "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
+! LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
+! A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
+! OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
+! SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
+! LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
+! DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
+! THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
+! (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
+! OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+! CREATION DATE:    01-JAN-2001
+!
+! MODIFICATION HISTORY:
+!
+!   01-JAN-2001	V1.0	Madison	    Initial coding.
+!   28-JAN-2001 V1.0-1  Madison     Make 8859-1 the default.
+!   14-MAR-2002 V1.1    Madison     Add username to BEGIN call.
+!   11-NOV-2004 V1.2    Madison     IA64 support.
+!--
+
+    LIBRARY 'SYS$LIBRARY:STARLET';
+    LIBRARY 'CHARCONV';
+    LIBRARY 'MX';
+    LIBRARY 'FIELDS';
+
+    FORWARD ROUTINE
+    	CHARCONV_BEGIN,
+    	CHARCONV_END,
+    	CHARCONV_CONVERT,
+    	CHARCONV_GET_CHARSET_NAME,
+    	fis_sig_to_ret,
+    	find_image_symbol;
+
+    _DEF (CTX)
+    	CTX_L_CVTRTN	= _LONG,
+    	CTX_L_ENDRTN	= _LONG,
+    	CTX_L_GETRTN	= _LONG,
+    	CTX_L_CVTCTX	= _LONG
+    _ENDDEF (CTX);
+
+    EXTERNAL ROUTINE
+    	G_HAT (LIB$GET_VM, LIB$FREE_VM, LIB$FIND_IMAGE_SYMBOL),
+    	G_HAT (LIB$SYS_FAO, STR$GET1_DX, STR$CASE_BLIND_COMPARE);
+
+    BIND
+    	convimg_d   	= %ASCID'MX_SITE_CHARACTER_CONVERSION',
+    	lnm_system_d	= %ASCID'LNM$SYSTEM',
+    	init_d	    	= %ASCID'INIT',
+    	convert_d   	= %ASCID'CONVERT',
+    	getname_d	= %ASCID'GETCSNAME',
+    	finish_d    	= %ASCID'FINISH',
+    	dec_mcs	    	= %ASCID'dec-mcs',
+    	iso_8859_1  	= %ASCID'iso-8859-1';
+
+    BIND
+    	mcs_to_latin1	= UPLIT BYTE (
+    	    	    	    %X'80', %X'81', %X'82', %X'83', %X'84', %X'85', %X'86', %X'87',
+    	    	    	    %X'88', %X'89', %X'8A', %X'8B', %X'8C', %X'8D', %X'8E', %X'8F',
+    	    	    	    %X'90', %X'91', %X'92', %X'93', %X'94', %X'95', %X'96', %X'97',
+    	    	    	    %X'98', %X'99', %X'9A', %X'9B', %X'9C', %X'9D', %X'9E', %X'9F',
+    	    	    	    %C' ' , %X'A1', %X'A2', %X'A3', %C' ' , %X'A5', %X'A6', %X'A7',
+    	    	    	    %X'A4', %X'A9', %X'AA', %X'AB', %C' ' , %C' ' , %C' ' , %C' ' ,
+    	    	    	    %X'B0', %X'B1', %X'B2', %X'B3', %C' ' , %X'B5', %X'B6', %X'B7',
+    	    	    	    %C' ' , %X'B9', %X'BA', %X'BB', %X'BC', %X'BD', %C' ' , %X'BF',
+    	    	    	    %X'C0', %X'C1', %X'C2', %X'C3', %X'C4', %X'C5', %X'C6', %X'C7',
+    	    	    	    %X'C8', %X'C9', %X'CA', %X'CB', %X'CC', %X'CD', %X'CE', %X'CF',
+    	    	    	    %C' ' , %X'D1', %X'D2', %X'D3', %X'D4', %X'D5', %X'D6', %C' ' ,
+    	    	    	    %X'D8', %X'D9', %X'DA', %X'DB', %X'DC', %X'DD', %C' ' , %X'DF',
+    	    	    	    %X'E0', %X'E1', %X'E2', %X'E3', %X'E4', %X'E5', %X'E6', %X'E7',
+    	    	    	    %X'E8', %X'E9', %X'EA', %X'EB', %X'EC', %X'ED', %X'EE', %X'EF',
+    	    	    	    %C' ' , %X'F1', %X'F2', %X'F3', %X'F4', %X'F5', %X'F6', %C' ' ,
+    	    	    	    %X'F8', %X'F9', %X'FA', %X'FB', %X'FC', %X'FF', %C' ' , %C' ' ) : VECTOR [256,BYTE],
+    	latin1_to_mcs	= UPLIT BYTE (
+    	    	    	    %X'80', %X'81', %X'82', %X'83', %X'84', %X'85', %X'86', %X'87',
+    	    	    	    %X'88', %X'89', %X'8A', %X'8B', %X'8C', %X'8D', %X'8E', %X'8F',
+    	    	    	    %X'90', %X'91', %X'92', %X'93', %X'94', %X'95', %X'96', %X'97',
+    	    	    	    %X'98', %X'99', %X'9A', %X'9B', %X'9C', %X'9D', %X'9E', %X'9F',
+    	    	    	    %X'A0', %X'A1', %X'A2', %X'A3', %X'A8', %X'A5', %C' ' , %X'A7',
+    	    	    	    %C' ' , %X'A9', %X'AA', %X'AB', %C' ' , %C' ' , %C' ' , %C' ' ,
+    	    	    	    %X'B0', %X'B1', %X'B2', %X'B3', %C' ' , %X'B5', %X'B6', %X'B7',
+    	    	    	    %C' ' , %X'B9', %X'BA', %X'BB', %X'BC', %X'BD', %C' ' , %X'BF',
+    	    	    	    %X'C0', %X'C1', %X'C2', %X'C3', %X'C4', %X'C5', %X'C6', %X'C7',
+    	    	    	    %X'C8', %X'C9', %X'CA', %X'CB', %X'CC', %X'CD', %X'CE', %X'CF',
+    	    	    	    %C' ' , %X'D1', %X'D2', %X'D3', %X'D4', %X'D5', %X'D6', %C' ' ,
+    	    	    	    %X'D8', %X'D9', %X'DA', %X'DB', %X'DC', %X'DD', %C' ' , %X'DF',
+    	    	    	    %X'E0', %X'E1', %X'E2', %X'E3', %X'E4', %X'E5', %X'E6', %X'E7',
+    	    	    	    %X'E8', %X'E9', %X'EA', %X'EB', %X'EC', %X'ED', %X'EE', %X'EF',
+    	    	    	    %C' ' , %X'F1', %X'F2', %X'F3', %X'F4', %X'F5', %X'F6', %C' ' ,
+    	    	    	    %X'F8', %X'F9', %X'FA', %X'FB', %X'FC', %C' ' , %C' ' , %X'FD') : VECTOR [256,BYTE];
+
+
+%SBTTL 'CHARCONV_BEGIN'
+GLOBAL ROUTINE CHARCONV_BEGIN (code, ctx_a_a, lcsnlen_a, lcsn_a, ncsn_a, usrnam_a) = 
+BEGIN
+!++
+! FUNCTIONAL DESCRIPTION:
+!
+!   Initiates a character-conversion sequence.  Defaults to a
+!   conversion of DEC MCS to ISO-8859-1, if no character sets are specified
+!   and no character conversion callout is installed on the system.
+!
+! RETURNS:  	cond_value, longword (unsigned), write only, by value
+!
+! PROTOTYPE:
+!
+!   x
+!
+! IMPLICIT INPUTS:  None.
+!
+! IMPLICIT OUTPUTS: None.
+!
+! COMPLETION CODES:
+!
+!   SS$_NORMAL:	    	normal successful completion.
+!
+! SIDE EFFECTS:	    None.
+!--
+    BUILTIN
+    	ACTUALCOUNT;
+
+    BIND
+    	ctx 	= .ctx_a_a  	: REF CTXDEF;
+
+    LOCAL
+    	local_is_mcs,
+    	initrtn,
+    	status;
+
+    !	If no converter installed, we'll use our built-in one,
+    !	which requires no allocated context.
+
+    status = $TRNLNM (LOGNAM=convimg_d, TABNAM=lnm_system_d);
+    IF NOT .status THEN
+    BEGIN
+    	ctx = (IF .code EQLU CHARCONV__LOCAL_TO_NETWORK THEN -2 ELSE -1);
+    	local_is_mcs = $TRNLNM (TABNAM=%ASCID'LNM$FILE_DEV', LOGNAM=%ASCID'MX_LOCAL_CHARSET_DEC_MCS');
+    	LIB$SYS_FAO (%ASCID'!AS', .lcsnlen_a, .lcsn_a, (IF .local_is_mcs THEN dec_mcs ELSE iso_8859_1));
+    	IF ACTUALCOUNT () LSSU 5 OR .ncsn_a EQLA 0 THEN
+    	   status = (IF .local_is_mcs THEN SS$_NORMAL ELSE SS$_BADPARAM)
+    	ELSE IF STR$CASE_BLIND_COMPARE (.ncsn_a, iso_8859_1) EQL 0 THEN
+    	    status = (IF .local_is_mcs THEN SS$_NORMAL ELSE SS$_BADPARAM)
+    	ELSE
+    	    status = SS$_BADPARAM;
+    	IF NOT .status THEN
+    	    ctx = 0;
+    	RETURN .status;
+    END;
+
+    status = LIB$GET_VM (%REF (CTX_S_CTXDEF), ctx);
+    IF NOT .status THEN
+    	RETURN .status;
+
+    CH$FILL (%CHAR (0), CTX_S_CTXDEF, .ctx);
+    status = find_image_symbol (convimg_d, init_d, initrtn);
+    IF .status THEN
+    	status = find_image_symbol (convimg_d, convert_d, ctx [CTX_L_CVTRTN]);
+    IF .status THEN
+    	status = find_image_symbol (convimg_d, getname_d, ctx [CTX_L_GETRTN]);
+    IF .status THEN
+    	status = find_image_symbol (convimg_d, finish_d, ctx [CTX_L_ENDRTN]);
+    IF .status THEN
+    	status = (.initrtn) (code, ctx [CTX_L_CVTCTX], .lcsnlen_a, .lcsn_a,
+    	    	    (IF ACTUALCOUNT () GEQU 5 THEN .ncsn_a ELSE 0),
+                    (IF ACTUALCOUNT () GEQU 6 THEN .usrnam_a ELSE 0));
+    IF NOT .status THEN
+    BEGIN
+    	LIB$FREE_VM (%REF (CTX_S_CTXDEF), ctx);
+    	ctx = 0;
+    END;
+
+    .status
+
+END; ! charconv_begin
+
+%SBTTL 'CHARCONV_END'
+GLOBAL ROUTINE CHARCONV_END (ctx_a_a) = 
+BEGIN
+!++
+! FUNCTIONAL DESCRIPTION:
+!
+!   Cleans up after a character conversion sequence.
+!
+! RETURNS:  	cond_value, longword (unsigned), write only, by value
+!
+! PROTOTYPE:
+!
+!   x
+!
+! IMPLICIT INPUTS:  None.
+!
+! IMPLICIT OUTPUTS: None.
+!
+! COMPLETION CODES:
+!
+!   SS$_NORMAL:	    	normal successful completion.
+!
+! SIDE EFFECTS:	    None.
+!--
+    BIND
+    	ctx 	= .ctx_a_a  	: REF CTXDEF;
+
+    IF .ctx NEQ -2 AND .ctx NEQ -1 THEN
+    BEGIN
+    	(.ctx [CTX_L_ENDRTN]) (ctx [CTX_L_CVTCTX]);
+    	LIB$FREE_VM (%REF (CTX_S_CTXDEF), ctx);
+    END;
+
+    ctx = 0;
+
+    SS$_NORMAL
+
+END; ! charconv_end
+
+%SBTTL 'CHARCONV_CONVERT'
+GLOBAL ROUTINE CHARCONV_CONVERT (ctx_a_a, in_a, len_a, out_a, converted_a, remain_a) = 
+BEGIN
+!++
+! FUNCTIONAL DESCRIPTION:
+!
+!   Initiates a character-conversion sequence.  Defaults to an identity
+!   conversion of DEC MCS to ISO-8859-1, if no character sets are specified
+!   and no character conversion callout is installed on the system.
+!
+! RETURNS:  	cond_value, longword (unsigned), write only, by value
+!
+! PROTOTYPE:
+!
+!   x
+!
+! IMPLICIT INPUTS:  None.
+!
+! IMPLICIT OUTPUTS: None.
+!
+! COMPLETION CODES:
+!
+!   SS$_NORMAL:	    	normal successful completion.
+!
+! SIDE EFFECTS:	    None.
+!--
+    BUILTIN
+    	ACTUALCOUNT;
+
+    BIND
+    	ctx 	= .ctx_a_a  	: REF CTXDEF,
+    	instr	= .in_a	    	: BLOCK [,BYTE],
+    	outstr	= .out_a    	: BLOCK [,BYTE],
+    	xlen 	= .len_a    	: WORD;
+
+    IF .ctx EQL -2 OR .ctx EQL -1 THEN
+    BEGIN
+    	LOCAL
+    	    outp,
+    	    ch	    : BYTE,
+    	    len	    : WORD;
+
+    	len = .instr [DSC$W_LENGTH];
+    	IF .outstr [DSC$B_CLASS] EQLU DSC$K_CLASS_D THEN
+    	    STR$GET1_DX (len, outstr)
+    	ELSE
+    	    len = MINU (.len, .outstr [DSC$W_LENGTH]);
+    	outp = .outstr [DSC$A_POINTER];
+    	IF .len GTRU 0 THEN
+    	INCRA cp FROM .instr [DSC$A_POINTER] TO CH$PLUS (.instr [DSC$A_POINTER], .len-1) DO
+    	BEGIN
+            ch = CH$RCHAR (.cp);
+    	    IF (.ch AND %X'80') EQLU %X'80' THEN
+    	    BEGIN
+    	    	IF .ctx EQL -2 THEN
+    	    	    CH$WCHAR_A (.mcs_to_latin1[.ch AND %X'7F'], outp)
+    	    	ELSE
+    	    	    CH$WCHAR_A (.latin1_to_mcs[.ch AND %X'7F'], outp);
+    	    	IF ACTUALCOUNT () GTRU 4 AND .converted_a NEQA 0 THEN .converted_a = 1;
+    	    END
+    	    ELSE
+    	    	CH$WCHAR_A (.ch, outp);
+    	END;
+    	IF ACTUALCOUNT () GTRU 5 AND .remain_a NEQA 0 THEN
+    	    .remain_a = .instr [DSC$W_LENGTH] - .len;
+    	IF xlen NEQA 0 THEN
+    	    xlen = .len;
+
+    	RETURN SS$_NORMAL;
+    END;
+
+    (.ctx [CTX_L_CVTRTN]) (ctx [CTX_L_CVTCTX], .in_a, .len_a, .out_a, 
+    	    	    	  (IF ACTUALCOUNT () GTRU 4 THEN .converted_a ELSE 0),
+    	    	    	  (IF ACTUALCOUNT () GTRU 5 THEN .remain_a ELSE 0))
+
+END; ! charconv_convert
+
+%SBTTL 'CHARCONV_GET_CHARSET_NAME'
+GLOBAL ROUTINE CHARCONV_GET_CHARSET_NAME (ctx_a_a, code, len_a, name_a) = 
+BEGIN
+!++
+! FUNCTIONAL DESCRIPTION:
+!
+!   Returns the name of either the local or network character set.
+!
+! RETURNS:  	cond_value, longword (unsigned), write only, by value
+!
+! PROTOTYPE:
+!
+!   x
+!
+! IMPLICIT INPUTS:  None.
+!
+! IMPLICIT OUTPUTS: None.
+!
+! COMPLETION CODES:
+!
+!   SS$_NORMAL:	    	normal successful completion.
+!
+! SIDE EFFECTS:	    None.
+!--
+    BIND
+    	ctx 	= .ctx_a_a  	: REF CTXDEF;
+
+    IF .ctx EQL -2 OR .ctx EQL -1 THEN
+    	LIB$SYS_FAO (%ASCID'!AS', .len_a, .name_a,
+    	    	    (IF .code EQLU CHARCONV__LOCAL_CHARSET THEN dec_mcs ELSE iso_8859_1))
+    ELSE
+    	(.ctx [CTX_L_GETRTN]) (ctx [CTX_L_CVTCTX], code, .len_a, .name_a)
+
+END; ! charconv_convert
+
+%SBTTL 'FIS_SIG_TO_RET'
+ROUTINE FIS_SIG_TO_RET (SIG_A, MCH_A, ENB_A) =
+BEGIN
+!++
+! FUNCTIONAL DESCRIPTION:
+!
+!   Condition handler to convert find_image_symbol
+!   signals into return status codes.  Sort of like
+!   LIB$SIG_TO_RET, but returns the ancillary status
+!   code when the signal name is LIB$_ACTIMAGE.
+!
+! RETURNS:  	cond_value, longword (unsigned), write only, by value
+!
+! PROTOTYPE:
+!
+!   x
+!
+! IMPLICIT INPUTS:  None.
+!
+! IMPLICIT OUTPUTS: None.
+!
+! COMPLETION CODES:
+!
+!   SS$_NORMAL:	    	normal successful completion.
+!
+! SIDE EFFECTS:
+!
+!   None.
+!--
+    BIND
+    	sig 	= .SIG_A    	    	: BLOCK [,BYTE],
+    	sigvec 	= .SIG_A    	    	: VECTOR [,LONG],
+    	cond	= sig [CHF$L_SIG_NAME]	: BLOCK [,BYTE],
+    	mch 	= .MCH_A    	    	: BLOCK [,BYTE];
+
+    EXTERNAL LITERAL
+    	LIB$_ACTIMAGE;
+
+    LOCAL
+    	unwind : BLOCK [4,BYTE] INITIAL (SS$_UNWIND),
+    	libact : BLOCK [4,BYTE] INITIAL (LIB$_ACTIMAGE),
+    	status;
+
+    IF .cond [STS$V_COND_ID] EQL .unwind [STS$V_COND_ID] THEN
+    	RETURN SS$_NORMAL;
+
+    status = .sig [CHF$L_SIG_NAME];
+
+    IF .cond [STS$V_COND_ID] EQL .libact [STS$V_COND_ID] AND
+    	    .sig [CHF$L_SIG_ARGS] GEQU 6 THEN
+    	status = .sigvec [.sig [CHF$L_SIG_ARG1] + 3];
+
+%IF %BLISS (BLISS32V) %THEN
+    mch [CHF$L_MCH_SAVR0] = .status;
+%ELSE
+    mch [CHF$IL_MCH_SAVR0_LOW] = .status;
+%FI
+
+    $UNWIND ()  ! return to caller of procedure that established us
+
+END; ! fis_sig_to_ret
+
+%SBTTL 'find_image_symbol'
+ROUTINE find_image_symbol (fspec_a, symnam_a, symval_a) = 
+BEGIN
+!++
+! FUNCTIONAL DESCRIPTION:
+!
+!   Wrapper routine for calling LIB$FIND_IMAGE_SYMBOL that
+!   established a condition handler.  Need this because the
+!   handler unwinds the call stack to above where it gets
+!   established.
+!
+! RETURNS:  	cond_value, longword (unsigned), write only, by value
+!
+! PROTOTYPE:
+!
+!   FIND_IMAGE_SYMBOL  fspec, symnam, symval
+!
+! IMPLICIT INPUTS:  None.
+!
+! IMPLICIT OUTPUTS: None.
+!
+! COMPLETION CODES:
+!
+!   SS$_NORMAL:	    	normal successful completion.
+!
+! SIDE EFFECTS:
+!
+!   None.
+!--
+
+    ENABLE
+    	fis_sig_to_ret;
+
+    LIB$FIND_IMAGE_SYMBOL (.fspec_a, .symnam_a, .symval_a)
+
+END; ! find_image_symbol
+
+END
+ELUDOM

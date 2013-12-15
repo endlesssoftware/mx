@@ -1,0 +1,723 @@
+%TITLE 'FILEIO'
+MODULE FILEIO (IDENT='V1.3', ADDRESSING_MODE (EXTERNAL=LONG_RELATIVE,NONEXTERNAL=LONG_RELATIVE)) =
+BEGIN
+!++
+! FACILITY: 	    MX
+!
+! ABSTRACT:
+!
+!   File I/O routines, derived from MDMLIB.
+!
+! MODULE DESCRIPTION:
+!
+!   This module contains the simple RMS-interface routines.
+!
+! AUTHOR:   	    M. Madison
+!
+! Copyright (c) 2008, Matthew Madison.
+! 
+! All rights reserved.
+! 
+! Redistribution and use in source and binary forms, with or without
+! modification, are permitted provided that the following conditions
+! are met:
+! 
+!     * Redistributions of source code must retain the above
+!       copyright notice, this list of conditions and the following
+!       disclaimer.
+!     * Redistributions in binary form must reproduce the above
+!       copyright notice, this list of conditions and the following
+!       disclaimer in the documentation and/or other materials provided
+!       with the distribution.
+!     * Neither the name of the copyright owner nor the names of any
+!       other contributors may be used to endorse or promote products
+!       derived from this software without specific prior written
+!       permission.
+! 
+! THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
+! "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
+! LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
+! A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
+! OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
+! SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
+! LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
+! DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
+! THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
+! (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
+! OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+!
+! CREATION DATE:    27-DEC-1996 (from MDM_FIO.B32)
+!
+! MODIFICATION HISTORY:
+!
+!   27-DEC-1996	V1.0	Madison	    Initial coding (from MDM_FIO.B32).
+!   12-MAR-1997	V1.0-1	Madison	    Fix append+CIF logic.
+!   01-MAY-1997	V1.0-2	Madison	    Add delete-on-close.
+!   22-JUN-1997	V1.1	Madison	    Add async support.
+!   08-JUL-1998	V1.1-1	Madison	    Handle too-small buffers.
+!   10-DEC-2000	V1.2	Madison	    Add MX_FILE_FLUSH.
+!   18-DEC-2000	V1.2-1	Madison	    For ASY writes, wait before filling in RAB.
+!   04-FEB-2001 V1.2-2  Madison     Fix potential memory leak.
+!   02-MAR-2002 V1.3    Madison     Add fetch of creation date on open.
+!--
+
+    LIBRARY 'SYS$LIBRARY:STARLET';
+    LIBRARY 'MX';
+    LIBRARY 'FIELDS';
+
+    FORWARD ROUTINE
+    	MX_FILE_OPEN,
+    	MX_FILE_CLOSE,
+    	MX_FILE_READ,
+    	MX_FILE_WRITE,
+    	MX_FILE_REWIND,
+    	MX_FILE_FLUSH,
+    	MX_FILE_GETMAXREC;
+
+    EXTERNAL ROUTINE
+    	G_HAT (STR$COPY_R, LIB$ANALYZE_SDESC, LIB$GET_VM, LIB$FREE_VM,
+    	       LIB$CREATE_VM_ZONE, LIB$SCOPY_R_DX);
+
+    _DEF (FBK)
+    	FBK_X_FAB   = _BYTES (FAB$C_BLN),
+    	_ALIGN (QUAD)
+    	FBK_X_RAB   = _BYTES (RAB$C_BLN),
+    	_ALIGN (QUAD)
+    	FBK_X_NAM   = _BYTES (NAM$C_BLN),
+    	_ALIGN (QUAD)
+    	FBK_X_XABFHC = _BYTES (XAB$C_FHCLEN),
+    	_ALIGN (QUAD)
+    	FBK_L_INPROG = _LONG,
+    	FBK_L_BUFPTR = _LONG,
+    	FBK_L_BUFSIZ = _LONG,
+    	FBK_T_ESP   = _BYTES (255),
+    	FBK_T_RSP   = _BYTES (255)
+    _ENDDEF (FBK);
+
+    OWN
+    	FBKZONE	    : INITIAL (0),
+    	BUFZONE	    : INITIAL (0);
+
+%SBTTL 'MX_FILE_OPEN'
+GLOBAL ROUTINE MX_FILE_OPEN (KEY, FSPEC_A, UNIT_A_A,
+    	    	    	     DEFSPEC_A, RESSPEC_A, MAXREC_A, credt_a) =
+BEGIN
+!++
+! FUNCTIONAL DESCRIPTION:
+!
+!   This procedure either checks for the existence of a file
+!   (key EQL MX__FILE_EXISTS) or opens a sequential file for reading
+!   (key EQL MX__FILE_READ), writing (key EQL MX__FILE_WRITE), or appending
+!   (key EQL MX__FILE_APPEND).  The unit parameter is optional only when
+!   key EQL MX__FILE_EXISTS.  For all other key values, the unit parameter
+!   is assigned a contextual value which must be used for all future
+!   references to the opened file.
+!
+!   The "maxrec" parameter will hold the size of the longest record
+!   (if known, otherwise a number large enough to hold any record
+!   for the type of file opened).  It is returned only when the
+!   operation is MX__FILE_READ.
+!
+! RETURNS:  	cond_value, longword (unsigned), write only, by value
+!
+! PROTOTYPE:
+!
+!   MX_FILE_OPEN key, fspec [,unit] [,defspec] [,resspec] [,maxrec]
+!
+! key:	    unsigned_longword, longword (unsigned), read only, by value
+! fspec:    char_string, character string, read only, by descriptor
+! unit:	    address, longword (unsigned), write only, by reference
+! defspec:  char_string, character string, read only, by descriptor
+! resspec:  char_string, character string, write only, by descriptor
+! maxrec:   word_unsigned, word (unsigned), write only, by refernce
+!
+! IMPLICIT INPUTS:  None.
+!
+! IMPLICIT OUTPUTS: None.
+!
+! COMPLETION CODES:
+!
+!   SS$_NORMAL:	    	normal successful completion.
+!
+! SIDE EFFECTS:
+!
+!   None.
+!--
+    BIND
+    	FSPEC	= .FSPEC_A  	: BLOCK [DSC$K_S_BLN, BYTE],
+    	UNIT	= .UNIT_A_A 	: REF FBKDEF,
+    	DEFSPEC	= .DEFSPEC_A	: BLOCK [DSC$K_S_BLN, BYTE],
+    	RESSPEC	= .RESSPEC_A	: BLOCK [DSC$K_S_BLN, BYTE],
+    	MAXREC  = .MAXREC_A 	: WORD;
+
+    BUILTIN
+    	ACTUALCOUNT;
+
+    LOCAL
+    	XUNIT	: REF FBKDEF,
+    	FSADDR,
+    	DFSADDR,
+    	FSLEN	: WORD,
+    	DFSLEN	: WORD,
+    	ASTSTAT,
+    	BY_FID, CIF, SHARE, ASYNC,
+    	STATUS;
+
+    BY_FID = (.KEY AND MX_M_FILE_FIDOPEN) EQL MX_M_FILE_FIDOPEN;
+    CIF	   = (.KEY AND MX_M_CIF) EQL MX_M_CIF;
+    SHARE  = (.KEY AND MX_M_SHARE) EQL MX_M_SHARE;
+    ASYNC  = (.KEY AND MX_M_FILE_ASY) EQL MX_M_FILE_ASY;
+
+    KEY = .KEY AND %X'FF';
+
+    IF	.KEY NEQ MX__FILE_READ AND
+    	.KEY NEQ MX__FILE_WRITE AND
+    	.KEY NEQ MX__FILE_EXISTS AND
+    	.KEY NEQ MX__FILE_APPEND THEN RETURN SS$_BADPARAM;
+                           
+    IF .KEY EQL MX__FILE_EXISTS AND .BY_FID THEN RETURN SS$_BADPARAM;
+
+    IF ACTUALCOUNT () LSS 3 AND .KEY NEQ MX__FILE_EXISTS THEN
+    	RETURN SS$_BADPARAM;
+    IF UNIT EQLA 0 AND .KEY NEQ MX__FILE_EXISTS THEN RETURN SS$_BADPARAM;
+
+    STATUS = LIB$ANALYZE_SDESC (FSPEC, FSLEN, FSADDR);
+    IF NOT .STATUS OR (NOT .BY_FID AND .FSLEN GTR 255) OR
+    	(.BY_FID AND .FSLEN GTR 28) THEN RETURN SS$_BADPARAM;
+
+    IF NOT .BY_FID THEN
+    BEGIN
+    	DFSLEN = 0;
+    	IF ACTUALCOUNT () GTR 3 THEN
+    	    IF DEFSPEC NEQA 0 THEN
+    	    BEGIN
+    	    	STATUS = LIB$ANALYZE_SDESC (DEFSPEC, DFSLEN, DFSADDR);
+    	    	IF NOT .STATUS OR .DFSLEN GTR 255 THEN RETURN SS$_BADPARAM;
+    	    END;
+
+    	IF .DFSLEN EQL 0 THEN
+    	BEGIN
+    	    DFSLEN = 4;
+    	    DFSADDR = UPLIT ('.DAT');
+    	END;
+    END;
+
+    IF .BUFZONE EQLA 0 THEN
+    BEGIN
+    	ASTSTAT = $SETAST (ENBFLG=0);
+    	IF .BUFZONE EQLA 0 THEN
+    	BEGIN
+    	    STATUS = LIB$CREATE_VM_ZONE (FBKZONE, %REF (LIB$K_VM_FIXED),
+    	    	%REF (FBK_S_FBKDEF),
+    	    	%REF (LIB$M_VM_GET_FILL0 OR LIB$M_VM_EXTEND_AREA),
+    	    	%REF (4), %REF (4), %REF (8), %REF (8), 0, 0,
+    	    	%ASCID'MX_FILE_FBK_ZONE');
+    	    IF NOT .STATUS THEN SIGNAL_STOP (.STATUS);
+    	    STATUS = LIB$CREATE_VM_ZONE (BUFZONE, %REF (LIB$K_VM_FIRST_FIT),
+    	    	0, %REF (LIB$M_VM_EXTEND_AREA OR LIB$M_VM_BOUNDARY_TAGS),
+    	    	%REF (4), %REF (4), %REF (8), %REF (8), 0, 0, 
+    	    	%ASCID'MX_FILE_BUF_ZONE');
+    	    IF NOT .STATUS THEN SIGNAL_STOP (.STATUS);
+    	END;
+    	IF .ASTSTAT EQL SS$_WASSET THEN $SETAST (ENBFLG=1);
+    END;
+    STATUS = LIB$GET_VM (%REF (FBK_S_FBKDEF), XUNIT, FBKZONE);
+    IF NOT .STATUS THEN RETURN .STATUS;
+
+    IF .KEY NEQ MX__FILE_EXISTS THEN UNIT = .XUNIT;
+
+    BEGIN
+    	BIND
+    	    FAB = XUNIT [FBK_X_FAB] : $FAB_DECL,
+    	    RAB = XUNIT [FBK_X_RAB] : $RAB_DECL,
+    	    XAB = XUNIT [FBK_X_XABFHC] : $XABFHC_DECL,
+    	    NAM = XUNIT [FBK_X_NAM] : $NAM_DECL,
+    	    ESP = XUNIT [FBK_T_ESP] : BLOCK [255, BYTE],
+    	    RSP = XUNIT [FBK_T_RSP] : BLOCK [255, BYTE];
+
+    	$XABFHC_INIT (XAB=XAB);
+    	IF .BY_FID THEN
+    	BEGIN
+    	    $NAM_INIT (NAM=NAM);
+    	    CH$MOVE (MIN (28, .FSLEN), .FSADDR, NAM [NAM$T_DVI]);
+    	END
+    	ELSE
+    	    $NAM_INIT (NAM=NAM, ESS=255, ESA=ESP, RSS=255, RSA=RSP);
+
+    	SELECTONE .KEY OF
+    	SET
+
+    	[MX__FILE_READ] :
+    	    BEGIN
+                LOCAL
+                    xabdat  : $XABDAT_DECL;
+
+    	    	$FAB_INIT (FAB=FAB, NAM=NAM, XAB=XAB, FAC=GET, SHR=SHRGET);
+    	    	$RAB_INIT (RAB=RAB, FAB=FAB, ROP=RAH, CTX=.XUNIT);
+    	    	IF .BY_FID THEN FAB [FAB$V_NAM] = 1
+    	    	ELSE
+    	    	BEGIN
+    	    	    FAB [FAB$L_FNA] = .FSADDR;
+    	    	    FAB [FAB$B_FNS] = .FSLEN;
+    	    	    FAB [FAB$L_DNA] = .DFSADDR;
+    	    	    FAB [FAB$B_DNS] = .DFSLEN;
+    	    	END;
+                IF ACTUALCOUNT () GTR 6 AND .credt_a NEQA 0 THEN
+                BEGIN
+                    $XABDAT_INIT (XAB=XABDAT);
+                    XAB [XAB$L_NXT] = XABDAT;
+                END;
+    	    	STATUS = $OPEN (FAB=FAB);
+    	    	IF .STATUS THEN
+    	    	BEGIN
+    	    	    XUNIT [FBK_L_BUFSIZ] = (IF .FAB [FAB$W_MRS] EQL 0 THEN
+    	    	    	IF .XAB [XAB$W_LRL] EQL 0 THEN 32767 ELSE
+    	    	    	    .XAB [XAB$W_LRL] ELSE .FAB [FAB$W_MRS]);
+    	    	    STATUS = LIB$GET_VM (XUNIT [FBK_L_BUFSIZ],
+    	    	    	XUNIT [FBK_L_BUFPTR], BUFZONE);
+                    IF NOT .STATUS THEN XUNIT [FBK_L_BUFPTR] = 0;
+    	    	    IF ACTUALCOUNT () GTR 5 AND .MAXREC_A NEQA 0 THEN
+    	    	    	MAXREC = .XUNIT [FBK_L_BUFSIZ];
+                    IF ACTUALCOUNT () GTR 6 AND .credt_a NEQA 0 THEN
+                    BEGIN
+                        CH$MOVE (8, xabdat [XAB$Q_CDT], .credt_a);
+                        XAB [XAB$L_NXT] = 0;
+                    END;
+    	    	END;
+    	    END;
+
+    	[MX__FILE_WRITE, MX__FILE_APPEND] :
+    	    BEGIN
+    	    	$FAB_INIT (FAB=FAB, NAM=NAM, XAB=XAB,
+    	    	    FAC=PUT, RFM=VAR, RAT=CR, MRS=0, FOP=TEF);
+
+    	    	IF .CIF THEN
+    	    	    FAB [FAB$V_CIF] = 1;
+
+    	    	IF .SHARE THEN
+    	    	    FAB [FAB$B_SHR] = FAB$M_SHRGET OR FAB$M_SHRPUT OR FAB$M_SHRDEL OR FAB$M_SHRUPD;
+
+    	    	IF .BY_FID THEN FAB [FAB$V_NAM] = 1
+    	    	ELSE
+    	    	BEGIN
+    	    	    FAB [FAB$L_FNA] = .FSADDR;
+    	    	    FAB [FAB$B_FNS] = .FSLEN;
+    	    	    FAB [FAB$L_DNA] = .DFSADDR;
+    	    	    FAB [FAB$B_DNS] = .DFSLEN;
+    	    	END;
+    	    	$RAB_INIT (RAB=RAB, FAB=FAB, ROP=WBH, CTX=.XUNIT);
+
+    	    	IF .KEY EQL MX__FILE_APPEND AND NOT .CIF THEN
+    	    	BEGIN
+    	    	    STATUS = $OPEN (FAB=FAB);
+    	    	    RAB [RAB$V_EOF] = 1;
+    	    	END
+    	    	ELSE
+    	    	BEGIN
+    	    	    STATUS = $CREATE (FAB=FAB);
+    	    	    IF .KEY EQL MX__FILE_APPEND AND .STATUS NEQ SS$_CREATED THEN
+    	    	    	RAB [RAB$V_EOF] = 1;
+    	    	END;
+    	    	IF .status AND .async THEN
+    	    	BEGIN
+    	    	    xunit [fbk_l_bufsiz] = 65536;
+    	    	    IF NOT LIB$GET_VM (XUNIT [FBK_L_BUFSIZ], XUNIT [FBK_L_BUFPTR], BUFZONE) THEN
+    	    	    BEGIN
+    	    	    	XUNIT [FBK_L_BUFPTR] = 0;
+    	    	    	async = 0;
+    	    	    END;
+    	    	END;
+    	    END;
+
+    	[MX__FILE_EXISTS] :
+    	    BEGIN
+    	    	$FAB_INIT (FAB=FAB, NAM=NAM, FNA=.FSADDR, FNS=.FSLEN,
+    	    	    DNA=.DFSADDR, DNS=.DFSLEN);
+    	    	STATUS = $PARSE (FAB=FAB);
+    	    	IF .STATUS THEN
+    	    	    IF .NAM [NAM$V_WILDCARD] THEN STATUS = SS$_BADPARAM
+    	    	    ELSE STATUS = $SEARCH (FAB=FAB);
+    	    	IF .STATUS AND ACTUALCOUNT () GTR 4 THEN
+    	    	    IF .RESSPEC_A NEQA 0 THEN
+    	    	    	STR$COPY_R (.RESSPEC_A, %REF (.NAM [NAM$B_RSL]), .NAM [NAM$L_RSA]);
+    	    	NAM [NAM$V_SYNCHK] = 1;
+    	    	$PARSE (FAB=FAB);
+    	    	LIB$FREE_VM (%REF (FBK_S_FBKDEF), XUNIT, FBKZONE);
+    	    	RETURN .STATUS;
+    	    END;
+
+    	TES;
+
+    	IF NOT .STATUS THEN
+    	BEGIN
+    	    IF .XUNIT [FBK_L_BUFPTR] NEQA 0 THEN
+    	    	LIB$FREE_VM (XUNIT [FBK_L_BUFSIZ], XUNIT [FBK_L_BUFPTR], BUFZONE);
+    	    LIB$FREE_VM (%REF (FBK_S_FBKDEF), XUNIT, FBKZONE);
+    	    UNIT = 0;
+    	    RETURN .STATUS;
+    	END;
+
+    	STATUS = $CONNECT (RAB=RAB);
+
+    	IF .KEY EQL MX__FILE_APPEND AND .STATUS EQL RMS$_EOF THEN
+    	    STATUS = RMS$_NORMAL;
+
+    	IF  NOT .STATUS THEN
+    	BEGIN
+    	    IF .XUNIT [FBK_L_BUFPTR] NEQA 0 THEN
+    	    	LIB$FREE_VM (XUNIT [FBK_L_BUFSIZ], XUNIT [FBK_L_BUFPTR], BUFZONE);
+    	    $CLOSE (FAB=FAB);
+    	    NAM [NAM$V_SYNCHK] = 1;
+    	    $PARSE (FAB=FAB);
+    	    LIB$FREE_VM (%REF (FBK_S_FBKDEF), XUNIT, FBKZONE);
+    	    UNIT = 0;
+    	    RETURN .STATUS;
+    	END;
+
+    	IF .ASYNC THEN
+    	BEGIN
+    	    RAB [RAB$V_ASY] = 1;
+    	    RAB [RAB$L_RBF] = .xunit [FBK_L_BUFPTR];
+    	END;
+
+    	IF ACTUALCOUNT () GTR 4 THEN
+    	    IF NOT .BY_FID AND RESSPEC NEQA 0 THEN
+    	    	STR$COPY_R (RESSPEC, %REF (.NAM [NAM$B_RSL]), RSP);
+
+    END;
+
+    .STATUS
+
+END; ! MX_FILE_OPEN
+
+%SBTTL 'MX_FILE_CLOSE'
+GLOBAL ROUTINE MX_FILE_CLOSE (UNIT_A, DELETE_ON_CLOSE) = 
+BEGIN
+!++
+! FUNCTIONAL DESCRIPTION:
+!
+!   This routine closes a file that was opened with MX_FILE_OPEN.
+!
+! RETURNS:  	cond_value, longword (unsigned), write only, by value
+!
+! PROTOTYPE:
+!
+!   MX_FILE_CLOSE unit
+!
+! unit:	    fbk, longword (unsigned), modify, by reference
+!
+! IMPLICIT INPUTS:  None.
+!
+! IMPLICIT OUTPUTS: None.
+!
+! COMPLETION CODES:
+!
+!   SS$_NORMAL:	    	normal successful completion.
+!
+! SIDE EFFECTS:
+!
+!   None.
+!--
+    BIND
+    	UNIT	= .UNIT_A   	    : FBKDEF,
+    	FAB 	= UNIT [FBK_X_FAB]  : $FAB_DECL,
+    	RAB 	= UNIT [FBK_X_RAB]  : $RAB_DECL,
+    	NAM 	= UNIT [FBK_X_NAM]  : $NAM_DECL;
+
+    BUILTIN
+    	ACTUALCOUNT;
+
+    LOCAL
+    	XUNIT,
+    	STATUS;
+
+    IF ACTUALCOUNT () GTR 1 THEN
+    	FAB [FAB$V_DLT] = .DELETE_ON_CLOSE;
+
+    IF .RAB [RAB$V_ASY] AND .rab [RAB$L_STS] EQLU 0 THEN $WAIT (RAB=RAB);
+    RAB [RAB$V_ASY] = 0;
+
+    STATUS = $CLOSE (FAB=FAB);
+    FAB [FAB$L_FNA] = UNIT [FBK_T_RSP];  ! some valid address
+    FAB [FAB$B_FNS] = .NAM [NAM$B_RSL];
+    FAB [FAB$L_DNA] = 0;    	    	! clear this
+    FAB [FAB$B_DNS] = 0;
+    NAM [NAM$V_SYNCHK] = 1;
+    $PARSE (FAB=FAB);
+    IF .UNIT [FBK_L_BUFPTR] NEQA 0 THEN
+    	LIB$FREE_VM (UNIT [FBK_L_BUFSIZ], UNIT [FBK_L_BUFPTR], BUFZONE);
+    XUNIT = UNIT;
+    LIB$FREE_VM (%REF (FBK_S_FBKDEF), XUNIT, FBKZONE);
+
+    .STATUS
+
+END; ! MX_FILE_CLOSE
+
+%SBTTL 'MX_FILE_READ'
+GLOBAL ROUTINE MX_FILE_READ (UNIT_A, RECSTR_A, LEN_A) = 
+BEGIN
+!++
+! FUNCTIONAL DESCRIPTION:
+!
+!   This routine reads a record from a file opened for reading by
+!   MX_FILE_OPEN.
+!
+! RETURNS:  	cond_value, longword (unsigned), write only, by value
+!
+! PROTOTYPE:
+!
+!   MX_FILE_READ unit, recstr [,len]
+!
+! unit:	    fbk, longword (unsigned), modify, by reference
+! recstr:   char_string, character string, write only, by descriptor
+! len:	    unsigned_word, word (unsigned), write only, by reference
+!
+! IMPLICIT INPUTS:  None.
+!
+! IMPLICIT OUTPUTS: None.
+!
+! COMPLETION CODES:
+!
+!   SS$_NORMAL:	    	normal successful completion.
+!
+! SIDE EFFECTS:
+!
+!   None.
+!--
+
+    BUILTIN
+    	ACTUALCOUNT;
+
+    BIND
+    	UNIT	= .UNIT_A   	   : FBKDEF,
+    	RECSTR	= .RECSTR_A 	   : BLOCK [,BYTE],
+    	LEN 	= .LEN_A    	   : WORD,
+    	RAB 	= UNIT [FBK_X_RAB] : $RAB_DECL;
+
+    LOCAL
+    	STATUS;
+
+    IF .RECSTR [DSC$B_CLASS] EQL DSC$K_CLASS_S THEN
+    BEGIN
+    	IF .recstr [DSC$W_LENGTH] GEQU .unit [FBK_L_BUFSIZ] THEN
+    	BEGIN
+    	    RAB [RAB$L_UBF] = .RECSTR [DSC$A_POINTER];
+    	    RAB [RAB$W_USZ] = .RECSTR [DSC$W_LENGTH];
+    	    STATUS = $GET (RAB=RAB);
+    	    IF .STATUS AND ACTUALCOUNT () GTR 2 THEN
+    	    	IF .LEN_A NEQA 0 THEN LEN = .RAB [RAB$W_RSZ];
+    	END
+    	ELSE
+    	BEGIN
+    	    rab [RAB$L_UBF] = .unit [FBK_L_BUFPTR];
+    	    rab [RAB$W_USZ] = .unit [FBK_L_BUFSIZ];
+    	    status = $GET (RAB=rab);
+    	    IF .status THEN
+    	    BEGIN
+    	    	CH$MOVE (MINU (.rab [RAB$W_RSZ], .recstr [DSC$W_LENGTH]), .unit [FBK_L_BUFPTR], .recstr [DSC$A_POINTER]);
+    	    	IF ACTUALCOUNT () GTR 2 THEN
+    	    	    IF .len_a NEQA 0 THEN len = MINU (.rab [RAB$W_RSZ], .recstr [DSC$W_LENGTH]);
+    	    END;
+    	END;
+    END
+    ELSE
+    BEGIN
+    	RAB [RAB$L_UBF] = .UNIT [FBK_L_BUFPTR];
+    	RAB [RAB$W_USZ] = .UNIT [FBK_L_BUFSIZ];
+    	STATUS = $GET (RAB=RAB);
+    	IF .STATUS THEN
+    	BEGIN
+    	    STATUS = LIB$SCOPY_R_DX (RAB [RAB$W_RSZ], .UNIT [FBK_L_BUFPTR],
+    	    	    	    	     RECSTR);
+    	    IF ACTUALCOUNT () GTR 2 THEN
+    	    	IF .LEN_A NEQA 0 THEN LEN = .RAB [RAB$W_RSZ];
+    	END;
+    END;
+
+    .STATUS
+
+END; ! MX_FILE_READ
+
+%SBTTL 'MX_FILE_WRITE'
+GLOBAL ROUTINE MX_FILE_WRITE (UNIT_A, RECSTR_A) = 
+BEGIN
+!++
+! FUNCTIONAL DESCRIPTION:
+!
+!   This routine writes a record to a file opened (for writing or appending)
+!   by MX_FILE_OPEN.
+!
+! RETURNS:  	cond_value, longword (unsigned), write only, by value
+!
+! PROTOTYPE:
+!
+!   MX_FILE_WRITE unit, recstr
+!
+! unit:	    fbk, longword (unsigned), modify, by reference
+! recstr:   char_string, character string, read only, by descriptor
+!
+! IMPLICIT INPUTS:  None.
+!
+! IMPLICIT OUTPUTS: None.
+!
+! COMPLETION CODES:
+!
+!   SS$_NORMAL:	    	normal successful completion.
+!
+! SIDE EFFECTS:
+!
+!   None.
+!--
+
+    BIND
+    	UNIT	= .UNIT_A   	   : FBKDEF,
+    	RAB 	= UNIT [FBK_X_RAB] : $RAB_DECL;
+
+    LOCAL
+    	STATUS;
+
+    IF .RAB [RAB$V_ASY] THEN
+    BEGIN
+    	LOCAL
+    	    len	: WORD,
+    	    ptr;
+    	status = LIB$ANALYZE_SDESC (.recstr_a, len, ptr);
+    	IF NOT .status THEN
+    	    RETURN .status;
+
+    	IF .RAB [RAB$L_STS] EQL 0 THEN
+    	    $WAIT (RAB=RAB);
+
+    	IF NOT .rab [RAB$L_STS] THEN
+    	    RETURN .rab [RAB$L_STS];
+
+    	IF .len GTRU 0 THEN
+    	    CH$MOVE (.len, .ptr, .unit [FBK_L_BUFPTR]);
+    	rab [RAB$W_RSZ] = .len;
+
+    	status = $PUT (RAB=rab);
+    END
+    ELSE
+    BEGIN
+    	STATUS = LIB$ANALYZE_SDESC (.RECSTR_A, RAB [RAB$W_RSZ], RAB [RAB$L_RBF]);
+    	IF .STATUS THEN
+    	    STATUS = $PUT (RAB=RAB);
+    END;
+
+    .STATUS
+
+END; ! MX_FILE_WRITE
+
+%SBTTL 'MX_FILE_REWIND'
+GLOBAL ROUTINE MX_FILE_REWIND (UNIT) = 
+BEGIN
+!++
+! FUNCTIONAL DESCRIPTION:
+!
+!   This routine rewinds a file opened by MX_FILE_OPEN.
+!
+! RETURNS:  	cond_value, longword (unsigned), write only, by value
+!
+! PROTOTYPE:
+!
+!   MX_FILE_REWIND unit
+!
+! IMPLICIT INPUTS:  None.
+!
+! IMPLICIT OUTPUTS: None.
+!
+! COMPLETION CODES:
+!
+!   SS$_NORMAL:	    	normal successful completion.
+!
+! SIDE EFFECTS:
+!
+!   None.
+!--
+
+    MAP
+    	UNIT : REF FBKDEF;
+
+    BIND
+    	RAB = UNIT [FBK_X_RAB] : $RAB_DECL;
+
+    $REWIND (RAB=RAB)
+
+END; ! MX_FILE_REWIND
+
+%SBTTL 'MX_FILE_FLUSH'
+GLOBAL ROUTINE MX_FILE_FLUSH (UNIT_A) = 
+BEGIN
+!++
+! FUNCTIONAL DESCRIPTION:
+!
+!   This routine performs a $FLUSH on the file.
+!
+! RETURNS:  	cond_value, longword (unsigned), write only, by value
+!
+! PROTOTYPE:
+!
+!   MX_FILE_FLUSH  unit
+!
+! unit:	    fbk, longword (unsigned), modify, by reference
+!
+! IMPLICIT INPUTS:  None.
+!
+! IMPLICIT OUTPUTS: None.
+!
+! COMPLETION CODES:
+!
+!   SS$_NORMAL:	    	normal successful completion.
+!
+! SIDE EFFECTS:
+!
+!   None.
+!--
+
+    BIND
+    	UNIT	= .UNIT_A   	   : FBKDEF,
+    	RAB 	= UNIT [FBK_X_RAB] : $RAB_DECL;
+
+
+    $FLUSH (RAB=RAB)
+
+END; ! MX_FILE_FLUSH
+
+%SBTTL 'MX_FILE_GETMAXREC'
+GLOBAL ROUTINE MX_FILE_GETMAXREC (UNIT_A, BUFSIZ_A) = 
+BEGIN
+!++
+! FUNCTIONAL DESCRIPTION:
+!
+!   description
+!
+! RETURNS:  	cond_value, longword (unsigned), write only, by value
+!
+! PROTOTYPE:
+!
+!   x
+!
+! IMPLICIT INPUTS:  None.
+!
+! IMPLICIT OUTPUTS: None.
+!
+! COMPLETION CODES:
+!
+!   SS$_NORMAL:	    	normal successful completion.
+!
+! SIDE EFFECTS:
+!
+!   None.
+!--
+
+    BIND
+    	UNIT	= .UNIT_A : FBKDEF;
+
+    .BUFSIZ_A = .UNIT [FBK_L_BUFSIZ];
+
+    SS$_NORMAL
+
+END; ! MX_FILE_GETMAXREC
+
+END
+ELUDOM

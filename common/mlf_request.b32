@@ -1,0 +1,199 @@
+%TITLE 'MLF_REQUEST'
+MODULE MLF_REQUEST (IDENT='V1.5',
+    	    	    ADDRESSING_MODE (EXTERNAL=LONG_RELATIVE,
+				     NONEXTERNAL=LONG_RELATIVE)) =
+BEGIN
+!++
+! FACILITY: 	    MX Router
+!
+! ABSTRACT: 	    Routine for checking mailing list & fileserv addresses.
+!
+! MODULE DESCRIPTION:
+!
+!   This module contains a routine that identifies mailing list and
+!   file server requests.
+!
+! AUTHOR:   	    M. Madison
+!
+! Copyright (c) 2008, Matthew Madison.
+! 
+! All rights reserved.
+! 
+! Redistribution and use in source and binary forms, with or without
+! modification, are permitted provided that the following conditions
+! are met:
+! 
+!     * Redistributions of source code must retain the above
+!       copyright notice, this list of conditions and the following
+!       disclaimer.
+!     * Redistributions in binary form must reproduce the above
+!       copyright notice, this list of conditions and the following
+!       disclaimer in the documentation and/or other materials provided
+!       with the distribution.
+!     * Neither the name of the copyright owner nor the names of any
+!       other contributors may be used to endorse or promote products
+!       derived from this software without specific prior written
+!       permission.
+! 
+! THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
+! "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
+! LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
+! A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
+! OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
+! SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
+! LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
+! DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
+! THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
+! (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
+! OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+!
+! CREATION DATE:    27-JUN-1990
+!
+! MODIFICATION HISTORY:
+!
+!   27-JUN-1990	V1.0	Madison	    Initial coding.
+!   02-NOV-1990	V1.0-1	Madison	    Not handling file server mgr adrs properly.
+!   05-NOV-1990	V1.0-2	Madison	    Must add <> to file server mgr addresses.
+!    6-APR-1993 V1.1	Goatley     Add "Postmaster" default if no fs-mgr addr.
+!   30-APR-1993 V1.1-1	Goatley     Add MXserver and MXSERV as = to LISTSERV.
+!    7-AUG-1993 V1.2	Goatley     Removed LISTSERV address.
+!   24-MAR-1994 V1.2-1	Goatley     Recognize -server address = -request.
+!   12-SEP-1995 V1.3	Goatley     Recognize -digest address.
+!   23-MAY-1997 V1.4	Goatley	    Added LONG_RELATIVE addressing mode.
+!   10-SEP-1997 V1.4-1	Goatley     Added LONG_RELATIVE for non-external too.
+!   01-FEB-2001 V1.4-2  Madison     Clear allocated RCPs.
+!   14-FEB-2002 V1.5    Madison     Allow "+transaction-id" on MXSERVER.
+!--
+    LIBRARY 'SYS$LIBRARY:STARLET';
+    LIBRARY 'MX_SRC_COMMON:MX';
+    LIBRARY 'MX_SRC_COMMON:AGENT';
+    LIBRARY 'MX_SRC_COMMON:MX_LCLDEFS';
+    LIBRARY 'ROUTER';
+
+    FORWARD ROUTINE
+    	MLF_REQUEST;
+
+    EXTERNAL ROUTINE
+	G_HAT (MX_FMT_LCL_ADDR),
+    	G_HAT (STR$CASE_BLIND_COMPARE, STR$APPEND, STR$COPY_R, STR$CONCAT,
+    	    STR$PREFIX, LIB$GET_VM, LIB$SYS_FAO);
+
+    EXTERNAL
+    	MLISTS	    : QUEDEF,
+    	FSRVQUE	    : QUEDEF;
+
+%SBTTL 'MLF_REQUEST'
+GLOBAL ROUTINE MLF_REQUEST (USR_A, NEWRCP_A_A) = 
+BEGIN
+!++
+! FUNCTIONAL DESCRIPTION:
+!
+!   Checks the list of mailing lists to see if the specified "recipient"
+!   is a mailing list name or mailing list control name (list-REQUEST).
+!   MXserver and MXSERV are accepted as mailing list control names.
+!
+! RETURNS:  	cond_value, longword (unsigned), write only, by value
+!
+! PROTOTYPE:
+!
+!   MLF_REQUEST  usr
+!
+! IMPLICIT INPUTS:  None.
+!
+! IMPLICIT OUTPUTS: None.
+!
+! COMPLETION CODES:
+!
+!   1: address represents a mailing list or fileserv request.
+!   0: not a mailing list or fileserv request.
+!
+! SIDE EFFECTS:
+!
+!   None.
+!--
+    BIND
+    	USR 	= .USR_A    	: BLOCK [,BYTE],
+    	NEWRCP	= .NEWRCP_A_A	: REF RCPDEF;
+
+    LOCAL
+    	F   	: REF FSRVDEF,
+    	M   	: REF MLSTDEF,
+    	STR 	: BLOCK [DSC$K_S_BLN,BYTE],
+	str2	: $BBLOCK [DSC$K_S_BLN],
+        dsc     : BLOCK [DSC$K_S_BLN,BYTE],
+        CP,
+    	STATUS;
+
+    INIT_DYNDESC (str, str2);
+
+    INIT_SDESC (dsc, .usr [DSC$W_LENGTH], .usr [DSC$A_POINTER]);
+    cp = CH$FIND_CH (.usr [DSC$W_LENGTH], .usr [DSC$A_POINTER], %C'+');
+    IF NOT CH$FAIL (.cp) THEN
+        dsc [DSC$W_LENGTH] = CH$DIFF (.cp, .usr [DSC$A_POINTER]);
+    IF STR$CASE_BLIND_COMPARE (dsc, %ASCID'MXSERV') EQL 0 THEN RETURN 1;
+    IF STR$CASE_BLIND_COMPARE (dsc, %ASCID'MXSERVER') EQL 0 THEN RETURN 1;
+
+    M = .MLISTS [QUE_L_HEAD];
+    STATUS = (WHILE .M NEQA MLISTS [QUE_L_HEAD] DO
+    BEGIN
+    	STR$COPY_R (STR, M [MLST_W_NAME], M [MLST_T_NAME]);
+    	IF STR$CASE_BLIND_COMPARE (STR, USR) EQL 0 THEN EXITLOOP 1;
+    	STR$CONCAT (str2, str, %ASCID'-request');
+    	IF STR$CASE_BLIND_COMPARE (str2, usr) EQL 0 THEN EXITLOOP 1;
+    	STR$CONCAT (str2, str, %ASCID'-digest');
+    	IF STR$CASE_BLIND_COMPARE (str2, usr) EQL 0 THEN EXITLOOP 1;
+    	STR$CONCAT (str2, str, %ASCID'-server');
+    	IF STR$CASE_BLIND_COMPARE (str2, usr) EQL 0 THEN EXITLOOP 1;
+    	STR$CONCAT (str2, %ASCID'owner-', str);
+    	IF STR$CASE_BLIND_COMPARE (str2, usr) EQL 0 THEN EXITLOOP 1;
+    	M = .M [MLST_L_FLINK];
+    END);
+
+    IF .STATUS EQL 1 THEN
+    BEGIN
+    	FREE_STRINGS (str, str2);
+    	RETURN 1
+    END;
+
+    F = .FSRVQUE [QUE_L_HEAD];
+    STATUS = (WHILE .F NEQA FSRVQUE [QUE_L_HEAD] DO
+    BEGIN
+    	STR$COPY_R (STR, F [FSRV_W_NAME], F [FSRV_T_NAME]);
+    	IF STR$CASE_BLIND_COMPARE (STR, USR) EQL 0 THEN EXITLOOP 1;
+    	STR$APPEND (STR, %ASCID'-mgr');
+    	IF STR$CASE_BLIND_COMPARE (STR, USR) EQL 0 THEN
+    	BEGIN
+    	    LIB$GET_VM (%REF (RCP_S_RCPDEF), NEWRCP);
+            CH$FILL (%CHAR (0), RCP_S_RCPDEF, .NEWRCP);
+    	    INIT_DYNDESC (NEWRCP [RCP_Q_RWADR], NEWRCP [RCP_Q_ORGADR],
+    	    	NEWRCP [RCP_Q_ERRMSG], NEWRCP [RCP_Q_NEXTHOP]);
+	    IF (.f [FSRV_W_MGR] EQLU 0) OR		!If no manager or the
+	       ((.f [FSRV_W_MGR] EQLU 2) AND		!... manager is given
+		(CH$RCHAR(f [FSRV_T_MGR]) EQLU %C'<'))	!... as "<>", then use
+	    THEN					!... "<Postmaster@host>"
+		MX_FMT_LCL_ADDR (MX__FMT_ENVFROM, %ASCID'Postmaster', newrcp [RCP_Q_ORGADR])
+	    ELSE					!Else copy the mgr addr
+		STR$COPY_R (NEWRCP [RCP_Q_ORGADR], F [FSRV_W_MGR],
+				F [FSRV_T_MGR]);
+	    !
+	    !  If the address is not wrapped by "<>", then add them.
+	    !
+	    BEGIN
+	    BIND x = newrcp [RCP_Q_ORGADR] : $BBLOCK;
+	    IF CH$RCHAR(.x[DSC$A_POINTER]) NEQU %C'<'
+	    THEN
+		LIB$SYS_FAO (%ASCID'<!AS>', 0,
+			newrcp [RCP_Q_ORGADR], newrcp [RCP_Q_ORGADR]);
+	    END;
+    	    EXITLOOP 1;
+    	END;
+    	F = .F [FSRV_L_FLINK];
+    END);
+    FREE_STRINGS (str, str2);
+
+    .STATUS EQL 1
+
+END; ! MLF_REQUEST
+
+END
+ELUDOM

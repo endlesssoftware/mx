@@ -1,0 +1,981 @@
+%TITLE 'REWRITE'
+MODULE REWRITE (IDENT='V2.1',
+	ADDRESSING_MODE (EXTERNAL=LONG_RELATIVE, NONEXTERNAL=LONG_RELATIVE)) =
+BEGIN
+!++
+! FACILITY: 	    MX Router
+!
+! ABSTRACT: 	    Routines for rewriting mail addresses.
+!
+! MODULE DESCRIPTION:
+!
+!   This module contains routines that rewrite mail addresses.
+!
+! AUTHOR:   	    M. Madison
+!
+! Copyright (c) 2008, Matthew Madison.
+! 
+! All rights reserved.
+! 
+! Redistribution and use in source and binary forms, with or without
+! modification, are permitted provided that the following conditions
+! are met:
+! 
+!     * Redistributions of source code must retain the above
+!       copyright notice, this list of conditions and the following
+!       disclaimer.
+!     * Redistributions in binary form must reproduce the above
+!       copyright notice, this list of conditions and the following
+!       disclaimer in the documentation and/or other materials provided
+!       with the distribution.
+!     * Neither the name of the copyright owner nor the names of any
+!       other contributors may be used to endorse or promote products
+!       derived from this software without specific prior written
+!       permission.
+! 
+! THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
+! "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
+! LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
+! A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
+! OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
+! SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
+! LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
+! DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
+! THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
+! (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
+! OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+!
+! CREATION DATE:    27-APR-1989
+!
+! MODIFICATION HISTORY:
+!
+!   27-APR-1989	V1.0	Madison	    Initial coding.
+!   12-DEC-1989	V1.0-1	Madison	    Added %-dehacking.
+!   12-DEC-1989	V1.0-2	Madison	    Moved config info to MCP.
+!   29-DEC-1989	V1.1-3	Madison	    Added mlist-Sender checking to FINDALIAS.
+!   10-JAN-1990	V1.1-4	Madison	    Found bug in %-dehacking code.
+!   17-MAY-1990	V1.1-5	Madison	    Rewrites weren't going right-to-left!
+!   27-JUN-1990	V1.2-6	Madison	    Move init back to PROCESS; add dir hooks.
+!   27-SEP-1990	V1.3	Madison	    Add new init code, %-hack opt, exp hooks.
+!   07-DEC-1990	V1.3-1	Madison	    Fix EXP hook.
+!   20-DEC-1990	V1.3-2	Madison	    Fix zero-length var substitution in REWRITE.
+!   02-MAR-1991	V1.4	Madison	    Make EXPCTX and EXP_EXPAND global.
+!   18-OCT-1991	V1.5	Madison	    Handle new PATH parameter.
+!   14-NOV-1991	V1.6	Madison	    Add support for BITNET DOMAIN NAMES file.
+!   18-MAY-1992	V1.6-1	Madison	    Hack in dot check to prevent domexp death.
+!   17-DEC-1993	V1.7	Goatley     Fixed typo in TRACE statement for site conv.
+!   18-JAN-1994	V1.7-1	Goatley     Merge in header rewriting code (Allebrandi)
+!   05-JAN-1997	V1.8	Madison	    Eliminate MDMLIB.
+!    4-DEC-1997 V1.8-1	Goatley     Use LONG_RELATIVE addressing.
+!   25-NOV-2000	V1.9	Madison	    Remove BITNET support.
+!   17-DEC-2000	V1.10	Madison	    Add "virtual domain" callout to ADDRESS_REWRITER.
+!   18-FEB-2002 V2.0    Madison     Regular expressions.
+!   11-NOV-2004 V2.1    Madison     IA64 support.
+!--
+    LIBRARY 'SYS$LIBRARY:STARLET';
+    LIBRARY 'SYS$LIBRARY:TPAMAC';
+    LIBRARY 'MX_SRC_COMMON:MX';
+    LIBRARY 'MX_SRC_COMMON:MX_LCLDEFS';
+    LIBRARY 'MX_SRC_COMMON:REGEX';
+    LIBRARY 'MX_SRC_COMMON:FIELDS';
+    LIBRARY 'ROUTER';
+
+    FORWARD ROUTINE
+    	REWRITE_INIT,
+    	REWRITE,
+    	REWRITE_VIRTUAL_DOMAIN,
+    	FINDPATH,
+    	FINDALIAS,
+    	fis_sig_to_ret,
+    	find_image_symbol;
+
+    EXTERNAL ROUTINE
+    	G_HAT (STR$RIGHT, STR$FIND_FIRST_NOT_IN_SET, STR$COPY_R,
+    	    STR$TRIM, STR$CASE_BLIND_COMPARE, STR$COPY_DX, STR$APPEND,
+    	    STR$MATCH_WILD, STR$UPCASE, STR$CONCAT, STR$GET1_DX),
+    	G_HAT (LIB$GET_VM, LIB$FREE_VM, LIB$SYS_FAO, LIB$FIND_IMAGE_SYMBOL);
+
+    EXTERNAL LITERAL
+    	MX__RWINITERR, MX__NOMATCH;
+
+    EXTERNAL
+    	RWRULES	    : QUEDEF,
+    	PATHLIST    : QUEDEF,
+    	ALIASES	    : QUEDEF,
+    	MLISTS	    : QUEDEF,
+    	ROUTER_INFO : ROUTERDEF;
+
+    TRACE_DECLARATIONS (EXTERNAL);
+
+    LITERAL
+        VAR_S_LHS       = 32,
+        VAR_S_RHS       = 256;
+
+    _DEF (VAR)
+        VAR_L_FLINK     = _LONG,
+        VAR_L_BLINK     = _LONG,
+        VAR_W_LHS       = _WORD,
+        VAR_T_LHS       = _BYTES (VAR_S_LHS),
+        VAR_W_RHS       = _WORD,
+        VAR_T_RHS       = _BYTES (VAR_S_RHS)
+    _ENDDEF (VAR);
+
+    GLOBAL
+    	EXPCTX	    : INITIAL (0),
+    	EXP_EXPAND,
+    	RWCTX       : INITIAL (0),
+    	RW_REWRITE_HEADER;
+	
+    OWN
+    	EXP_INIT,
+    	EXP_CLEANUP,
+    	DIRCTX      : INITIAL (0),
+    	DIR_INIT,
+    	DIR_CONVERT,
+    	DIR_CLEANUP,
+    	RW_INIT,
+    	RW_REWRITE_ENVELOPE,
+    	rw_virtual_domain,
+    	RW_CLEANUP;
+
+    BIND
+    	addrw_d	    = %ASCID'MX_SITE_ADDRESS_REWRITER',
+    	namcon_d    = %ASCID'MX_SITE_NAME_CONVERSION',
+    	domexp_d    = %ASCID'MX_SITE_DOM_EXPANSION',
+    	filedev_d   = %ASCID'LNM$FILE_DEV';
+
+%SBTTL 'REWRITE_INIT'
+GLOBAL ROUTINE REWRITE_INIT (REINIT) = 
+BEGIN
+!++
+! FUNCTIONAL DESCRIPTION:
+!
+!   Some initialization.
+!
+! RETURNS:  	cond_value, longword (unsigned), write only, by value
+!
+! PROTOTYPE:
+!
+!   REWRITE_INIT  reinitflag
+!
+! IMPLICIT INPUTS:  None.
+!
+! IMPLICIT OUTPUTS: None.
+!
+! COMPLETION CODES:
+!
+!   SS$_NORMAL:	    	normal successful completion.
+!
+! SIDE EFFECTS:
+!
+!   None.
+!--
+
+    LOCAL
+    	STATUS;
+
+    IF .REINIT THEN
+    BEGIN
+    	IF .DIRCTX NEQ 0 THEN (.DIR_CLEANUP) (DIRCTX);
+    	IF .EXPCTX NEQ 0 THEN (.EXP_CLEANUP) (EXPCTX);
+    	IF .RWCTX  NEQ 0 THEN (.RW_CLEANUP)  (RWCTX);
+    END;
+
+    DIRCTX = EXPCTX = RWCTX = 0;
+
+    STATUS = $TRNLNM (LOGNAM=namcon_d, TABNAM=filedev_d);
+    IF .STATUS THEN
+    	STATUS = find_image_symbol (namcon_d, %ASCID'INIT', DIR_INIT);
+    IF .STATUS THEN
+    BEGIN
+    	find_image_symbol (namcon_d, %ASCID'CONVERT', DIR_CONVERT);
+    	find_image_symbol (namcon_d, %ASCID'CLEANUP', DIR_CLEANUP);
+    	(.DIR_INIT) (DIRCTX);
+    END;
+
+    STATUS = $TRNLNM (LOGNAM=domexp_d, TABNAM=filedev_d);
+    IF .STATUS THEN
+    	STATUS = find_image_symbol (domexp_d, %ASCID'INIT', EXP_INIT);
+    IF .STATUS THEN
+    BEGIN
+    	find_image_symbol (domexp_d, %ASCID'EXPAND', EXP_EXPAND);
+    	find_image_symbol (domexp_d, %ASCID'CLEANUP', EXP_CLEANUP);
+    	(.EXP_INIT) (EXPCTX);
+    END;
+
+    STATUS = $TRNLNM (LOGNAM=addrw_d, TABNAM=filedev_d);
+    IF .STATUS THEN
+    	STATUS = find_image_symbol (addrw_d, %ASCID'INIT', RW_INIT);
+    IF .STATUS THEN
+    BEGIN
+    	STATUS = find_image_symbol (addrw_d, %ASCID'REWRITE_ENVELOPE', RW_REWRITE_ENVELOPE);
+    	IF NOT .STATUS THEN
+    	    RW_REWRITE_ENVELOPE = 0;
+    	STATUS = find_image_symbol (addrw_d, %ASCID'REWRITE_HEADER', RW_REWRITE_HEADER);
+    	IF NOT .STATUS THEN
+    	    RW_REWRITE_HEADER = 0;
+    	status = find_image_symbol (addrw_d, %ASCID'REWRITE_VIRTUAL_DOMAIN', rw_virtual_domain);
+    	IF NOT .status THEN
+    	    rw_virtual_domain = 0;
+    	find_image_symbol (addrw_d, %ASCID'CLEANUP', RW_CLEANUP);
+    	(.RW_INIT) (RWCTX);
+    END;
+
+    SS$_NORMAL
+
+END; ! REWRITE_INIT
+
+%SBTTL 'REWRITE'
+GLOBAL ROUTINE REWRITE (ADR1_A, ADR2_A) = 
+BEGIN
+!++
+! FUNCTIONAL DESCRIPTION:
+!
+!   Applies rewrite rules to an address.  The rewrite rules are searched
+!   until a rule's left-hand side matches the input address.  The address
+!   is then rewritten according to the rule's right-hand side and success
+!   status is returned.
+!
+!   If no rules match, and a site specific rewrite processor has been specified,
+!   it will be invoked. If the return status is success, the output from the
+!   routine is returned.  If no return status is not success, then MX__NOMATCH
+!   is returned and the output address will be set the same as the input
+!   address.
+!
+!   Note that the RULE structure is also used for the list of variables:
+!   the LHS part hold the variable name, the RHS part holds its value.
+!
+! RETURNS:  	cond_value, longword (unsigned), write only, by value
+!
+! PROTOTYPE:
+!
+!   REWRITE  inadr, outadr
+!
+! IMPLICIT INPUTS:  None.
+!
+! IMPLICIT OUTPUTS: None.
+!
+! COMPLETION CODES:
+!
+!   SS$_NORMAL:	    	normal successful completion.
+!
+! SIDE EFFECTS:
+!
+!   None.
+!--
+    BIND
+    	ADR1	= .ADR1_A   : BLOCK [,BYTE],
+    	ADR2	= .ADR2_A   : BLOCK [,BYTE];
+
+    LOCAL
+    	R : REF RULEDEF;
+
+    R = .RWRULES [QUE_L_HEAD];
+
+    WHILE .R NEQA RWRULES DO
+    BEGIN
+        BIND
+            lhs = r [RULE_A_LHS]    : REF TXTDEF,
+            rhs = r [RULE_A_RHS]    : REF TXTDEF;
+
+    	LOCAL
+    	    VARS    : QUEDEF,
+    	    VAR	    : REF VARDEF,
+    	    STR	    : BLOCK [DSC$K_S_BLN,BYTE],
+    	    STR2    : BLOCK [DSC$K_S_BLN,BYTE],
+    	    SS	    : BLOCK [DSC$K_S_BLN,BYTE],
+    	    CH1	    : BYTE,
+    	    CH2	    : BYTE,
+    	    MATCH, LEN,
+    	    RULEP, REND, RBP,
+    	    ADDRP, AEND;
+
+        IF .r [RULE_V_REGEX] THEN
+        BEGIN
+            IF .r [RULE_A_LHSREGEX] EQLA 0 THEN
+            BEGIN
+                LOCAL status;
+                status = LIB$GET_VM (%REF (REGEX_S_REGEXDEF), r [RULE_A_LHSREGEX]);
+                IF NOT .status THEN SIGNAL_STOP (.status);
+                INIT_SDESC (ss, .lhs [TXT_W_LEN], lhs [TXT_T_TEXT]);
+                IF MX_REGCOMP (.r [RULE_A_LHSREGEX], ss, REG_M_EXTENDED OR REG_M_ICASE) NEQ 0 THEN
+                BEGIN
+                    LIB$FREE_VM (%REF (REGEX_S_REGEXDEF), r [RULE_A_LHSREGEX]);
+                    r [RULE_A_LHSREGEX] = 0;
+                END;
+            END;
+            IF .r [RULE_A_LHSREGEX] NEQA 0 THEN
+            BEGIN
+                LOCAL
+                    regmat    : BLOCKVECTOR [10,REGMAT_S_REGMATDEF,BYTE] FIELD (REGMAT_FIELDS);
+                regmat [0,REGMAT_L_SO] = 0;
+                regmat [0,REGMAT_L_EO] = .adr1 [DSC$W_LENGTH];
+                IF MX_REGEXEC (.r [RULE_A_LHSREGEX], .adr1 [DSC$A_POINTER], 10,
+                                regmat, REG_M_STARTEND) EQL 0 THEN
+                BEGIN
+                    LOCAL
+                        anchor,
+                        cp,
+                        remain,
+                        ch      : BYTE;
+
+                    TRACE (%STRING ('%REWRITE, Applying REGEX rewrite rule:!/',
+                                    '               !AD => !AD !/',
+                                    '           to: !AS'),
+                                    .lhs [TXT_W_LEN], lhs [TXT_T_TEXT], .rhs [TXT_W_LEN], rhs [TXT_T_TEXT],
+                                    adr1);
+                    STR$COPY_DX (adr2, %ASCID'');
+                    anchor = rhs [TXT_T_TEXT];
+                    remain = .rhs [TXT_W_LEN];
+                    WHILE .remain GTRU 0 DO
+                    BEGIN
+                        BIND regex = .r [RULE_A_LHSREGEX] : REGEXDEF;
+                        cp = CH$FIND_CH (.remain, .anchor, %C'\');
+                        IF CH$FAIL (.cp) THEN
+                        BEGIN
+                            INIT_SDESC (ss, .remain, .anchor);
+                            STR$APPEND (adr2, ss);
+                            remain = 0;
+                        END
+                        ELSE
+                        BEGIN
+                            INIT_SDESC (ss, CH$DIFF (.cp, .anchor), .anchor);
+                            IF .ss [DSC$W_LENGTH] NEQU 0 THEN
+                                STR$APPEND (adr2, ss);
+                            remain = .remain - .ss [DSC$W_LENGTH] - 1;
+                            anchor = CH$PLUS (.cp, 1);
+                            IF .remain GTRU 0 THEN
+                            BEGIN
+                                ch = CH$RCHAR (.anchor);
+                                remain = .remain - 1;
+                                anchor = CH$PLUS (.anchor, 1);
+                                IF .ch GEQU %C'1' AND .ch LEQU %C'9' AND
+                                    (.ch - %C'0') LEQU .regex [REGEX_L_NSUB] THEN
+                                    INIT_SDESC (ss, .regmat [(.ch-%C'0'),REGMAT_L_EO]-
+                                                    .regmat [(.ch-%C'0'),REGMAT_L_SO],
+                                                    CH$PLUS (.adr1 [DSC$A_POINTER],
+                                                             .regmat [(.ch-%C'0'),REGMAT_L_SO]))
+                                ELSE
+                                    INIT_SDESC (ss, 1, ch);
+                                IF .ss [DSC$W_LENGTH] NEQU 0 THEN
+                                    STR$APPEND (adr2, ss);
+                            END;
+                        END;
+                    END; ! remain > 0
+                    TRACE ('%REWRITE, result: !AS', adr2);
+                    RETURN SS$_NORMAL;
+                END;
+            END;  ! regular expression structure present
+        END; ! is regular expression
+
+    	SS [DSC$B_DTYPE] = DSC$K_DTYPE_T;
+    	SS [DSC$B_CLASS] = DSC$K_CLASS_S;
+    	INIT_DYNDESC (STR, STR2);
+    	VARS [QUE_L_TAIL] = VARS [QUE_L_HEAD] = VARS [QUE_L_HEAD];
+    	REND = lhs [TXT_T_TEXT];
+    	RULEP = CH$PLUS (.REND, .lhs [TXT_W_LEN]-1);
+    	AEND = .ADR1 [DSC$A_POINTER];
+    	ADDRP  = CH$PLUS (.AEND, .ADR1 [DSC$W_LENGTH]-1);
+    	VAR = 0;
+    	MATCH = 0;
+
+    	WHILE 1 DO
+    	BEGIN
+    	    IF .RULEP LSSA .REND THEN
+    	    BEGIN
+    	    	IF .VAR NEQA 0 THEN
+    	    	BEGIN
+    	    	    IF (LEN = MIN (VAR_S_RHS-.VAR [VAR_W_RHS],
+    	    	    	    CH$DIFF (.ADDRP, .AEND))) GTR 0 THEN
+    	    	    BEGIN
+    	    	    	CH$MOVE (.LEN, .AEND,
+    	    	    	    CH$PLUS (VAR [VAR_T_RHS], .VAR [VAR_W_RHS]));
+    	    	    	VAR [VAR_W_RHS] = .VAR [VAR_W_RHS] + .LEN;
+    	    	    END;
+    	    	    INSQUE (.VAR, .VARS [QUE_L_TAIL]);
+    	    	    VAR = 0;
+    	    	    MATCH = 1;
+    	    	    EXITLOOP;
+    	    	END
+    	    	ELSE
+    	    	BEGIN
+    	    	    MATCH = .ADDRP LSSA .AEND;
+    	    	    EXITLOOP;
+    	    	END;
+    	    END
+    	    ELSE IF .ADDRP LSSA .AEND THEN
+    	    	EXITLOOP
+    	    ELSE IF CH$RCHAR (.RULEP) EQL %C'}' THEN
+    	    BEGIN
+    	    	RBP = .RULEP;
+    	    	WHILE CH$RCHAR (.RBP) NEQ %C'{' DO
+    	    	BEGIN
+    	    	    RBP = .RBP - 1;
+    	    	    IF .RBP LSSA .REND THEN EXITLOOP;
+    	    	END;
+    	    	IF .RBP LSSA .REND THEN EXITLOOP;
+    	    	LIB$GET_VM (%REF (VAR_S_VARDEF), VAR);
+    	    	CH$FILL (%CHAR (0), VAR_S_VARDEF, .VAR);
+    	    	VAR [VAR_W_LHS] =
+    	    	    MIN (CH$DIFF (.RULEP, CH$PLUS (.RBP,1)), VAR_S_LHS);
+    	    	INCR I FROM 0 TO .VAR [VAR_W_LHS]-1 DO
+    	    	BEGIN
+    	    	    CH1 = CH$RCHAR (CH$PLUS (.RBP, .I+1));
+    	    	    CH$WCHAR ((IF .CH1 GEQ %C'a' AND .CH1 LEQ %C'z' THEN
+    	    	    	    	.CH1 - 32 ELSE .CH1),
+    	    	    	CH$PLUS (VAR [VAR_T_LHS], .I));
+    	    	END;
+    	    	RULEP = .RBP - 1;
+    	    END
+    	    ELSE
+    	    BEGIN
+    	    	CH1 = CH$RCHAR (.RULEP);
+    	    	IF .CH1 GEQ %C'a' AND .CH1 LEQ %C'z' THEN
+    	    	    CH1 = .CH1 - 32;
+    	    	CH2 = CH$RCHAR (.ADDRP);
+    	    	IF .CH2 GEQ %C'a' AND .CH2 LEQ %C'z' THEN
+    	    	    CH2 = .CH2 - 32;
+    	    	IF .VAR EQLA 0 THEN
+    	    	BEGIN
+    	    	    IF .CH1 NEQ .CH2 THEN EXITLOOP;
+    	    	    RULEP = .RULEP - 1;
+    	    	    ADDRP = .ADDRP - 1;
+    	    	END
+    	    	ELSE
+    	    	BEGIN
+    	    	    IF .CH1 EQL .CH2 THEN
+    	    	    BEGIN
+    	    	    	INSQUE (.VAR, .VARS [QUE_L_TAIL]);
+    	    	    	VAR = 0;
+    	    	    	RULEP = .RULEP - 1;
+    	    	    	ADDRP = .ADDRP - 1;
+    	    	    END
+    	    	    ELSE
+    	    	    BEGIN
+    	    	    	IF .VAR [VAR_W_RHS] LSS VAR_S_RHS THEN
+    	    	    	BEGIN
+    	    	    	    CH$WCHAR (CH$RCHAR (.ADDRP),
+    	    	    	    	CH$PLUS (VAR [VAR_T_RHS], .VAR [VAR_W_RHS]));
+    	    	    	    VAR [VAR_W_RHS] = .VAR [VAR_W_RHS] + 1;
+    	    	    	END;
+    	    	    	ADDRP = .ADDRP - 1;
+    	    	    END;
+    	    	END;
+    	    END;
+    	END; ! while 1
+
+    	IF .VAR NEQA 0 THEN
+    	    LIB$FREE_VM (%REF (VAR_S_VARDEF), VAR);
+
+    	IF .MATCH THEN
+    	BEGIN
+    	    RULEP = rhs [TXT_T_TEXT];
+    	    REND  = CH$PLUS (.RULEP, .rhs [TXT_W_LEN]);
+
+    	    TRACE (%STRING ('%REWRITE, Applying rewrite rule:!/',
+                            '             !AD => !AD!/',
+                            '          to: !AS'),
+                .lhs [TXT_W_LEN], lhs [TXT_T_TEXT], .rhs [TXT_W_LEN],
+    	    	rhs [TXT_T_TEXT], ADR1);
+
+    	    STR$COPY_DX (ADR2, %ASCID'');
+
+    	    WHILE .RULEP LSS .REND DO
+    	    BEGIN
+    	    	IF CH$RCHAR (.RULEP) EQL %C'{' THEN
+    	    	BEGIN
+    	    	    RBP = CH$FIND_CH (CH$DIFF (.REND,.RULEP),.RULEP,%C'}');
+    	    	    IF CH$FAIL (.RBP) THEN EXITLOOP;
+    	    	    STR$COPY_R (STR2, %REF (CH$DIFF (.RBP, CH$PLUS (.RULEP, 1))),
+    	    	    	CH$PLUS (.RULEP, 1));
+    	    	    STR$UPCASE (STR, STR2);
+    	    	    RULEP = CH$PLUS (.RBP, 1);
+    	    	    VAR = .VARS [QUE_L_HEAD];
+    	    	    WHILE .VAR NEQA VARS [QUE_L_HEAD] DO
+    	    	    BEGIN
+    	    	    	IF CH$EQL (.STR [DSC$W_LENGTH], .STR [DSC$A_POINTER],
+    	    	    	    .VAR [VAR_W_LHS], VAR [VAR_T_LHS], %C' ') THEN
+    	    	    	BEGIN
+    	    	    	    STR$GET1_DX (VAR [VAR_W_RHS], STR2);
+    	    	    	    INCR I FROM 0 TO .VAR [VAR_W_RHS]-1 DO
+    	    	    	    	CH$WCHAR (
+    	    	    	    	    CH$RCHAR (CH$PLUS (VAR [VAR_T_RHS], .I)),
+    	    	    	    	    CH$PLUS (.STR2 [DSC$A_POINTER],
+    	    	    	    	    	.VAR [VAR_W_RHS]-.I-1));
+    	    	    	    STR$APPEND (ADR2, STR2);
+    	    	    	    EXITLOOP;
+    	    	    	END;
+    	    	    	VAR = .VAR [VAR_L_FLINK];
+    	    	    END;
+    	    	END
+    	    	ELSE
+    	    	BEGIN
+    	    	    SS [DSC$W_LENGTH] = 1;
+    	    	    SS [DSC$A_POINTER] = .RULEP;
+    	    	    STR$APPEND (ADR2, SS);
+    	    	    RULEP = CH$PLUS (.RULEP, 1);
+    	    	END;
+    	    END;
+    	END;
+
+    	FREE_STRINGS (STR, STR2);
+
+    	WHILE NOT REMQUE (.VARS [QUE_L_HEAD], VAR) DO
+    	    LIB$FREE_VM (%REF (VAR_S_VARDEF), VAR);
+
+    	IF .MATCH THEN RETURN SS$_NORMAL;
+
+    	R = .R [RULE_L_FLINK];
+
+    END; ! while there are rules
+
+    TRACE ('%REWRITE, No rewrite rules matched !AS', ADR1);
+
+    IF .RW_REWRITE_ENVELOPE NEQ 0 THEN
+    BEGIN
+    	LOCAL
+    	    STR	    : BLOCK [DSC$K_S_BLN,BYTE],
+    	    STATUS;
+
+    	INIT_DYNDESC(STR);
+    	STATUS = (.RW_REWRITE_ENVELOPE) (RWCTX, ADR1, STR);
+    	IF .STATUS THEN
+    	BEGIN
+    	    TRACE ('%REWRITE, Site-spec rewrite on !AS returned !AS', 
+    	        ADR1, STR);
+    	    STR$COPY_DX (ADR2, STR);
+    	    FREE_STRINGS (STR);
+    	    RETURN SS$_NORMAL;
+    	END
+    	ELSE
+    	BEGIN
+    	    TRACE ('%REWRITE, Site-spec rewrite on !AS err=!XL', ADR1, .STATUS);
+    	END;
+    END;
+
+    STR$COPY_DX (ADR2, ADR1);
+
+    MX__NOMATCH
+
+END; ! REWRITE
+
+%SBTTL 'REWRITE_VIRTUAL_DOMAIN'
+GLOBAL ROUTINE REWRITE_VIRTUAL_DOMAIN (domdsc_a) = 
+BEGIN
+!++
+! FUNCTIONAL DESCRIPTION:
+!
+!   description
+!
+! RETURNS:  	cond_value, longword (unsigned), write only, by value
+!
+! PROTOTYPE:
+!
+!   REWRITE_VIRTUAL_DOMAIN domdsc
+!
+! IMPLICIT INPUTS:  None.
+!
+! IMPLICIT OUTPUTS: None.
+!
+! COMPLETION CODES:
+!
+!   SS$_NORMAL:	    	normal successful completion.
+!
+! SIDE EFFECTS:	    None.
+!--
+
+    IF .rw_virtual_domain EQLA 0 OR .rwctx EQLU 0 THEN
+    	0
+    ELSE
+    	(.rw_virtual_domain) (rwctx, .domdsc_a)
+
+END; ! rewrite_virtual_domain
+
+%SBTTL 'FINDPATH'
+GLOBAL ROUTINE FINDPATH (DOM_A, PATH_A, PARAM_A) = 
+BEGIN
+!++
+! FUNCTIONAL DESCRIPTION:
+!
+!   Compares a domain name against the path list to identify a path.
+!
+! RETURNS:  	cond_value, longword (unsigned), write only, by value
+!
+! PROTOTYPE:
+!
+!   FINDPATH  domain, path [,param]
+!
+! IMPLICIT INPUTS:  None.
+!
+! IMPLICIT OUTPUTS: None.
+!
+! COMPLETION CODES:
+!
+!   SS$_NORMAL:	    	normal successful completion.
+!
+! SIDE EFFECTS:
+!
+!   None.
+!--
+
+    BUILTIN
+    	ACTUALCOUNT;
+
+    BIND
+    	DOM 	= .DOM_A    : BLOCK [,BYTE],
+    	PATH	= .PATH_A;
+
+    LOCAL
+    	P   : REF PATHDEF,
+    	S   : BLOCK [DSC$K_S_BLN,BYTE],
+    	D   : BLOCK [DSC$K_S_BLN,BYTE],
+    	D2  : BLOCK [DSC$K_S_BLN,BYTE],
+    	STATUS;
+
+    INIT_DYNDESC (S, D2);
+
+    IF .EXPCTX NEQ 0 THEN
+    BEGIN
+    	STATUS = (IF .DOM [DSC$W_LENGTH] GTR 0 THEN
+    	    	    (CH$RCHAR (.DOM [DSC$A_POINTER]) NEQ %C'.') ELSE 0);
+    	IF .STATUS THEN STATUS = (.EXP_EXPAND) (EXPCTX, DOM, D2);
+    	IF .STATUS THEN
+    	BEGIN
+    	    TRACE ('%FINDPATH, Site-spec expand on !AS returned !AS', DOM, D2);
+    	    STR$UPCASE (S, D2);
+    	END
+    	ELSE
+    	BEGIN
+    	    TRACE ('%FINDPATH, Site-spec expand on !AS err=!XL', DOM, .STATUS);
+    	    STR$UPCASE (S, DOM);
+    	END;
+    END
+    ELSE
+    	STR$UPCASE (S, DOM);
+
+    D [DSC$B_DTYPE] = DSC$K_DTYPE_T;
+    D [DSC$B_CLASS] = DSC$K_CLASS_S;
+
+    P = .PATHLIST [QUE_L_HEAD];
+    STATUS = (
+    	WHILE .P NEQA PATHLIST DO
+    	BEGIN
+    	    D [DSC$A_POINTER] = P [PATH_T_DOMAIN];
+    	    D [DSC$W_LENGTH] = .P [PATH_W_DOMAIN];
+    	    STR$UPCASE (D2, D);
+    	    IF STR$MATCH_WILD (S, D2) THEN
+    	    BEGIN
+    	    	TRACE ('%FINDPATH, domain name !AS matched path pattern !AS',
+    	    	    S, D2);
+    	    	PATH = .P [PATH_W_PATH];
+    	    	IF ACTUALCOUNT () GTR 2 THEN
+    	    	    IF .PARAM_A NEQA 0 THEN STR$COPY_R (.PARAM_A,
+    	    	    	P [PATH_W_PARAM], P [PATH_T_PARAM]);
+    	    	EXITLOOP SS$_NORMAL;
+    	    END;
+    	    P = .P [PATH_L_FLINK];
+    	END);
+
+    FREE_STRINGS (S, D2);
+
+    IF NOT .STATUS THEN
+    BEGIN
+    	TRACE ('%FINDPATH, No path patterns matched !AS', DOM);
+    	MX__NOMATCH
+    END
+    ELSE
+    	.STATUS
+
+END; ! FINDPATH
+
+%SBTTL 'FINDALIAS'
+GLOBAL ROUTINE FINDALIAS (USR_A, RCPTQ_A) = 
+BEGIN
+!++
+! FUNCTIONAL DESCRIPTION:
+!
+!   Compares a local username against the router's alias list.
+!   Also does percent-sign de-hacking.
+!
+! RETURNS:  	cond_value, longword (unsigned), write only, by value
+!
+! PROTOTYPE:
+!
+!   FINDALIAS  domain, path
+!
+! IMPLICIT INPUTS:  None.
+!
+! IMPLICIT OUTPUTS: None.
+!
+! COMPLETION CODES:
+!
+!   SS$_NORMAL:	    	normal successful completion.
+!
+! SIDE EFFECTS:
+!
+!   None.
+!--
+    BIND
+    	USR 	= .USR_A    : BLOCK [,BYTE],
+    	RCPTQ	= .RCPTQ_A  : QUEDEF;
+
+    LOCAL
+    	R   : REF RCPDEF,
+    	P   : REF RULEPRE53DEF,
+    	S   : BLOCK [DSC$K_S_BLN,BYTE],
+    	STR : BLOCK [DSC$K_S_BLN,BYTE],
+    	STATUS;
+
+    S [DSC$B_CLASS] = DSC$K_CLASS_S;
+    S [DSC$B_DTYPE] = DSC$K_DTYPE_T;
+    INIT_DYNDESC (STR);
+
+    P = .ALIASES [QUE_L_HEAD];
+    STATUS = (
+    	WHILE .P NEQA ALIASES DO
+    	BEGIN
+    	    S [DSC$A_POINTER] = P [RULEPRE53_T_LHS];
+    	    S [DSC$W_LENGTH] = .P [RULEPRE53_W_LHS];
+    	    IF STR$CASE_BLIND_COMPARE (USR, S) EQL 0 THEN
+    	    BEGIN
+		LOCAL ptr : REF $BBLOCK,
+		      length, offset;
+		ptr = p [RULEPRE53_T_RHS];
+		length = .p [RULEPRE53_W_RHS];
+		WHILE 1 DO
+		    BEGIN
+		    offset = CH$FIND_CH (.length, .ptr, %CHAR(0));
+		    IF (.offset EQLU 0)
+		    THEN
+			BEGIN
+			STR$COPY_R (str, length, .ptr);
+			length = 0;
+			END
+		    ELSE
+			BEGIN
+			LOCAL x;
+			x = CH$DIFF (.offset, .ptr);
+			STR$COPY_R (str, x, .ptr);
+			length = .length - .x - 1;
+			ptr = .ptr + .x + 1;
+			END;
+		    LIB$GET_VM (%REF (RCP_S_RCPDEF), R);
+		    CH$FILL (%CHAR (0), RCP_S_RCPDEF, .R);
+		    INIT_DYNDESC (R [RCP_Q_RWADR], R [RCP_Q_ORGADR],
+				R [RCP_Q_ERRMSG], R [RCP_Q_NEXTHOP]);
+		    IF CH$RCHAR (.str [DSC$A_POINTER]) NEQA %C'<' THEN
+			STR$CONCAT (R [RCP_Q_ORGADR], %ASCID'<', STR, %ASCID'>')
+		    ELSE STR$COPY_DX (R [RCP_Q_ORGADR], STR);
+		    INSQUE (.R, .RCPTQ [QUE_L_TAIL]);
+		    TRACE ('%FINDALIAS, Found alias for !AS: !AS', USR,
+				R [RCP_Q_ORGADR]);
+		    IF (.length EQLU 0) THEN EXITLOOP;
+		    END;
+		EXITLOOP SS$_NORMAL;
+    	    END;
+    	    P = .P [RULEPRE53_L_FLINK];
+    	END);
+
+    IF .STATUS LSS 0 THEN
+    BEGIN
+    	LOCAL
+    	    M	: REF MLSTDEF;
+
+    	M = .MLISTS [QUE_L_HEAD];
+    	STATUS = (
+    	    WHILE .M NEQA MLISTS DO
+    	    BEGIN
+    	    	LIB$SYS_FAO (%ASCID'!AD-SENDER', 0, STR,
+    	    	    .M [MLST_W_NAME], M [MLST_T_NAME]);
+    	    	IF STR$CASE_BLIND_COMPARE (USR, STR) EQL 0 THEN
+    	    	BEGIN
+    	    	    LIB$GET_VM (%REF (RCP_S_RCPDEF), R);
+    	    	    CH$FILL (%CHAR (0), RCP_S_RCPDEF, .R);
+    	    	    INIT_DYNDESC (R [RCP_Q_RWADR], R [RCP_Q_ORGADR],
+    	    	    	R [RCP_Q_ERRMSG], R [RCP_Q_NEXTHOP]);
+    	    	    STR$COPY_R (STR, M [MLST_W_ERRSTO], M [MLST_T_ERRSTO]);
+    	    	    IF CH$RCHAR (M [MLST_T_ERRSTO]) NEQA %C'<' THEN
+    	    	    	STR$CONCAT (R [RCP_Q_ORGADR], %ASCID'<', STR,
+    	    	    	    %ASCID'>')
+    	    	    ELSE
+    	    	    	STR$COPY_DX (R [RCP_Q_ORGADR], STR);
+    	    	    INSQUE (.R, .RCPTQ [QUE_L_TAIL]);
+    	    	    TRACE ('%FINDALIAS, !AS is an mlist Errors-To: !AS',
+    	    	    	USR, R [RCP_Q_ORGADR]);
+    	    	    EXITLOOP SS$_NORMAL;
+    	    	END;
+    	    	M = .M [MLST_L_FLINK];
+    	    END);
+    END;
+
+    IF .STATUS LSS 0 THEN
+    BEGIN
+    	LOCAL
+    	    STR2    : BLOCK [DSC$K_S_BLN,BYTE];
+
+    	INIT_DYNDESC (STR2);
+
+    	IF .DIRCTX NEQ 0 THEN
+    	BEGIN
+    	    STATUS = (.DIR_CONVERT) (DIRCTX, %REF (1), USR, STR2);
+    	    IF .STATUS THEN
+    	    BEGIN
+    	    	TRACE ('%FINDALIAS, Site-spec convert on !AS returned !AS',
+    	    	    	USR, STR2);
+    	    	LIB$GET_VM (%REF (RCP_S_RCPDEF), R);
+    	    	CH$FILL (%CHAR (0), RCP_S_RCPDEF, .R);
+    	    	INIT_DYNDESC (R [RCP_Q_RWADR], R [RCP_Q_ORGADR],
+    	    	    R [RCP_Q_ERRMSG], R [RCP_Q_NEXTHOP]);
+    	    	STR$COPY_DX (R [RCP_Q_ORGADR], STR2);
+    	    	INSQUE (.R, .RCPTQ [QUE_L_TAIL]);
+    	    END
+    	    ELSE STATUS = -1;
+    	END
+    	ELSE STATUS = -1;
+
+    	FREE_STRINGS (STR2);
+
+    END;
+
+    IF .STATUS LSS 0 AND .ROUTER_INFO [ROUTER_V_PERCENT_HACK] THEN
+    BEGIN
+    	LOCAL
+    	    STR2    : BLOCK [DSC$K_S_BLN,BYTE],
+    	    USREND;
+
+    	INIT_DYNDESC (STR2);
+    	USREND = CH$PLUS (.USR [DSC$A_POINTER], .USR [DSC$W_LENGTH]);
+    	P = (DECR CP FROM .USREND-1 TO .USR [DSC$A_POINTER] DO
+    	    	IF CH$RCHAR (.CP) EQL %C'%' THEN EXITLOOP .CP);
+    	IF .P NEQ -1 THEN
+    	BEGIN
+    	    LIB$GET_VM (%REF (RCP_S_RCPDEF), R);
+    	    CH$FILL (%CHAR (0), RCP_S_RCPDEF, .R);
+    	    INIT_DYNDESC (R [RCP_Q_RWADR], R [RCP_Q_ORGADR],
+    	    	R [RCP_Q_ERRMSG], R [RCP_Q_NEXTHOP]);
+    	    STR$COPY_R (STR, %REF (CH$DIFF (.P, .USR [DSC$A_POINTER])),
+    	    	.USR [DSC$A_POINTER]);
+    	    STR$COPY_R (STR2, %REF (CH$DIFF (.USREND, .P)-1), CH$PLUS (.P, 1));
+    	    STR$CONCAT (R [RCP_Q_ORGADR], %ASCID'<', STR, %ASCID'@',
+    	    	STR2, %ASCID'>');
+    	    FREE_STRINGS (STR2);
+    	    INSQUE (.R, .RCPTQ [QUE_L_TAIL]);
+    	    TRACE ('%FINDALIAS, %-dehacked !AS into: !AS', USR,
+    	    	R [RCP_Q_ORGADR]);
+    	    STATUS = SS$_NORMAL;
+    	END;
+    END;
+
+    FREE_STRINGS (STR);
+
+    IF .STATUS LSS 0 THEN
+    BEGIN
+    	TRACE ('%FINDALIAS, no alias found for !AS', USR);
+    	MX__NOMATCH
+    END
+    ELSE
+    	.STATUS
+
+END; ! FINDALIAS
+
+%SBTTL 'FIS_SIG_TO_RET'
+ROUTINE FIS_SIG_TO_RET (SIG_A, MCH_A, ENB_A) =
+BEGIN
+!++
+! FUNCTIONAL DESCRIPTION:
+!
+!   Condition handler to convert find_image_symbol
+!   signals into return status codes.  Sort of like
+!   LIB$SIG_TO_RET, but returns the ancillary status
+!   code when the signal name is LIB$_ACTIMAGE.
+!
+! RETURNS:  	cond_value, longword (unsigned), write only, by value
+!
+! PROTOTYPE:
+!
+!   x
+!
+! IMPLICIT INPUTS:  None.
+!
+! IMPLICIT OUTPUTS: None.
+!
+! COMPLETION CODES:
+!
+!   SS$_NORMAL:	    	normal successful completion.
+!
+! SIDE EFFECTS:
+!
+!   None.
+!--
+    BIND
+    	sig 	= .SIG_A    	    	: BLOCK [,BYTE],
+    	sigvec 	= .SIG_A    	    	: VECTOR [,LONG],
+    	cond	= sig [CHF$L_SIG_NAME]	: BLOCK [,BYTE],
+    	mch 	= .MCH_A    	    	: BLOCK [,BYTE];
+
+    EXTERNAL LITERAL
+    	LIB$_ACTIMAGE;
+
+    LOCAL
+    	unwind : BLOCK [4,BYTE] INITIAL (SS$_UNWIND),
+    	libact : BLOCK [4,BYTE] INITIAL (LIB$_ACTIMAGE),
+    	status;
+
+    IF .cond [STS$V_COND_ID] EQL .unwind [STS$V_COND_ID] THEN
+    	RETURN SS$_NORMAL;
+
+    status = .sig [CHF$L_SIG_NAME];
+
+    IF .cond [STS$V_COND_ID] EQL .libact [STS$V_COND_ID] AND
+    	    .sig [CHF$L_SIG_ARGS] GEQU 6 THEN
+    	status = .sigvec [.sig [CHF$L_SIG_ARG1] + 3];
+
+%IF %BLISS (BLISS32V) %THEN
+    mch [CHF$L_MCH_SAVR0] = .status;
+%ELSE
+    mch [CHF$IL_MCH_SAVR0_LOW] = .status;
+%FI
+
+    $UNWIND ()  ! return to caller of procedure that established us
+
+END; ! fis_sig_to_ret
+
+%SBTTL 'find_image_symbol'
+ROUTINE find_image_symbol (fspec_a, symnam_a, symval_a) = 
+BEGIN
+!++
+! FUNCTIONAL DESCRIPTION:
+!
+!   Wrapper routine for calling LIB$FIND_IMAGE_SYMBOL that
+!   established a condition handler.  Need this because the
+!   handler unwinds the call stack to above where it gets
+!   established.
+!
+! RETURNS:  	cond_value, longword (unsigned), write only, by value
+!
+! PROTOTYPE:
+!
+!   FIND_IMAGE_SYMBOL  fspec, symnam, symval
+!
+! IMPLICIT INPUTS:  None.
+!
+! IMPLICIT OUTPUTS: None.
+!
+! COMPLETION CODES:
+!
+!   SS$_NORMAL:	    	normal successful completion.
+!
+! SIDE EFFECTS:
+!
+!   None.
+!--
+
+    ENABLE
+    	fis_sig_to_ret;
+
+    LIB$FIND_IMAGE_SYMBOL (.fspec_a, .symnam_a, .symval_a)
+
+END; ! find_image_symbol
+
+END
+ELUDOM

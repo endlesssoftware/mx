@@ -1,0 +1,608 @@
+!+
+!  MX_LCLDEFS.R32
+!
+! Copyright (c) 2008, Matthew Madison.
+! Copyright (c) 2012, Endless Software Solutions.
+! 
+! All rights reserved.
+! 
+! Redistribution and use in source and binary forms, with or without
+! modification, are permitted provided that the following conditions
+! are met:
+! 
+!     * Redistributions of source code must retain the above
+!       copyright notice, this list of conditions and the following
+!       disclaimer.
+!     * Redistributions in binary form must reproduce the above
+!       copyright notice, this list of conditions and the following
+!       disclaimer in the documentation and/or other materials provided
+!       with the distribution.
+!     * Neither the name of the copyright owner nor the names of any
+!       other contributors may be used to endorse or promote products
+!       derived from this software without specific prior written
+!       permission.
+! 
+! THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
+! "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
+! LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
+! A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
+! OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
+! SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
+! LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
+! DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
+! THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
+! (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
+! OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+!
+!   Rewrite rule, alias, path, and mailing list structure definitions for MX.
+!
+!   01-JAN-1990	    Madison 	added MASTER fields to MLST structure
+!   10-JAN-1990	    Madison 	added FILESERV_USER to configuration file.
+!   24-SEP-1990	    Madison 	added SMTPINFO, LOCALINFO, ROUTERINFO.
+!   05-DEC-1990	    Madison 	added JNETINFO.
+!   10-DEC-1990	    Madison 	add ADDMSG, REMMSG to MLST.
+!   12-DEC-1990	    Madison 	add FWDMSG to MLST.
+!   07-FEB-1991	    Madison 	add BSMTP_REPLY bit to JNET.
+!   16-OCT-1991	    Madison 	Add DNSMTP_INFO.  DEFRTR in SMTP_INFO.
+!                               New MLE structure; MLIST changed.
+!   28-OCT-1991	    Madison 	Add SITE_INFO.
+!   29-Oct-1992	    Munroe	Add ACCESS to MLE structure.
+!   13-JAN-1993     Goatley     Add DESC to FSRV, RTNADR to MLST.
+!   16-JAN-1993     Goatley	Add MLST_V_REMRCVD to MLST.
+!   17-MAR-1993     Goatley	Add MLST_V_PRIVATE to MLST.
+!   29-AUG-1993	    Goatley	Add LOCAL_V_ALLOW_MM to LOCAL.
+!   14-DEC-1993	    Goatley	Add MLIST_V_REMOTHER to MLST.
+!   17-DEC-1993     Goatley     Add *_V_CC_POSTMASTER to LOCAL, MLST, FSRV.
+!   10-JAN-1994     Goatley     Add MLST_V_NOCASE.
+!   20-JAN-1994	    Goatley     Add ROUTER_V_OMIT_VMSMAIL_SENDER.
+!   10-DEC-1995	    Goatley     Add DIGEST and NOACCESS support to MLST & MLE.
+!   14-JAN-1997	    Madison 	Add MLF info.
+!   17-FEB-1997	    Madison 	Add SPAM info.
+!   02-APR-1997	    Madison 	Added LCLDOM info, per-list MAXFWD, NORELAY bit for SMTP.
+!    1-MAY-1997	    Goatley     Added HOSTNAME, LHDRFLAGS, etc., HDRQ to MLST.
+!    5-MAY-1997     Goatley	Added DEFFLAGS to MLST.
+!   17-JUL-1997	    Goatley	Added MX_GALIAS_FILE_SPEC.
+!   29-AUG-1997	    Madison 	Reduce MLE storage requirements.
+!    2-OCT-1997	    Goatley     Add MLST_V_CC_POSTERR, MLST_T_SPREFIX.
+!   05-OCT-1997	    Madison 	Add SMTP_V_VALDOM.
+!   19-APR-1998	    Madison 	Add LCL_V_NO_EXQUOTA.
+!   24-APR-1998	    Madison 	Add SMTP_V_RBL, ROUTER_V_ACCTG.
+!   17-MAY-1998	    Madison 	Remove SPAMDEF, add SPAMFILTER rules.
+!   25-NOV-2000	    Madison 	Add MLF anti-spam settings, remove Jnet support, etc.
+!   14-FEB-2002     Madison     Add SMTP_V_NOPCTHACK.
+!   03-FEB-2008     Madison     Remove X.25 support.
+!   17-FEB-2010	    Sneddon	Added FROM_BAD_LOCAL_USER
+!   15-MAR-2010	    Sneddon	Added FROM_USER_MSGID_HOST
+!   12-MAR-2012	    Sneddon	Added SMTP_V_TLS
+!   18-JUL-2012	    Sneddon	Added SENDER_ADDRESS_VERIFY
+!-
+    LIBRARY 'FIELDS';
+
+    LITERAL
+    	CFG_M_RWRULES	    = 1,
+    	CFG_M_PATHLIST	    = 2,
+    	CFG_M_ALIASES	    = 4,
+    	CFG_M_MLISTS	    = 8,
+    	CFG_M_SYSUSERS	    = 16,
+    	CFG_M_FSRVINFO	    = 32,
+    	CFG_M_SMTPINFO	    = 64,
+    	CFG_M_ROUTERINFO    = 128,
+    	CFG_M_LOCALINFO	    = 256,
+    	CFG_M_DNSMTPINFO    = 1024,
+    	CFG_M_SITEINFO	    = 2048,
+    	CFG_M_MLFINFO	    = 8192,
+    	CFG_M_LCLDOMS	    = 32768,
+    	CFG_M_EXTSPAM	    = 65536,
+    	CFG_M_SPAMHEUR	    = 131072,
+    	CFG_M_RELAYS	    = 262144;
+
+    MACRO
+    	CFG_V_RWRULES	    = 0,0,1,0%,
+    	CFG_V_PATHLIST	    = 0,1,1,0%,
+    	CFG_V_ALIASES	    = 0,2,1,0%,
+    	CFG_V_MLISTS	    = 0,3,1,0%,
+    	CFG_V_SYSUSERS	    = 0,4,1,0%,
+    	CFG_V_FSRVINFO	    = 0,5,1,0%,
+    	CFG_V_SMTPINFO	    = 0,6,1,0%,
+    	CFG_V_ROUTERINFO    = 0,7,1,0%,
+    	CFG_V_LOCALINFO	    = 1,0,1,0%,
+    	CFG_V_DNSMTPINFO    = 1,2,1,0%,
+    	CFG_V_SITEINFO	    = 1,3,1,0%,
+    	CFG_V_MLFINFO	    = 1,5,1,0%,
+    	CFG_V_LCLDOMS	    = 1,7,1,0%,
+    	CFG_V_EXTSPAM	    = 2,0,1,0%,
+    	CFG_V_SPAMHEUR	    = 2,1,1,0%,
+    	CFG_V_RELAYS	    = 2,2,1,0%;
+
+    LITERAL
+    	RULEPRE53_S_LHS  	= 255,
+    	RULEPRE53_S_RHS  	= 255;
+
+    _DEF (RULE)
+    	RULE_L_FLINK	= _LONG,
+    	RULE_L_BLINK	= _LONG,
+        RULE_L_FLAGS    = _LONG,
+        _OVERLAY (RULE_L_FLAGS)
+            RULE_V_REGEX    = _BIT,
+        _ENDOVERLAY
+        RULE_A_LHS      = _LONG,
+        RULE_A_LHSREGEX = _LONG,
+        RULE_A_RHS      = _LONG
+    _ENDDEF (RULE);
+
+    _DEF (RULEPRE53)
+        RULEPRE53_L_FLINK = _LONG,
+        RULEPRE53_L_BLINK = _LONG,
+        RULEPRE53_W_LHS   = _WORD,
+        RULEPRE53_T_LHS   = _BYTES (RULEPRE53_S_LHS),
+        _ALIGN (WORD)
+        RULEPRE53_W_RHS   = _WORD,
+        RULEPRE53_T_RHS   = _BYTES (RULEPRE53_S_RHS)
+    _ENDDEF (RULEPRE53);
+
+    LITERAL
+    	PATH_S_DOMAIN	= 255,
+    	PATH_S_PARAM	= 255;
+
+    _DEF (PATH)
+    	PATH_L_FLINK	= _LONG,
+    	PATH_L_BLINK	= _LONG,
+    	PATH_W_PATH 	= _WORD,
+    	PATH_W_DOMAIN	= _WORD,
+    	PATH_T_DOMAIN	= _BYTES (PATH_S_DOMAIN),
+	_ALIGN(WORD)
+    	PATH_W_PARAM	= _WORD,
+    	PATH_T_PARAM	= _BYTES (PATH_S_PARAM)
+    _ENDDEF (PATH);
+
+    LITERAL
+    	MLST_S_NAME 	= 32,
+    	MLST_S_ARCHIVE	= 255,
+    	MLST_S_ERRSTO	= 255,
+    	MLST_S_DESC 	= 255,
+    	MLST_S_ADDMSG	= 255,
+    	MLST_S_REMMSG	= 255,
+    	MLST_S_FWDMSG	= 255,
+	MLST_S_RTNADR	= 255,
+	MLST_S_HOSTNAME = 255,
+	MLST_S_LSUB	= 255,
+	MLST_S_LUNSUB	= 255,
+	MLST_S_LHELP	= 255,
+        MLST_S_CNFMSG   = 255,
+	MLST_S_SPREFIX	= 32,
+    	PROT_M_READ 	= 1,
+    	PROT_M_WRITE	= 2,
+    	PROT_M_EXECUTE	= 4,
+    	PROT_M_DELETE	= 8,
+    	PROT_M_CONTROL	= 16;
+
+    MACRO
+    	PROT_V_READ 	= 0,0,1,0%,
+    	PROT_V_WRITE	= 0,1,1,0%,
+    	PROT_V_EXECUTE	= 0,2,1,0%,
+    	PROT_V_DELETE	= 0,3,1,0%,
+    	PROT_V_CONTROL	= 0,4,1,0%;
+
+    _DEF (MLST)
+    	MLST_L_FLINK	= _LONG,
+    	MLST_L_BLINK	= _LONG,
+    	MLST_Q_OWNQ	= _QUAD,
+    	MLST_Q_MODQ 	= _QUAD,
+        MLST_Q_CONFTIME = _QUAD,
+    	MLST_L_PROT 	= _LONG,
+    	_OVERLAY (MLST_L_PROT)
+    	    MLST_B_WPROT    = _BYTE,
+    	    MLST_B_GPROT    = _BYTE,
+    	    MLST_B_OPROT    = _BYTE,
+    	    MLST_B_SPROT    = _BYTE,
+    	_ENDOVERLAY
+    	MLST_L_FLAGS	= _LONG,
+    	_OVERLAY (MLST_L_FLAGS)
+    	    MLST_V_RTOSNDR  = _BIT,
+    	    MLST_V_RTOLIST  = _BIT,
+	    MLST_V_REMRCVD  = _BIT,	!Strip Received: headers from posts
+	    MLST_V_PRIVATE  = _BIT,	!List is a private list
+	    MLST_V_REMOTHER = _BIT,	!Remove OTHER headers
+	    MLST_V_CC_POSTMASTER = _BIT,
+	    MLST_V_NOCASE   = _BIT,	!Add all entries as /NOCASE
+	    MLST_V_DIGEST   = _BIT,	!List supports digest subscribers
+    	    MLST_V_NOHIDE   = _BIT, 	!Hide errors-to address?
+	    MLST_V_CC_POSTERR = _BIT,	!CC owner on all post errors?
+    	    MLST_V_NOSPAMHI = _BIT,
+    	    MLST_V_NOSPAMMD = _BIT,
+    	    MLST_V_NOSPAMLO = _BIT,
+    	    MLST_V_RQLSTADR = _BIT,
+            MLST_V_TEXTONLY = _BIT,
+            MLST_V_SUBCNFRM = _BIT,
+            MLST_V_NOTIFY   = _BITS (4),
+    	_ENDOVERLAY
+        _OVERLAY (MLST_V_NOTIFY)
+            MLST_V_NTFYADD  = _BIT,
+            MLST_V_NTFYREM  = _BIT,
+            MLST_V_NTFYREQ  = _BIT,
+            MLST_V_NTFYCHG  = _BIT,
+        _ENDOVERLAY
+    	MLST_W_NAME 	= _WORD,
+    	MLST_T_NAME 	= _BYTES (MLST_S_NAME),
+	_ALIGN(WORD)
+    	MLST_W_ARCHIVE	= _WORD,
+    	MLST_T_ARCHIVE	= _BYTES (MLST_S_ARCHIVE),
+	_ALIGN(WORD)
+    	MLST_W_ERRSTO	= _WORD,
+    	MLST_T_ERRSTO	= _BYTES (MLST_S_ERRSTO),
+	_ALIGN(WORD)
+    	MLST_W_DESC 	= _WORD,
+    	MLST_T_DESC 	= _BYTES (MLST_S_DESC),
+	_ALIGN(WORD)
+    	MLST_W_ADDMSG	= _WORD,
+    	MLST_T_ADDMSG	= _BYTES (MLST_S_ADDMSG),
+	_ALIGN(WORD)
+    	MLST_W_REMMSG	= _WORD,
+    	MLST_T_REMMSG	= _BYTES (MLST_S_REMMSG),
+	_ALIGN(WORD)
+    	MLST_W_FWDMSG	= _WORD,
+    	MLST_T_FWDMSG	= _BYTES (MLST_S_FWDMSG),
+	_ALIGN(WORD)
+    	MLST_W_RTNADR	= _WORD,
+    	MLST_T_RTNADR	= _BYTES (MLST_S_RTNADR),
+    	_ALIGN(LONG)
+    	MLST_L_MAXFWD	= _LONG,
+	MLST_L_LHDRFLAGS = _LONG,
+    	_OVERLAY (MLST_L_LHDRFLAGS)
+    	    MLST_V_LSUB		= _BIT,
+    	    MLST_V_LUNSUB	= _BIT,
+	    MLST_V_LHELP	= _BIT,
+    	_ENDOVERLAY
+	MLST_W_LSUB	= _WORD,
+	MLST_T_LSUB	= _BYTES (MLST_S_LSUB),
+    	_ALIGN(LONG)
+	MLST_W_LUNSUB	= _WORD,
+	MLST_T_LUNSUB	= _BYTES (MLST_S_LUNSUB),
+    	_ALIGN(LONG)
+	MLST_W_LHELP	= _WORD,
+	MLST_T_LHELP	= _BYTES (MLST_S_LHELP),
+    	_ALIGN(LONG)
+    	MLST_Q_HDRQ	= _QUAD,
+	MLST_W_HOSTNAME = _WORD,
+	MLST_T_HOSTNAME = _BYTES (MLST_S_HOSTNAME),
+    	_ALIGN(LONG)
+	MLST_L_DEFFLAGS	= _LONG,
+    	_OVERLAY (MLST_L_DEFFLAGS)	!MUST MATCH MLE_L_FLAGS below!!!
+    	    MLST_V_SS_NOMAIL    = _BIT,	!Default MAIL setting
+    	    MLST_V_SS_NOCASE    = _BIT, !Default CASE (not used)
+    	    MLST_V_SS_CONCEAL   = _BIT,	!Default CONCEAL setting
+    	    MLST_V_SS_NOREPRO   = _BIT,	!Default REPRO setting
+	    MLST_V_SS_ACCESS    = _BIT,	!Not used
+	    MLST_V_SS_DIGEST    = _BIT,	!Default DIGEST setting
+	    MLST_V_SS_DENY      = _BIT,	!Not used
+	    MLST_V_SS_NOPOST    = _BIT,	!Default POST setting
+    	_ENDOVERLAY
+	MLST_W_SPREFIX	= _WORD,
+	MLST_T_SPREFIX	= _BYTES (MLST_S_SPREFIX),
+    	_ALIGN (LONG)
+    	MLST_L_MSGSZLIM	= _LONG,
+        MLST_W_CNFMSG   = _WORD,
+        MLST_T_CNFMSG   = _BYTES (MLST_S_CNFMSG)
+        _ALIGN (WORD)
+    _ENDDEF (MLST);
+
+    _DEF (MLE)
+    	MLE_L_FLINK 	= _LONG,
+    	MLE_L_BLINK 	= _LONG,
+    	MLE_Q_CREDT 	= _QUAD,
+    	MLE_Q_MODDT 	= _QUAD,
+    	MLE_L_FLAGS 	= _LONG,
+    	_OVERLAY (MLE_L_FLAGS)
+    	    MLE_V_NOMAIL    = _BIT,
+    	    MLE_V_NOCASE    = _BIT,
+    	    MLE_V_CONCEAL   = _BIT,
+    	    MLE_V_NOREPRO   = _BIT,
+	    MLE_V_ACCESS    = _BIT,		    ! Set if this entry is dedicated to providing access control only, clear
+						    ! otherwise.  If ACCESS is set,  NOMAIL will ALSO be set.
+	    MLE_V_DIGEST    = _BIT,
+	    MLE_V_DENY      = _BIT,	!Subscriber can't do anything
+	    MLE_V_NOPOST    = _BIT,	!Subscriber can read, but can't post
+    	_ENDOVERLAY
+    	MLE_A_ADDR  	    = _LONG,
+    	MLE_A_NAME  	    = _LONG
+    _ENDDEF (MLE);
+
+    LITERAL
+    	FSRV_S_NAME 	= 32,
+    	FSRV_S_MGR  	= 255,
+    	FSRV_S_ROOT 	= 255,
+    	FSRV_S_MLIST	= MLST_S_NAME,
+    	FSRV_S_DESC	= 255;
+
+    _DEF (FSRV)
+    	FSRV_L_FLINK	= _LONG,
+    	FSRV_L_BLINK	= _LONG,
+    	FSRV_Q_BEGIN	= _QUAD,
+    	FSRV_Q_END  	= _QUAD,
+    	FSRV_Q_HOSTQ	= _QUAD,
+    	FSRV_Q_USERQ	= _QUAD,
+    	FSRV_Q_LASTACC	= _QUAD,
+    	FSRV_Q_LASTSND	= _QUAD,
+    	FSRV_Q_SNDBEGIN	= _QUAD,
+    	FSRV_Q_SNDEND	= _QUAD,
+    	FSRV_Q_SNDNEXT	= _QUAD,
+    	FSRV_L_THRESH	= _LONG,
+    	FSRV_L_HOSTLIM	= _LONG,
+    	FSRV_L_USERLIM	= _LONG,
+    	FSRV_L_SERVLIM	= _LONG,
+    	FSRV_L_SERVCNT	= _LONG,
+    	FSRV_L_MLSTPTR	= _LONG,
+    	FSRV_L_FLAGS	= _LONG,
+    	_OVERLAY (FSRV_L_FLAGS)
+    	    FSRV_V_DLYINIT  = _BIT,
+    	    FSRV_V_OVERLAP  = _BIT,
+	    FSRV_V_CC_POSTMASTER = _BIT,
+    	_ENDOVERLAY
+    	FSRV_W_NAME 	= _WORD,
+    	FSRV_T_NAME 	= _BYTES (FSRV_S_NAME),
+	_ALIGN(WORD)
+    	FSRV_W_MGR  	= _WORD,
+    	FSRV_T_MGR  	= _BYTES (FSRV_S_MGR),
+	_ALIGN(WORD)
+    	FSRV_W_ROOT 	= _WORD,
+    	FSRV_T_ROOT 	= _BYTES (FSRV_S_ROOT),
+	_ALIGN(WORD)
+    	FSRV_W_MLIST	= _WORD,
+    	FSRV_T_MLIST	= _BYTES (FSRV_S_MLIST),
+	_ALIGN(WORD)
+	FSRV_W_DESC	= _WORD,
+	FSRV_T_DESC	= _BYTES (FSRV_S_DESC)
+    _ENDDEF (FSRV);
+
+    LITERAL
+    	PRE52SMTP_S_DEFRTR	= 128,
+    	PRE52SMTP_S_RBLDOM	= 128;
+
+    _DEF (PRE52SMTP)
+    	PRE52SMTP_L_CODE	= _LONG,
+    	PRE52SMTP_L_MAXTRIES	= _LONG,
+    	PRE52SMTP_Q_RETRY	= _QUAD,
+    	PRE52SMTP_L_MAXDNS	= _LONG,
+    	PRE52SMTP_L_FLAGS	= _LONG,
+    	_OVERLAY (PRE52SMTP_L_FLAGS)
+    	    PRE52SMTP_V_ACCTG    = _BIT,
+    	    PRE52SMTP_V_UNIXFROM = _BIT,
+    	    PRE52SMTP_V_NOVRFY   = _BIT,
+    	    PRE52SMTP_V_NORELAY  = _BIT,
+    	    PRE52SMTP_V_VALDOM   = _BIT,
+    	    PRE52SMTP_V_RBL	    = _BIT,
+    	_ENDOVERLAY
+    	PRE52SMTP_W_DEFRTR	= _WORD,
+    	PRE52SMTP_T_DEFRTR	= _BYTES (PRE52SMTP_S_DEFRTR),
+    	PRE52SMTP_W_RBLDOM	= _WORD,
+    	PRE52SMTP_T_RBLDOM	= _BYTES (PRE52SMTP_S_RBLDOM)
+    _ENDDEF (PRE52SMTP);
+
+    LITERAL
+    	SMTP_S_DEFRTR	= 128;
+
+    _DEF (SMTP)
+    	SMTP_L_CODE	= _LONG,
+    	SMTP_L_MAXTRIES	= _LONG,
+    	SMTP_Q_RETRY	= _QUAD,
+    	SMTP_Q_RBLQUE	= _QUAD,
+    	SMTP_L_MAXDNS	= _LONG,
+    	SMTP_L_FLAGS	= _LONG,
+    	_OVERLAY (SMTP_L_FLAGS)
+    	    SMTP_V_ACCTG    = _BIT,
+    	    SMTP_V_UNIXFROM = _BIT,
+    	    SMTP_V_NOVRFY   = _BIT,
+    	    SMTP_V_NORELAY  = _BIT,
+    	    SMTP_V_VALDOM   = _BIT,
+    	    SMTP_V_RBL	    = _BIT,
+    	    SMTP_V_AUTHCRAM = _BIT,
+    	    SMTP_V_AUTHPLAIN= _BIT,
+            SMTP_V_NOPCTHACK= _BIT,
+	    SMTP_V_TLS	    = _BIT,
+    	_ENDOVERLAY
+    	SMTP_W_DEFRTR	= _WORD,
+    	SMTP_T_DEFRTR	= _BYTES (SMTP_S_DEFRTR)
+    _ENDDEF (SMTP);
+
+    _DEF (DNSMTP)
+    	DNSMTP_L_CODE	    = _LONG,
+    	DNSMTP_L_MAXTRIES   = _LONG,
+    	DNSMTP_Q_RETRY	    = _QUAD,
+    	DNSMTP_L_FLAGS	    = _LONG,
+    	_OVERLAY (DNSMTP_L_FLAGS)
+    	    DNSMTP_V_ACCTG  = _BIT
+    	_ENDOVERLAY
+    _ENDDEF (DNSMTP);
+
+    _DEF (SITE)
+    	SITE_L_CODE 	    = _LONG,
+    	SITE_L_MAXTRIES	    = _LONG,
+    	SITE_Q_RETRY	    = _QUAD,
+    	SITE_L_FLAGS	    = _LONG,
+    	_OVERLAY (SITE_L_FLAGS)
+    	    SITE_V_ACCTG    = _BIT
+    	_ENDOVERLAY
+    _ENDDEF (SITE);
+
+    _DEF (LOCAL)
+    	LOCAL_L_CODE	    = _LONG,
+    	LOCAL_L_MAXTRIES    = _LONG,
+    	LOCAL_Q_RETRY	    = _QUAD,
+    	LOCAL_L_FLAGS	    = _LONG,
+    	_OVERLAY (LOCAL_L_FLAGS)
+    	    LOCAL_V_ACCTG   = _BIT,
+	    LOCAL_V_ONE_FROM = _BIT,
+	    LOCAL_V_FILLER0  = _BIT,    ! was ALLOW_MM
+	    LOCAL_V_CC_POSTMASTER = _BIT,
+	    LOCAL_V_DONT_DECODE_QP = _BIT,
+    	    LOCAL_V_NO_EXQUOTA = _BIT,
+    	    LOCAL_V_LONG_LINES = _BIT,
+    	    LOCAL_V_EXQUOTA_FATAL = _BIT,
+    	    LOCAL_V_OMIT_RESENT = _BIT,
+    	_ENDOVERLAY
+    	LOCAL_L_HDRTOP	    = _LONG,  ! use MX_K_HDR_x as index into bitvector
+    	LOCAL_L_HDREND	    = _LONG   !  "      "      "      "
+    _ENDDEF (LOCAL);
+
+    _DEF (ROUTER)
+    	ROUTER_L_CODE	    = _LONG,
+    	ROUTER_L_FLAGS	    = _LONG,
+    	_OVERLAY (ROUTER_L_FLAGS)
+    	    ROUTER_V_PERCENT_HACK		= _BIT,
+	    ROUTER_V_OMIT_VMSMAIL_SENDER	= _BIT,
+    	    ROUTER_V_ACCTG  = _BIT
+    	_ENDOVERLAY
+    _ENDDEF (ROUTER);
+
+    _DEF (MLF)
+    	MLF_L_CODE 	    = _LONG,
+    	MLF_L_MAXFWD	    = _LONG,
+    	MLF_L_DELAYDAYS	    = _LONG
+    _ENDDEF (MLF);
+
+    _DEF (EXTSPAM)
+    	EXTSPAM_L_FLINK	    = _LONG,
+    	EXTSPAM_L_BLINK	    = _LONG,
+    	EXTSPAM_Q_DTADD	    = _QUAD,
+    	EXTSPAM_Q_DTREF	    = _QUAD,
+    	EXTSPAM_L_REFCNT    = _LONG,
+    	EXTSPAM_L_FLAGS	    = _LONG,
+    	_OVERLAY (EXTSPAM_L_FLAGS)
+    	    EXTSPAM_V_DIRTY 	= _BIT,
+    	    EXTSPAM_V_DELETED	= _BIT,
+    	    EXTSPAM_V_WROTE 	= _BIT,
+    	    EXTSPAM_V_ACCEPT	= _BIT,
+            EXTSPAM_V_REGEX     = _BIT,
+    	_ENDOVERLAY
+    	EXTSPAM_A_IPMATCH   = _LONG,
+    	EXTSPAM_A_FRMATCH   = _LONG,
+    	EXTSPAM_A_TOMATCH   = _LONG,
+    	EXTSPAM_A_HDMATCH   = _LONG,
+    	EXTSPAM_A_RWADDR    = _LONG,
+        EXTSPAM_L_RULEID    = _LONG,
+        EXTSPAM_A_FRREGEX   = _LONG,
+        EXTSPAM_A_TOREGEX   = _LONG,
+        EXTSPAM_A_HDREGEX   = _LONG
+    _ENDDEF (EXTSPAM);
+
+    LITERAL
+    	GHEUR_S_FWDTO	    	    	= 256,
+    	HEUR_K_NULL_FROM    	    	= 0,
+    	HEUR_K_NULL_TO	    	    	= 1,
+    	HEUR_K_FROM_TO_SENDER_SAME  	= 2,
+    	HEUR_K_MSGID_HAS_TO 	    	= 3,
+    	HEUR_K_INVALID_AOL_ADDRESS  	= 4,
+    	HEUR_K_NUMERIC_ADDRESS	    	= 5,
+    	HEUR_K_RECEIVED_AFTER_FROM  	= 6,
+    	HEUR_K_X_UIDL	    	    	= 7,
+    	HEUR_K_NULL_MSGID   	    	= 8,
+    	HEUR_K_INVALID_HOTMAIL_ADDRESS	= 9,
+    	HEUR_K_RECEIVED_ALL_ZEROS   	= 10,
+    	HEUR_K_UIDL_AUTH_SENDER	    	= 11,
+    	HEUR_K_PRECEDENCE_BULK	    	= 12,
+    	HEUR_K_MSGID_HAS_FROM 	    	= 13,
+        HEUR_K_INVALID_FROM             = 14,
+        HEUR_K_INVALID_TO               = 15,
+	HEUR_K_FROM_BAD_LOCAL_USER	= 16,
+	HEUR_K_FROM_USER_MSGID_HOST	= 17,
+	HEUR_K_SENDER_ADDRESS_VERIFY	= 18,
+    	HEUR_K_COUNT	    	    	= 19,
+    	HEUR_K_GLOBAL	    	    	= 255;  ! for marking exclusions
+
+    LITERAL
+    	HEUR_K_ACTION_DROP  	    	    	= 1,
+    	HEUR_K_ACTION_FORWARD	    	    	= 2,
+    	HEUR_K_CONF_MAX	    	    	    	= 10,
+    	HEUR_K_CONF_MIN	    	    	    	= 0,
+    	HEUR_K_ACCEPT_THRESHOLD_DEFAULT	    	= 0,
+    	HEUR_K_REJECT_THRESHOLD_DEFAULT	    	= 8,
+    	HEUR_K_DC_NULL_FROM	    	    	= 8,
+    	HEUR_K_DC_NULL_TO	    	    	= 6,
+    	HEUR_K_DC_FROM_TO_SENDER_SAME  	    	= 10,
+    	HEUR_K_DC_MSGID_HAS_TO 	    	    	= 10,
+    	HEUR_K_DC_INVALID_AOL_ADDRESS  	    	= 10,
+    	HEUR_K_DC_NUMERIC_ADDRESS	    	= 7,
+    	HEUR_K_DC_RECEIVED_AFTER_FROM  	    	= 4,
+    	HEUR_K_DC_X_UIDL	    	    	= 8,
+    	HEUR_K_DC_NULL_MSGID   	    	    	= 10,
+    	HEUR_K_DC_INVALID_HOTMAIL_ADDR   	= 10,
+    	HEUR_K_DC_RECEIVED_ALL_ZEROS   	    	= 10,
+    	HEUR_K_DC_UIDL_AUTH_SENDER	    	= 10,
+    	HEUR_K_DC_MSGID_HAS_FROM 	    	= 10,
+    	HEUR_K_DC_PRECEDENCE_BULK	    	= 4,
+        HEUR_K_DC_INVALID_FROM                  = 2,
+        HEUR_K_DC_INVALID_TO                    = 2,
+	HEUR_K_DC_FROM_BAD_LOCAL_USER		= 5,
+	HEUR_K_DC_FROM_USER_MSGID_HOST		= 2,
+	HEUR_K_DC_SENDER_ADDRESS_VERIFY		= 10;
+
+    _DEF (GHEUR)  ! global heuristics info
+    	GHEUR_L_CODE	    = _LONG,
+    	GHEUR_W_ACTION	    = _WORD,
+    	GHEUR_W_FLAGS	    = _WORD,
+    	_OVERLAY (GHEUR_W_FLAGS)
+    	    GHEUR_V_INCLUDE_REASON  = _BIT,
+    	_ENDOVERLAY
+    	GHEUR_L_CL_ACCEPT   = _LONG,
+    	GHEUR_L_CL_REJECT   = _LONG,
+    	_ALIGN (QUAD)
+    	GHEUR_Q_GBLEXCL	    = _QUAD,
+    	GHEUR_W_FWDTO	    = _WORD,
+    	GHEUR_T_FWDTO	    = _BYTES (GHEUR_S_FWDTO)
+    _ENDDEF (GHEUR);
+
+    _DEF (HEUR)
+    	HEUR_L_CODE 	    = _LONG,
+    	HEUR_L_INDEX	    = _LONG,
+    	HEUR_L_CONFIDENCE   = _LONG,
+    	HEUR_L_FLAGS	    = _LONG,
+    	_OVERLAY (HEUR_L_FLAGS)
+    	    HEUR_V_ENABLED  = _BIT,
+    	_ENDOVERLAY
+    	_ALIGN (QUAD)
+    	HEUR_Q_EXCL	    = _QUAD
+    _ENDDEF (HEUR);
+
+    MACRO
+    	HEURDEF_ARRAY (_n)	= BLOCKVECTOR [_n,HEUR_S_HEURDEF,BYTE] FIELD (HEUR_FIELDS)%;
+    	
+    LITERAL
+    	LCLDOM_S_HOST	    = 128;
+
+    _DEF (LCLDOM)
+    	LCLDOM_L_FLINK	    = _LONG,
+    	LCLDOM_L_BLINK	    = _LONG,
+    	LCLDOM_W_HOSTLEN    = _WORD,
+    	LCLDOM_T_HOST	    = _BYTES (LCLDOM_S_HOST)
+    _ENDDEF (LCLDOM);
+
+    _DEF (RELAY)
+    	RELAY_L_FLINK	    = _LONG,
+    	RELAY_L_BLINK	    = _LONG,
+    	RELAY_L_ADDRESS	    = _LONG,
+    	RELAY_L_NETMASK	    = _LONG,
+    	RELAY_L_FLAGS	    = _LONG,
+    	_OVERLAY (RELAY_L_FLAGS)
+    	    RELAY_V_REJECT  = _BIT,
+    	    RELAY_V_RELAY   = _BIT
+    	_ENDOVERLAY
+    _ENDDEF (RELAY);
+
+    !
+    !  Symbols for layout of MX_ALIAS_DEF file.
+    !
+    MACRO
+	MX_ALIAS_FILE_SPEC = 'MX_ALIAS_DATABASE'%,
+	MX_ALIAS_FILE_DEF  = 'SYS$LOGIN:MX_ALIAS_DATABASE.DAT'%,
+	MX_GALIAS_FILE_SPEC = 'MX_GLOBAL_ALIAS_DATABASE'%;
+
+    LITERAL
+	ALIAS_S_ALIAS	= 20,
+	ALIAS_S_ADDR	= 255,
+	ALIAS_S_DESC	= 255,
+	ALIAS_S_MAXREC	= ALIAS_S_ALIAS+ALIAS_S_ADDR+1+ALIAS_S_DESC+1;
+
+    _DEF (ALIAS)
+	ALIAS_T_ALIAS	= _BYTES (ALIAS_S_ALIAS),	!The key (the alias)
+	ALIAS_T_DATA	= _BYTE
+    _ENDDEF (ALIAS);

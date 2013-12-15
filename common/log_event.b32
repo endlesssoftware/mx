@@ -1,0 +1,265 @@
+%TITLE 'LOG_EVENT'
+MODULE LOG_EVENT (IDENT='V1.2-1', ADDRESSING_MODE (EXTERNAL=LONG_RELATIVE,NONEXTERNAL=LONG_RELATIVE)) =
+BEGIN
+!++
+! FACILITY: 	    MX
+!
+! ABSTRACT: 	    Event logging routines.
+!
+! MODULE DESCRIPTION:
+!
+!   This module contains routines for logging events and trace information.
+!
+! AUTHOR:   	    M. Madison
+!
+! Copyright (c) 2008, Matthew Madison.
+! 
+! All rights reserved.
+! 
+! Redistribution and use in source and binary forms, with or without
+! modification, are permitted provided that the following conditions
+! are met:
+! 
+!     * Redistributions of source code must retain the above
+!       copyright notice, this list of conditions and the following
+!       disclaimer.
+!     * Redistributions in binary form must reproduce the above
+!       copyright notice, this list of conditions and the following
+!       disclaimer in the documentation and/or other materials provided
+!       with the distribution.
+!     * Neither the name of the copyright owner nor the names of any
+!       other contributors may be used to endorse or promote products
+!       derived from this software without specific prior written
+!       permission.
+! 
+! THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
+! "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
+! LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
+! A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
+! OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
+! SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
+! LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
+! DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
+! THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
+! (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
+! OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+!
+! CREATION DATE:    07-FEB-1992
+!
+! MODIFICATION HISTORY:
+!
+!   07-FEB-1992	V1.0	Madison	    Initial coding (from Watcher).
+!   27-DEC-1996	V1.1	Madison	    Remove STR$POSITION.
+!   08-MAY-1997	V1.2	Madison	    Allow per-event specification of oper class.
+!   15-SEP-1997 V1.2-1	Goatley     Use NETWORK as default class if logical
+!				    value isn't a valid class name.
+!--
+    LIBRARY 'SYS$LIBRARY:STARLET';
+    LIBRARY 'MX';
+
+    FORWARD ROUTINE
+    	LOG_EVENT,
+    	ASC_TO_OPC_OR;
+
+    EXTERNAL ROUTINE
+    	G_HAT (LIB$SYS_FAO, LIB$PUT_OUTPUT);
+
+    LITERAL
+    	OPCBUF_SIZE = 256+8;
+
+    OWN
+    	OPCBUF	: BLOCK [OPCBUF_SIZE,BYTE],
+    	OPCDSC	: BLOCK [DSC$K_S_BLN,BYTE],
+    	BUFDSC	: BLOCK [DSC$K_S_BLN,BYTE],
+    	INITED	: INITIAL (0),
+    	DO_OPER	: INITIAL (0);
+
+    BIND
+    	lnm_system  	= %ASCID'LNM$SYSTEM',
+    	ascid_lognam	= %ASCID'MX_EVENT_OPER_CLASS';
+!+
+! N.B.: The order of these names MUST correspond to the bits in
+!   	$OPCDEF!
+!-
+    MACRO
+    	TABLE (TABNAM, ITEM1) [] =
+    	    %IF %LENGTH EQL 1 %THEN %EXITMACRO %FI
+    	    LITERAL %NAME (TABNAM, '_COUNT') = %LENGTH - 1;
+    	    OWN TABNAM : VECTOR [%NAME (TABNAM, '_COUNT'),LONG]
+    	    	PSECT ($PLIT$) INITIAL (
+    	    	%ASCID ITEM1
+    	    	%IF NOT %NULL (%REMAINING) %THEN FILLTAB (%REMAINING) %FI);
+    	%,
+    	FILLTAB (X) [] =
+    	    , %ASCID X %IF NOT %NULL (%REMAINING) %THEN FILLTAB (%REMAINING) %FI
+    	%;
+    TABLE (OPCNAME,
+    	    	'CENTRAL',  'PRINTER', 'TAPES',   'DISKS',    'DEVICES',
+    	    	'CARDS',    'NETWORK', 'CLUSTER', 'SECURITY', 'REPLY',
+    	    	'SOFTWARE', '',        'OPER1',   'OPER2',    'OPER3',
+    	    	'OPER4',    'OPER5',   'OPER6',   'OPER7',    'OPER8',
+    	    	'OPER9',    'OPER10',  'OPER11',  'OPER12');
+
+
+%SBTTL 'LOG_EVENT'
+GLOBAL ROUTINE LOG_EVENT (STR_A, LOGNAM_A) = 
+BEGIN
+!++
+! FUNCTIONAL DESCRIPTION:
+!
+!   Writes a string to the log file and/or operator.   
+!
+! RETURNS:  	cond_value, longword (unsigned), write only, by value
+!
+! PROTOTYPE:
+!
+!   LOG_EVENT
+!
+! IMPLICIT INPUTS:  None.
+!
+! IMPLICIT OUTPUTS: None.
+!
+! COMPLETION CODES:
+!
+!   SS$_NORMAL:	    	normal successful completion.
+!
+! SIDE EFFECTS:
+!
+!   None.
+!--
+    BIND
+    	STR 	= .STR_A    : BLOCK [,BYTE];
+
+    BUILTIN
+    	ACTUALCOUNT;
+
+    LOCAL
+    	LEN 	: WORD,
+    	saved_target,
+    	saved_do_oper;
+
+    IF .INITED AND ACTUALCOUNT () GTR 1 THEN
+    BEGIN
+    	saved_do_oper = .do_oper;
+    	IF .do_oper THEN CH$MOVE (3, opcbuf [OPC$B_MS_TARGET], saved_target);
+    END;
+
+    IF NOT .INITED OR ACTUALCOUNT () GTR 1 THEN
+    BEGIN
+    	LOCAL
+    	    LNMLST  : $ITMLST_DECL (ITEMS=2),
+    	    LNMBUF  : VOLATILE VECTOR [255,BYTE],
+    	    NAMDSC  : BLOCK [DSC$K_S_BLN,BYTE] VOLATILE PRESET (
+    	    	    	[DSC$B_DTYPE] = DSC$K_DTYPE_T,
+    	    	    	[DSC$B_CLASS] = DSC$K_CLASS_S,
+    	    	    	[DSC$A_POINTER] = LNMBUF),
+    	    TARGET,
+    	    STATUS;
+    	IF ACTUALCOUNT () EQL 1 THEN INITED = 1;
+
+    	TARGET = 0;
+    	INCR I FROM 0 DO
+    	BEGIN
+    	    $ITMLST_INIT (ITMLST=LNMLST,
+    	    	(ITMCOD=LNM$_INDEX, BUFADR=I, BUFSIZ=4),
+    	    	(ITMCOD=LNM$_STRING, BUFADR=LNMBUF, BUFSIZ=%ALLOCATION (LNMBUF),
+    	    	    RETLEN=NAMDSC [DSC$W_LENGTH]));
+    	    IF ACTUALCOUNT () GTR 1 AND .lognam_a NEQA 0 THEN
+    	    	status = $TRNLNM (TABNAM=lnm_system, LOGNAM=.lognam_a, ITMLST=lnmlst)
+    	    ELSE
+    	    	status = $TRNLNM (TABNAM=lnm_system, LOGNAM=ascid_lognam, ITMLST=lnmlst);
+    	    IF NOT .STATUS OR .NAMDSC [DSC$W_LENGTH] EQL 0 THEN EXITLOOP;
+    	    ASC_TO_OPC_OR (NAMDSC, TARGET);
+    	END;
+    	DO_OPER = NOT (.TARGET EQL 0);
+    	BUFDSC [DSC$B_DTYPE] = DSC$K_DTYPE_T;
+    	BUFDSC [DSC$B_CLASS] = DSC$K_CLASS_S;
+    	BUFDSC [DSC$W_LENGTH] = OPCBUF_SIZE-8;
+    	BUFDSC [DSC$A_POINTER] = OPCBUF [OPC$L_MS_TEXT];
+    	CH$FILL (%CHAR (0), OPCBUF_SIZE, OPCBUF);
+    	OPCBUF [OPC$B_MS_TYPE] = OPC$_RQ_RQST;
+    	CH$MOVE (3, TARGET, OPCBUF [OPC$B_MS_TARGET]);
+    	OPCBUF [OPC$L_MS_RQSTID] = 0;
+    	OPCDSC [DSC$B_DTYPE] = DSC$K_DTYPE_T;
+    	OPCDSC [DSC$B_CLASS] = DSC$K_CLASS_S;
+    	OPCDSC [DSC$A_POINTER] = OPCBUF;
+    	OPCDSC [DSC$W_LENGTH] = 8;
+    END;
+
+    IF .DO_OPER THEN
+    BEGIN
+    	LIB$SYS_FAO (%ASCID'!AS', LEN, BUFDSC, .STR_A);
+    	OPCDSC [DSC$W_LENGTH] = .LEN + 8;
+    	$SNDOPR (MSGBUF=OPCDSC);
+    END;
+
+    LIB$SYS_FAO (%ASCID'!%D:  !AS', LEN, BUFDSC, 0, .STR_A);
+    BUFDSC [DSC$W_LENGTH] = .LEN;
+    LIB$PUT_OUTPUT (BUFDSC);
+    BUFDSC [DSC$W_LENGTH] = OPCBUF_SIZE-8;
+
+    IF .INITED AND ACTUALCOUNT () GTR 1 THEN
+    BEGIN
+    	do_oper = .saved_do_oper;
+    	IF .do_oper THEN CH$MOVE (3, saved_target, opcbuf [OPC$B_MS_TARGET]);
+    END;
+
+    SS$_NORMAL
+
+END; ! LOG_EVENT
+
+%SBTTL 'ASC_TO_OPC_OR'
+ROUTINE ASC_TO_OPC_OR (OPCSTR_A, OPCMSK_A) = 
+BEGIN
+!++
+! FUNCTIONAL DESCRIPTION:
+!
+!   Takes an ASCII operator class name, converts it to its OPC bit,
+!   and OR's it with a mask.
+!
+! RETURNS:  	cond_value, longword (unsigned), write only, by value
+!
+! PROTOTYPE:
+!
+!   ASC_TO_OPC_OR  opcstr, opcmsk
+!
+! IMPLICIT INPUTS:  None.
+!
+! IMPLICIT OUTPUTS: None.
+!
+! COMPLETION CODES:
+!
+!   SS$_NORMAL:	    	normal successful completion.
+!
+! SIDE EFFECTS:
+!
+!   None.
+!--
+    BIND
+    	OPCSTR	= .OPCSTR_A 	: BLOCK [,BYTE],
+    	OPCMSK	= .OPCMSK_A 	: BITVECTOR [];
+
+    LOCAL
+    	OPCBIT;
+
+    OPCBIT = (INCR I FROM 0 TO OPCNAME_COUNT-1 DO
+    	    	BEGIN
+    	    	    BIND OPC = .OPCNAME [.I] : BLOCK [,BYTE];
+    	    	    IF .OPC [DSC$W_LENGTH] GTR 0 THEN
+    	    	    	IF CH$FIND_SUB (.OPC [DSC$W_LENGTH],
+    	    	    	    	    	.OPC [DSC$A_POINTER],
+    	    	    	    	    	.OPCSTR [DSC$W_LENGTH],
+    	    	    	    	    	.OPCSTR [DSC$A_POINTER]) EQLA
+    	    	    	    .OPC [DSC$A_POINTER] THEN EXITLOOP .I;
+    	    	END);
+
+    IF .OPCBIT GEQ 0
+    THEN OPCMSK [.OPCBIT] = 1
+    ELSE OPCMSK [6] = 1;		!If no match, use NETWORK as default
+
+    SS$_NORMAL
+
+END; ! ASC_TO_OPC_OR
+
+END
+ELUDOM

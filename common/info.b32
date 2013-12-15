@@ -1,0 +1,606 @@
+%TITLE 'INFO'
+MODULE INFO (IDENT='V3.2') =
+BEGIN
+!++
+! FACILITY: 	    MX Mail Exchange utility routines
+!
+! ABSTRACT: 	    Routines for handling .xxx_INFO files.
+!
+! MODULE DESCRIPTION:
+!
+!   This module contains routines READ_INFO and WRITE_INFO, routines
+!   which convey transport-type information from one MX module to another
+!   via .xxx_INFO files.   It also contains READ_HDRS and WRITE_HDRS,
+!   routines for reading and writing message header information.
+!
+! AUTHOR:   	    M. Madison
+!
+! Copyright (c) 2008, Matthew Madison.
+! 
+! All rights reserved.
+! 
+! Redistribution and use in source and binary forms, with or without
+! modification, are permitted provided that the following conditions
+! are met:
+! 
+!     * Redistributions of source code must retain the above
+!       copyright notice, this list of conditions and the following
+!       disclaimer.
+!     * Redistributions in binary form must reproduce the above
+!       copyright notice, this list of conditions and the following
+!       disclaimer in the documentation and/or other materials provided
+!       with the distribution.
+!     * Neither the name of the copyright owner nor the names of any
+!       other contributors may be used to endorse or promote products
+!       derived from this software without specific prior written
+!       permission.
+! 
+! THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
+! "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
+! LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
+! A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
+! OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
+! SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
+! LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
+! DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
+! THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
+! (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
+! OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+!
+! CREATION DATE:    28-APR-1989
+!
+! MODIFICATION HISTORY:
+!
+!   28-APR-1989	V1.0	Madison	    Initial coding.
+!   06-DEC-1989	V1.1	Madison	    Added HDRS routines.
+!   15-JAN-1990	V1.1-1	Madison	    Purge old versions when writing.
+!   16-JAN-1991	V1.1-2	Madison	    Don't overrun buffer length.
+!   02-MAR-1991	V1.2	Madison	    Let READ_INFO return source.
+!   20-MAR-1991	V1.3	Madison	    Use MEM routines.
+!   17-OCT-1991	V2.0	Madison	    Support new RCPT structure.
+!   15-NOV-1991	V2.0-1	Madison	    New MEM RCPT routines.
+!   23-MAR-1993 V2.1	Goatley     Modifed READ_INFO to handle RCPT change.
+!   12-MAR-1997	V2.2	Madison	    Another RCPTDEF modification.
+!   28-APR-1997	V2.3	Madison	    Add 8bit check.
+!   05-MAY-1997	V2.3-1	Madison	    Add envelope from host.
+!    4-JUN-1997 V2.3-2	Goatley	    Free STR in READ_INFO!
+!   29-AUG-1997	V2.4	Madison	    Restructured RCPTs again!
+!    1-SEP-1997 V2.4-1	Goatley     Fix small glitch in Pre4.4 and Pre5.0 read.
+!   27-JUN-1998	V3.0	Madison	    RCPTDEF change; new xxx_ENVELOPE routines;
+!   	    	    	    	    move _HDRS routines to separate module.
+!   18-JUL-1998	V3.1	Madison	    Remove now-obsolete _INFO routines.
+!   05-AUG-1998	V3.1-1	Madison	    Fix sign on shift for page count calculation.
+!   12-AUG-1998	V3.1-2	Madison	    Fix writing of DSN_SENTDT field.
+!   24-JAN-2001 V3.1-3  Madison     Fix DISPOSE_ENVELOPE.
+!   23-APR-2001 V3.2    Madison     ENVL_V_NO_ENCODE flag to disable QP encoding.
+!--
+    LIBRARY 'SYS$LIBRARY:STARLET';
+    LIBRARY 'MX_SRC_COMMON:FLQ';
+    LIBRARY 'MX';
+
+    FORWARD ROUTINE
+    	WRITE_ENVELOPE,
+    	READ_ENVELOPE,
+    	DISPOSE_ENVELOPE;
+
+    EXTERNAL ROUTINE
+    	MEM_GETTXT,
+    	MEM_GETRCPT,
+    	MEM_FREERCPT,
+    	MX_FILE_PURGE,
+    	G_HAT (LIB$GET_VM_PAGE, LIB$FREE_VM_PAGE, LIB$SCOPY_R_DX);
+
+    MACRO
+    	INFO_L_DATACODE	= 0,0,32,0%,
+    	INFO_Q_QUAD 	= 4,0, 0,0%,
+    	INFO_L_LW   	= 4,0,32,0%,
+    	INFO_W_COUNT	= 4,0,16,0%,
+    	INFO_W_STRLEN	= 6,0,16,0%,
+    	INFO_T_STR  	= 8,0, 0,0%;
+
+    LITERAL
+    	INFO__ORIGIN		= 327,
+    	INFO__ORGSENDER		= 413,
+    	INFO__FROMADR		= 769,
+    	INFO__RECIPADR		= 501,
+    	INFO__PRE33_RECIPREC	= 924,		!Pre MX V3.3 rcpt
+    	INFO__PRE44_RECIPREC	= 956,	    	!Pre MX V4.4 rcpt
+    	INFO__PRE50_RECIPREC	= 962,	    	!Pre MX V5.0 rcpt
+    	INFO__PRE51_RECIPREC	= 973,	    	!Pre MX V5.1 rcpt
+    	INFO__RECIPREC	    	= 984,
+    	INFO__CONTAINS8BIT  	= 685,
+    	INFO__ENVFROMHOST   	= 234,
+    	INFO__DSN_ENVID	    	= 155,
+    	INFO__DSN_HDRSONLY  	= 156,
+    	INFO__RCVDFROM	    	= 271,
+    	INFO__DSN_SENTDT    	= 342,
+    	INFO__DIAGTEXT	    	= 444;
+
+    MACRO
+    	PUT_LONGWORD (COD, VAL) =
+    	    BEGIN
+    	    	BUF [INFO_L_DATACODE] = COD;
+    	    	BUF [INFO_L_LW] = VAL;
+    	    	RAB [RAB$W_RSZ] = 8;
+    	    	$PUT (RAB=RAB)
+    	    END%,
+    	PUT_QUADWORD (COD, VAL) =
+    	    BEGIN
+    	    	BUF [INFO_L_DATACODE] = COD;
+    	    	CH$MOVE (8, VAL, BUF [INFO_Q_QUAD]);
+    	    	RAB [RAB$W_RSZ] = 12;
+    	    	$PUT (RAB=RAB)
+    	    END%,
+    	PUT_TEXT (__code, _txt) =
+    	    BEGIN
+    	    	BIND __txt = _txt : REF TXTDEF;
+    	    	buf [INFO_L_DATACODE] = __code;
+    	    	buf [INFO_W_COUNT] = 0;
+    	    	buf [INFO_W_STRLEN] = .__txt [TXT_W_LEN];
+    	    	rab [RAB$W_RSZ] = 8 + .BUF [INFO_W_STRLEN];
+    	    	CH$MOVE (.__txt [TXT_W_LEN], __txt [TXT_T_TEXT], buf [INFO_T_STR]);
+    	    	$PUT (RAB=rab)
+    	    END%;
+
+%SBTTL 'WRITE_ENVELOPE'
+GLOBAL ROUTINE WRITE_ENVELOPE (QAB, QENT_A, SFX_A, ENVL_A) =
+BEGIN
+!++
+! FUNCTIONAL DESCRIPTION:
+!
+!   Writes out envelope information to a .<xxx>_INFO file.
+!
+! RETURNS:  	cond_value, longword (unsigned), write only, by value
+!
+! PROTOTYPE:
+!
+!   WRITE_ENVELOPE  qab, qent, sfx, envl
+!
+!   qab:    FLQ context (longword_unsigned), read only, by value
+!   qent:   FLQ QENT structure, read only, by reference
+!   sfx:    char_string, read only, by descriptor
+!   envl:   ENVL structure, read only, by reference
+!
+! IMPLICIT INPUTS:  None.
+!
+! IMPLICIT OUTPUTS: None.
+!
+! COMPLETION CODES:
+!
+!   SS$_NORMAL:	    	normal successful completion.
+!
+! SIDE EFFECTS:	    None.
+!--
+
+    BIND
+    	qent	= .QENT_A   	    	: QENTDEF,
+    	envl	= .ENVL_A   	    	: ENVLDEF;
+    bind_envl_fields (envl);
+
+    LOCAL
+    	fspec 	: BLOCK [DSC$K_S_BLN,BYTE],
+    	fsbuf	: VECTOR [256,BYTE],
+    	lclbuf 	: BLOCK [1024,BYTE],
+    	buf	: REF BLOCK [,BYTE],
+    	fab 	: $FAB_DECL,
+    	rab 	: $RAB_DECL,
+    	rcpt	: REF RCPTDEF,
+    	bufsize,
+    	fctx,
+    	status;
+
+    INIT_SDESC (fspec, %ALLOCATION (fsbuf), fsbuf);
+    status = FLQ_MAKE_FSPEC (.qent [QENT_L_ENTNUM], .sfx_a, fspec, fspec[DSC$W_LENGTH]);
+    IF NOT .status THEN RETURN .status;
+
+    bufsize = %ALLOCATION (lclbuf);
+    rcpt = .rcptque [QUE_L_HEAD];
+    WHILE .rcpt NEQA rcptque DO
+    BEGIN
+    	bind_rcpt_fields (rcpt);
+    	LOCAL rsize;
+    	rsize = RCPT_S_RCPTDEF;
+    	IF .addr NEQA 0 THEN	rsize = .rsize + .addr [TXT_W_LEN];
+    	IF .route NEQA 0 THEN	rsize = .rsize + .route [TXT_W_LEN];
+    	IF .ortype NEQA 0 THEN	rsize = .rsize + .ortype [TXT_W_LEN];
+    	IF .oraddr NEQA 0 THEN	rsize = .rsize + .oraddr [TXT_W_LEN];
+    	IF .rsize GTRU .bufsize THEN bufsize = .rsize;
+    	rcpt = .rcpt [RCPT_L_FLINK];
+    END;
+
+    IF .envl [ENVL_V_ORGSENDER] AND .orgsender NEQA 0 THEN  	bufsize = MAXU (.bufsize, .orgsender [TXT_W_LEN]);
+    IF .envl [ENVL_V_FROMADR] AND .fromadr NEQA 0 THEN 	    	bufsize = MAXU (.bufsize, .fromadr [TXT_W_LEN]);
+    IF .envl [ENVL_V_ENVFROMHOST] AND .envfromhost NEQA 0 THEN  bufsize = MAXU (.bufsize, .envfromhost [TXT_W_LEN]);
+    IF .envl [ENVL_V_RCVDFROM] AND .rcvdfrom NEQA 0 THEN    	bufsize = MAXU (.bufsize, .rcvdfrom [TXT_W_LEN]);
+
+    IF .bufsize GTRU %ALLOCATION (lclbuf) THEN
+    BEGIN
+    	status = LIB$GET_VM_PAGE (%REF ((.bufsize+511) ^ -9), buf);
+    	IF NOT .status THEN RETURN .status;
+    END
+    ELSE buf = lclbuf;
+
+    $FAB_INIT (FAB=fab, FAC=PUT, RFM=VAR, MRS=0, FNA=.fspec [DSC$A_POINTER], FNS=.fspec [DSC$W_LENGTH]);
+    $RAB_INIT (RAB=rab, FAB=fab, RBF=.buf);
+
+    status = $CREATE (FAB=fab);
+    IF .status THEN status = $CONNECT (RAB=rab);
+
+    IF .status AND .envl [ENVL_V_ORIGIN] THEN
+    	status = PUT_LONGWORD (INFO__ORIGIN, .envl [ENVL_L_ORIGIN]);
+    IF .status AND .envl [ENVL_V_CONTAINS8BIT] THEN
+    	status = PUT_LONGWORD (INFO__CONTAINS8BIT, (IF .envl [ENVL_V_NO_ENCODE] THEN 2 ELSE 0));
+    IF .status AND .envl [ENVL_V_DSN_HDRSONLY] THEN
+    	status = PUT_LONGWORD (INFO__DSN_HDRSONLY, 1);
+    IF .status AND .envl [ENVL_V_DSN_FULL] THEN
+    	status = PUT_LONGWORD (INFO__DSN_HDRSONLY, 2);
+    IF .status AND .envl [ENVL_V_ORGSENDER] AND .orgsender NEQA 0 THEN
+    	status = PUT_TEXT (INFO__ORGSENDER, orgsender);
+    IF .status AND .envl [ENVL_V_FROMADR] AND .fromadr NEQA 0 THEN
+    	status = PUT_TEXT (INFO__FROMADR, fromadr);
+    IF .status AND .envl [ENVL_V_ENVFROMHOST] AND .envfromhost NEQA 0 THEN
+    	status = PUT_TEXT (INFO__ENVFROMHOST, envfromhost);
+    IF .status AND .envl [ENVL_V_DSN_ENVID] AND .dsn_envid NEQA 0 THEN
+    	status = PUT_TEXT (INFO__DSN_ENVID, dsn_envid);
+    IF .status AND .envl [ENVL_V_RCVDFROM] AND .rcvdfrom NEQA 0 THEN
+    	status = PUT_TEXT (INFO__RCVDFROM, rcvdfrom);
+    IF .status AND .envl [ENVL_V_DSN_SENTDT] THEN
+    	status = PUT_QUADWORD (INFO__DSN_SENTDT, envl [ENVL_Q_DSN_SENTDT]);
+
+    rcpt = .rcptque [QUE_L_HEAD];
+    WHILE .status AND (.rcpt NEQA rcptque [QUE_L_HEAD]) DO
+    BEGIN
+    	BIND
+    	    _r	= buf [INFO_T_STR]  : RCPTDEF;
+    	bind_rcpt_fields (rcpt);
+    	LOCAL
+    	    txt	: REF TXTDEF,
+    	    diagcnt,
+    	    ptr;
+!
+!   In the on-disk record, the RCPT_A_ADDR and RCPT_A_ROUTE
+!   fields hold their lengths, rather than addresses.  The
+!   text of each field is simply added to the end of the fixed
+!   portion of the record.
+
+    	buf [INFO_L_DATACODE] = INFO__RECIPREC;
+    	CH$MOVE (RCPT_S_RCPTDEF, .rcpt, _r);
+    	CH$FILL (%CHAR (0), 8, _r [RCPT_Q_DIAGTXTQUE]);
+    	txt = .diagtxtque [QUE_L_HEAD];
+    	diagcnt= 0;
+    	WHILE .txt NEQA diagtxtque DO
+    	BEGIN
+    	    diagcnt = .diagcnt + 1;
+    	    txt = .txt [TXT_L_FLINK];
+    	END;
+    	_r [RCPT_L_DIAGTXTCNT] = .diagcnt;
+    	_r [RCPT_A_ADDR] = .addr [TXT_W_LEN];
+    	IF .route NEQA 0 THEN _r [RCPT_A_ROUTE] = .route [TXT_W_LEN];
+    	IF .ortype NEQA 0 THEN _r [RCPT_A_ORTYPE] = .ortype [TXT_W_LEN];
+    	IF .oraddr NEQA 0 THEN _r [RCPT_A_ORADDR] = .oraddr [TXT_W_LEN];
+    	IF .remotemta NEQA 0 THEN _r [RCPT_A_REMOTEMTA] = .remotemta [TXT_W_LEN];
+    	buf [INFO_W_STRLEN] = RCPT_S_RCPTDEF + ._r [RCPT_A_ADDR] + ._r [RCPT_A_ROUTE]
+    	    	    	    	    	     + ._r [RCPT_A_ORTYPE] + ._r [RCPT_A_ORADDR]
+    	    	    	    	    	     + ._r [RCPT_A_REMOTEMTA];
+    	rab [RAB$W_RSZ] = 8 + .buf [INFO_W_STRLEN];
+    	ptr = CH$PLUS (_r, RCPT_S_RCPTDEF);
+    	CH$MOVE (._r [RCPT_A_ADDR], addr [TXT_T_TEXT], .ptr);
+    	ptr = CH$PLUS (.ptr, ._r [RCPT_A_ADDR]);
+    	IF .route NEQA 0 THEN
+    	BEGIN
+    	    CH$MOVE (._r [RCPT_A_ROUTE], route [TXT_T_TEXT], .ptr);
+    	    ptr = CH$PLUS (.ptr, ._r [RCPT_A_ROUTE]);
+    	END;
+    	IF .ortype NEQA 0 THEN
+    	BEGIN
+    	    CH$MOVE (._r [RCPT_A_ORTYPE], ortype [TXT_T_TEXT], .ptr);
+    	    ptr = CH$PLUS (.ptr, ._r [RCPT_A_ORTYPE]);
+    	END;
+    	IF .oraddr NEQA 0 THEN
+    	BEGIN
+    	    CH$MOVE (._r [RCPT_A_ORADDR], oraddr [TXT_T_TEXT], .ptr);
+    	    ptr = CH$PLUS (.ptr, ._r [RCPT_A_ORADDR]);
+    	END;
+    	IF .remotemta NEQA 0 THEN
+    	BEGIN
+    	    CH$MOVE (._r [RCPT_A_REMOTEMTA], remotemta [TXT_T_TEXT], .ptr);
+    	    ptr = CH$PLUS (.ptr, ._r [RCPT_A_REMOTEMTA]);
+    	END;
+
+    	status = $PUT (RAB=RAB);
+    	txt = .diagtxtque [QUE_L_HEAD];
+    	INCR i FROM 1 TO .diagcnt DO
+    	BEGIN
+    	    PUT_TEXT (INFO__DIAGTEXT, txt);
+    	    txt = .txt [TXT_L_FLINK];
+    	END;
+    	rcpt = .rcpt [RCPT_L_FLINK];
+    END;
+
+    IF NOT .status THEN fab [FAB$V_DLT] = 1;
+    $CLOSE (FAB=fab);
+
+    IF .buf NEQA lclbuf THEN LIB$FREE_VM_PAGE (%REF ((.bufsize+511) ^ -9), buf);
+
+    IF .status THEN MX_FILE_PURGE (fspec);
+
+    .status
+
+END; ! WRITE_ENVELOPE
+
+%SBTTL 'READ_ENVELOPE'
+GLOBAL ROUTINE READ_ENVELOPE (qab, qent_a, sfx_a, envl_a) =
+BEGIN
+!++
+! FUNCTIONAL DESCRIPTION:
+!
+!   Reads in the envelope information from a .xxx_INFO file.
+!
+! RETURNS:  	cond_value, longword (unsigned), write only, by value
+!
+! PROTOTYPE:
+!
+!   READ_ENVELOPE  qab, qent, envl
+!
+! IMPLICIT INPUTS:  None.
+!
+! IMPLICIT OUTPUTS: None.
+!
+! COMPLETION CODES:
+!
+!   SS$_NORMAL:	    	normal successful completion.
+!
+! SIDE EFFECTS:
+!
+!   None.
+!--
+    BIND
+    	qent	= .qent_a   	: QENTDEF,
+    	envl	= .envl_a   	: ENVLDEF;
+    bind_envl_fields (envl);
+
+    LOCAL
+    	str 	: BLOCK [DSC$K_S_BLN,BYTE],
+    	buf 	: BLOCK [1024,BYTE],
+    	fab 	: $FAB_DECL,
+    	rab 	: $RAB_DECL,
+    	fhc 	: $XABFHC_DECL,
+    	r	: REF RCPTDEF,
+    	status;
+
+    INIT_SDESC (str, %ALLOCATION (buf), buf);
+    FLQ_MAKE_FSPEC (.qent [QENT_L_ENTNUM], .sfx_a, str, str [DSC$W_LENGTH]);
+
+    CH$FILL (%CHAR (0), ENVL_S_ENVLDEF, envl);
+    INIT_QUEUE (rcptque);
+
+    $FAB_INIT (FAB=fab, XAB=fhc, FAC=GET, FNA=.str [DSC$A_POINTER], FNS=.str [DSC$W_LENGTH]);
+    $XABFHC_INIT (XAB=fhc);
+
+    status = $OPEN (FAB=fab);
+    IF NOT .status THEN RETURN .status;
+
+    $RAB_INIT (RAB=rab, FAB=fab, UBF=buf, USZ=.fhc [XAB$W_LRL]);
+    IF .fhc [XAB$W_LRL] GTRU %ALLOCATION (buf) THEN
+    BEGIN
+    	status = LIB$GET_VM_PAGE (%REF ((.fhc [XAB$W_LRL]+511) ^ -9), rab [RAB$L_UBF]);
+    	IF NOT .status THEN
+    	BEGIN
+    	    $CLOSE (FAB=fab);
+    	    RETURN .status;
+    	END;
+    END;
+
+    $CONNECT (RAB=rab);
+
+    WHILE $GET (RAB=rab) DO
+    IF .rab [RAB$W_RSZ] GTR 3 THEN
+    BEGIN
+    	SELECTONE .buf [INFO_L_DATACODE] OF
+    	SET
+    	    [INFO__ENVFROMHOST] :
+    	    BEGIN
+    	    	envl [ENVL_V_ENVFROMHOST] = 1;
+    	    	envfromhost = MEM_GETTXT (.buf [INFO_W_STRLEN], buf [INFO_T_STR]);
+    	    END;
+    	    [INFO__DSN_ENVID] :
+    	    BEGIN
+    	    	envl [ENVL_V_DSN_ENVID] = 1;
+    	    	dsn_envid = MEM_GETTXT (.buf [INFO_W_STRLEN], buf [INFO_T_STR]);
+    	    END;
+    	    [INFO__CONTAINS8BIT] :
+    	    	BEGIN
+    	    	    envl [ENVL_V_FLAGS] = 1;
+    	    	    envl [ENVL_V_CONTAINS8BIT] = 1;
+                    envl [ENVL_V_NO_ENCODE] = (.buf [INFO_L_LW] EQLU 2);
+    	    	END;
+    	    [INFO__DSN_HDRSONLY] :
+    	    	BEGIN
+    	    	    IF .buf [INFO_L_LW] THEN envl [ENVL_V_DSN_HDRSONLY] = 1
+    	    	    ELSE IF .buf [INFO_L_LW] EQL 2 THEN envl [ENVL_V_DSN_FULL] = 1;
+    	    	    envl [ENVL_V_FLAGS] = 1;
+    	    	END;
+    	    [INFO__ORIGIN] :
+    	    	BEGIN
+    	    	    envl [ENVL_L_ORIGIN] = .buf [INFO_L_LW];
+    	    	    envl [ENVL_V_ORIGIN] = 1;
+    	    	END;
+    	    [INFO__FROMADR] :
+    	    	BEGIN
+    	    	    envl [ENVL_V_FROMADR] = 1;
+    	    	    fromadr = MEM_GETTXT (.buf [INFO_W_STRLEN], buf [INFO_T_STR]);
+    	    	END;
+    	    [INFO__RCVDFROM] :
+    	    	BEGIN
+    	    	    envl [ENVL_V_RCVDFROM] = 1;
+    	    	    rcvdfrom = MEM_GETTXT (.buf [INFO_W_STRLEN], buf [INFO_T_STR]);
+    	    	END;
+    	    [INFO__DSN_SENTDT] :
+    	    	BEGIN
+    	    	    envl [ENVL_V_DSN_SENTDT] = 1;
+    	    	    CH$MOVE (8, buf [INFO_Q_QUAD], envl [ENVL_Q_DSN_SENTDT]);
+    	    	END;
+    	    [INFO__RECIPADR] :
+    	    	BEGIN
+    	    	    MEM_GETRCPT (r, .buf [INFO_W_STRLEN]);
+    	    	    r [RCPT_W_CNT1] = .buf [INFO_W_COUNT];
+    	    	    BEGIN
+    	    	    	BIND adr = .r [RCPT_A_ADDR] : TXTDEF;
+    	    	    	CH$MOVE (.buf [INFO_W_COUNT], buf [INFO_T_STR], adr [TXT_T_TEXT]);
+    	    	    END;
+    	    	    INSQUE (.r, .rcptque [QUE_L_TAIL]);
+    	    	    envl [ENVL_L_RCPTCOUNT] = .envl [ENVL_L_RCPTCOUNT] + 1;
+    	    	END;
+	    [INFO__PRE33_RECIPREC] :	!PRE-MX V3.3 RCPT record!!
+		BEGIN
+    	    	    BIND _r = BUF [INFO_T_STR]	: RCPT32DEF;
+    	    	    LOCAL adrlen : WORD;
+    	    	    CH$MOVE (2, _r [RCPT32_W_ADDR], adrlen);
+		    MEM_GETRCPT (r, .adrlen);
+    	    	    r [RCPT_L_LASTERR] = ._r [RCPT32_L_LASTERR];
+    	    	    r [RCPT_W_CNT1] = ._r [RCPT32_W_CNT1];
+    	    	    r [RCPT_W_CNT2] = ._r [RCPT32_W_CNT2];
+    	    	    BEGIN
+    	    	    	BIND adr = .r [RCPT_A_ADDR] : TXTDEF;
+    	    	    	CH$MOVE (.adrlen, _r [RCPT32_T_ADDR], adr [TXT_T_TEXT]);
+    	    	    END;
+    	    	    IF ._r [RCPT32_W_ROUTE] NEQ 0 THEN
+    	    	    	r [RCPT_A_ROUTE] = MEM_GETTXT (._r [RCPT32_W_ROUTE], _r [RCPT32_T_ROUTE]);
+ 		    INSQUE (.r, .rcptque [QUE_L_TAIL]);
+    	    	    envl [ENVL_L_RCPTCOUNT] = .envl [ENVL_L_RCPTCOUNT] + 1;
+		END;
+	    [INFO__PRE44_RECIPREC] :	!PRE-MX V4.4 RCPT record!!
+		BEGIN
+		    BIND _r = BUF [INFO_T_STR] : RCPT33DEF;
+		    MEM_GETRCPT (r, ._r [RCPT33_W_ADDR]);
+    	    	    r [RCPT_L_LASTERR] = ._r [RCPT33_L_LASTERR];
+    	    	    r [RCPT_W_CNT1] = ._r [RCPT33_W_CNT1];
+    	    	    r [RCPT_W_CNT2] = ._r [RCPT33_W_CNT2];
+    	    	    BEGIN
+    	    	    	BIND adr = .r [RCPT_A_ADDR] : TXTDEF;
+    	    	    	CH$MOVE (._r [RCPT33_W_ADDR], _r [RCPT33_T_ADDR], adr [TXT_T_TEXT]);
+    	    	    END;
+    	    	    IF ._r [RCPT33_W_ROUTE] NEQ 0 THEN
+    	    	    	r [RCPT_A_ROUTE] = MEM_GETTXT (._r [RCPT33_W_ROUTE], _r [RCPT33_T_ROUTE]);
+		    INSQUE (.r, .rcptque [QUE_L_TAIL]);
+    	    	    envl [ENVL_L_RCPTCOUNT] = .envl [ENVL_L_RCPTCOUNT] + 1;
+		END;
+	    [INFO__PRE50_RECIPREC] :	!PRE-MX V5.0 RCPT record!!
+		BEGIN
+		    BIND _r = BUF [INFO_T_STR] : RCPT44DEF;
+		    MEM_GETRCPT (r, ._r [RCPT44_W_ADDR]);
+    	    	    r [RCPT_L_LASTERR] = ._r [RCPT44_L_LASTERR];
+    	    	    r [RCPT_W_CNT1] = ._r [RCPT44_W_CNT1];
+    	    	    r [RCPT_W_CNT2] = ._r [RCPT44_W_CNT2];
+    	    	    r [RCPT_L_FLAGS] = ._r [RCPT44_L_FLAGS];
+    	    	    BEGIN
+    	    	    	BIND adr = .r [RCPT_A_ADDR] : TXTDEF;
+    	    	    	CH$MOVE (._R [RCPT44_W_ADDR], _r [RCPT44_T_ADDR], adr [TXT_T_TEXT]);
+    	    	    END;
+    	    	    IF ._r [RCPT44_W_ROUTE] NEQ 0 THEN
+    	    	    	r [RCPT_A_ROUTE] = MEM_GETTXT (._r [RCPT44_W_ROUTE], _r [RCPT44_T_ROUTE]);
+		    INSQUE (.r, .rcptque [QUE_L_TAIL]);
+    	    	    envl [ENVL_L_RCPTCOUNT] = .envl [ENVL_L_RCPTCOUNT] + 1;
+		END;
+    	    [INFO__PRE51_RECIPREC] :
+    	    	BEGIN
+    	    	    BIND _r = BUF [INFO_T_STR]	: RCPT50DEF;
+    	    	    MEM_GETRCPT (r);
+    	    	    CH$MOVE (RCPT50_S_RCPT50DEF, buf [INFO_T_STR], .r);
+    	    	    r [RCPT_A_ADDR] = MEM_GETTXT (._r [RCPT50_A_ADDR], CH$PLUS (_r, RCPT50_S_RCPT50DEF));
+    	    	    IF ._r [RCPT50_A_ROUTE] NEQ 0 THEN
+    	    	    	r [RCPT_A_ROUTE] = MEM_GETTXT (._r [RCPT50_A_ROUTE],
+    	    	    	    	    	    	       CH$PLUS (_r, RCPT50_S_RCPT50DEF + ._r [RCPT50_A_ADDR]));
+    	    	    r [RCPT_A_ORTYPE] = r [RCPT_A_ORADDR] = 0;
+    	    	    INSQUE (.r, .rcptque [QUE_L_TAIL]);
+    	    	    envl [ENVL_L_RCPTCOUNT] = .envl [ENVL_L_RCPTCOUNT] + 1;
+    	    	END;
+    	    [INFO__RECIPREC] :
+    	    	BEGIN
+    	    	    BIND _r = buf [INFO_T_STR]	: RCPTDEF;
+    	    	    LOCAL offset, diagcnt;
+    	    	    MEM_GETRCPT (r);
+    	    	    CH$MOVE (RCPT_S_RCPTDEF, buf [INFO_T_STR], .r);
+    	    	    INIT_QUEUE (r [RCPT_Q_DIAGTXTQUE]);
+    	    	    offset = RCPT_S_RCPTDEF;
+    	    	    r [RCPT_A_ADDR] = MEM_GETTXT (._r [RCPT_A_ADDR], CH$PLUS (_r, .offset));
+    	    	    offset = .offset + ._r [RCPT_A_ADDR];
+    	    	    IF ._r [RCPT_A_ROUTE] NEQ 0 THEN
+    	    	    	r [RCPT_A_ROUTE] = MEM_GETTXT (._r [RCPT_A_ROUTE], CH$PLUS (_r, .offset));
+    	    	    offset = .offset + ._r [RCPT_A_ROUTE];
+    	    	    IF ._r [RCPT_A_ORTYPE] NEQ 0 THEN
+    	    	    	r [RCPT_A_ORTYPE] = MEM_GETTXT (._r [RCPT_A_ORTYPE], CH$PLUS (_r, .offset));
+    	    	    offset = .offset + ._r [RCPT_A_ORTYPE];
+    	    	    IF ._r [RCPT_A_ORADDR] NEQ 0 THEN
+    	    	    	r [RCPT_A_ORADDR] = MEM_GETTXT (._r [RCPT_A_ORADDR], CH$PLUS (_r, .offset));
+    	    	    offset = .offset + ._r [RCPT_A_ORADDR];
+    	    	    IF ._r [RCPT_A_REMOTEMTA] NEQ 0 THEN
+    	    	    	r [RCPT_A_REMOTEMTA] = MEM_GETTXT (._r [RCPT_A_REMOTEMTA], CH$PLUS (_r, .offset));
+    	    	    offset = .offset + ._r [RCPT_A_REMOTEMTA];
+    	    	    diagcnt = ._r [RCPT_L_DIAGTXTCNT];
+    	    	    INCR i FROM 1 TO .diagcnt DO
+    	    	    BEGIN
+    	    	    	LOCAL txt : REF TXTDEF;
+    	    	    	status = $GET (RAB=rab);
+    	    	    	IF NOT .status THEN EXITLOOP;
+    	    	    	txt = MEM_GETTXT (.buf [INFO_W_STRLEN], buf [INFO_T_STR]);
+    	    	    	INSQUE_TAIL (.txt, r [RCPT_Q_DIAGTXTQUE]);
+    	    	    END;
+    	    	    INSQUE (.r, .rcptque [QUE_L_TAIL]);
+    	    	    envl [ENVL_L_RCPTCOUNT] = .envl [ENVL_L_RCPTCOUNT] + 1;
+    	    	END;
+    	    [OTHERWISE] : ;
+    	TES;
+    END;
+
+    $CLOSE (FAB=FAB);
+
+    IF .rab [RAB$L_UBF] NEQA buf THEN
+    	LIB$FREE_VM_PAGE (%REF ((.fhc [XAB$W_LRL]+511) ^ -9), rab [RAB$L_UBF]);
+
+    SS$_NORMAL
+
+END; ! READ_ENVELOPE
+
+%SBTTL 'DISPOSE_ENVELOPE'
+GLOBAL ROUTINE DISPOSE_ENVELOPE (envl_a) = 
+BEGIN
+!++
+! FUNCTIONAL DESCRIPTION:
+!
+!   Frees up all the fields in an envelope structure.
+!   DOES NOT free the envelope structure itself!
+!
+! RETURNS:  	cond_value, longword (unsigned), write only, by value
+!
+! PROTOTYPE:
+!
+!   DISPOSE_ENVELOPE  envl
+!
+! IMPLICIT INPUTS:  None.
+!
+! IMPLICIT OUTPUTS: None.
+!
+! COMPLETION CODES:
+!
+!   SS$_NORMAL:	    	normal successful completion.
+!
+! SIDE EFFECTS:	    None.
+!--
+    BIND
+    	envl	= .envl_a   : ENVLDEF;
+    bind_envl_fields (envl);
+
+    LOCAL
+    	rcpt	    : REF RCPTDEF;
+
+    FREETXT (orgsender, fromadr, envfromhost, rcvdfrom, dsn_envid);
+    IF .rcptque [QUE_L_HEAD] NEQA 0 THEN
+    	WHILE NOT REMQUE (.rcptque [QUE_L_HEAD], rcpt) DO MEM_FREERCPT (rcpt);
+
+    SS$_NORMAL
+
+END; ! DISPOSE_ENVELOPE
+
+END
+ELUDOM
