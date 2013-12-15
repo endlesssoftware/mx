@@ -1,0 +1,160 @@
+%TITLE 'SMTP_CLUP'
+MODULE SMTP_CLUP (IDENT='V1.0-1', ADDRESSING_MODE (EXTERNAL=LONG_RELATIVE, NONEXTERNAL=LONG_RELATIVE)) =
+BEGIN
+!++
+! FACILITY: 	    ROUTER/FLQ_MGR
+!
+! ABSTRACT: 	    Periodic cleanup of SMTP lock files
+!
+! MODULE DESCRIPTION:
+!
+!   This module contains a routine that periodically scours
+!   the SMTP directory to delete very old HOST_LOCK and ADDRESS_LOCK
+!   files.
+!
+! AUTHOR:   	    M. Madison
+!
+! Copyright (c) 2008, Matthew Madison.
+! 
+! All rights reserved.
+! 
+! Redistribution and use in source and binary forms, with or without
+! modification, are permitted provided that the following conditions
+! are met:
+! 
+!     * Redistributions of source code must retain the above
+!       copyright notice, this list of conditions and the following
+!       disclaimer.
+!     * Redistributions in binary form must reproduce the above
+!       copyright notice, this list of conditions and the following
+!       disclaimer in the documentation and/or other materials provided
+!       with the distribution.
+!     * Neither the name of the copyright owner nor the names of any
+!       other contributors may be used to endorse or promote products
+!       derived from this software without specific prior written
+!       permission.
+! 
+! THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
+! "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
+! LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
+! A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
+! OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
+! SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
+! LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
+! DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
+! THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
+! (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
+! OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+!
+! CREATION DATE:    28-APR-1997
+!
+! MODIFICATION HISTORY:
+!
+!   28-APR-1997	V1.0	Madison	    Initial coding.
+!    8-SEP-1997 V1.0-1	Goatley	    Use MX_SMTP_LOCK_DIR instead of MX_SMTP_DIR.
+!--
+
+    LIBRARY 'SYS$LIBRARY:STARLET';
+    LIBRARY 'MX_SRC_COMMON:MX';
+
+    FORWARD ROUTINE
+    	SMTP_CLUP   	: NOVALUE;
+
+    OWN
+    	OLD 	: VECTOR [2,LONG] INITIAL (0, 0);
+
+    TRACE_DECLARATIONS (OWN);
+
+    BIND
+    	OLDDSC	= %ASCID'7 00:00:00.00';
+
+    EXTERNAL LITERAL
+    	LIB$_NORMAL;
+
+    EXTERNAL ROUTINE
+    	G_HAT (LIB$SUB_TIMES);
+
+%SBTTL 'SMTP_CLUP'
+GLOBAL ROUTINE SMTP_CLUP : NOVALUE = 
+BEGIN
+!++
+! FUNCTIONAL DESCRIPTION:
+!
+!   Scans MX_SMTP_LOCK_DIR: for SMTP host & address lock files,
+!   deleting any that are more than a week old.
+!
+! RETURNS:  	cond_value, longword (unsigned), write only, by value
+!
+! PROTOTYPE:
+!
+!   SMTP_CLUP
+!
+! IMPLICIT INPUTS:  None.
+!
+! IMPLICIT OUTPUTS: None.
+!
+! COMPLETION CODES:
+!
+!   SS$_NORMAL:	    	normal successful completion.
+!
+! SIDE EFFECTS:
+!
+!   None.
+!--
+    LOCAL
+    	FAB 	: $FAB_DECL,
+    	NAM 	: $NAM_DECL,
+    	RDT 	: $XABRDT_DECL,
+    	ESPEC	: VECTOR [NAM$C_MAXRSS,BYTE],
+    	RSPEC	: VECTOR [NAM$C_MAXRSS,BYTE],
+    	NOW 	: VECTOR [2,LONG],
+    	DELTA	: VECTOR [2,LONG],
+    	DIFF	: VECTOR [2,LONG],
+    	STATUS;
+
+    TRACE_INIT ('smtp_cleanup', 'router');
+
+    IF .OLD [0] EQL 0 AND .OLD [1] EQL 0 THEN $BINTIM (TIMBUF=OLDDSC, TIMADR=OLD);
+    $GETTIM (TIMADR=NOW);
+
+    $FAB_INIT (FAB=FAB, XAB=RDT, NAM=NAM, FNM='MX_SMTP_LOCK_DIR:*.*_LOCK;*', FAC=GET, SHR=<GET,PUT,DEL,UPD>);
+    $NAM_INIT (NAM=NAM, ESA=ESPEC, ESS=%ALLOCATION (ESPEC), RSA=RSPEC, RSS=%ALLOCATION (RSPEC));
+    $XABRDT_INIT (XAB=RDT);
+
+    STATUS = $PARSE (FAB=FAB);
+    IF NOT .STATUS THEN
+    BEGIN
+    	TRACE ('%SMTP_CLEANUP: $PARSE failed, status=!XL', .STATUS);
+    	TRACE_CLOSE;
+    	RETURN .STATUS;
+    END;
+
+    WHILE $SEARCH (FAB=FAB) DO
+    BEGIN
+    	FAB [FAB$V_NAM] = 1;
+    	STATUS = $OPEN (FAB=FAB);
+    	IF .STATUS THEN
+    	BEGIN
+    	    STATUS = LIB$SUB_TIMES (NOW, RDT [XAB$Q_RDT], DELTA);
+    	    IF .STATUS THEN
+    	    	IF (.DELTA [0] EQL .OLD [0] AND .DELTA [1] EQL .OLD [1]) OR
+    	    	   LIB$SUB_TIMES (DELTA, OLD, DIFF) EQL LIB$_NORMAL THEN
+    	    	BEGIN
+    	    	    FAB [FAB$V_DLT] = 1;
+    	    	    TRACE ('%SMTP_CLEANUP: deleting old lock file (rdt=!%D) !AD',
+    	    	    	    RDT [XAB$Q_RDT], .NAM [NAM$B_RSL], .NAM [NAM$L_RSA]);
+    	    	END;
+    	END;
+    	$CLOSE (FAB=FAB);
+    	FAB [FAB$V_NAM] = 0;
+    END;
+
+    NAM [NAM$V_SYNCHK] = 1;
+    $PARSE (FAB=FAB);
+
+    TRACE_CLOSE;
+
+END; ! SMTP_CLUP
+
+END
+ELUDOM

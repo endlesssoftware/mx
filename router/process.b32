@@ -1,0 +1,1346 @@
+%TITLE 'PROCESS'
+MODULE PROCESS (IDENT='V3.0', ADDRESSING_MODE (EXTERNAL=LONG_RELATIVE)) =
+BEGIN
+!++
+! FACILITY:     MX Router
+!
+! ABSTRACT:     Mail router processing routines.
+!
+! MODULE DESCRIPTION:
+!
+!   This module contains the main processing routines for the MX mail router.
+!
+! AUTHOR:	    M. Madison
+!
+! Copyright (c) 2008, Matthew Madison.
+! 
+! All rights reserved.
+! 
+! Redistribution and use in source and binary forms, with or without
+! modification, are permitted provided that the following conditions
+! are met:
+! 
+!     * Redistributions of source code must retain the above
+!       copyright notice, this list of conditions and the following
+!       disclaimer.
+!     * Redistributions in binary form must reproduce the above
+!       copyright notice, this list of conditions and the following
+!       disclaimer in the documentation and/or other materials provided
+!       with the distribution.
+!     * Neither the name of the copyright owner nor the names of any
+!       other contributors may be used to endorse or promote products
+!       derived from this software without specific prior written
+!       permission.
+! 
+! THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
+! "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
+! LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
+! A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
+! OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
+! SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
+! LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
+! DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
+! THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
+! (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
+! OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+!
+! CREATION DATE:    28-APR-1989
+!
+! MODIFICATION HISTORY:
+!
+!   28-APR-1989	V1.0	Madison	    Initial coding.
+!   05-DEC-1989	V1.1	Madison	    Separated out common FLQ interface code.
+!   11-DEC-1989	V1.1-1	Madison	    Eliminate possible que entry race conds.
+!   22-DEC-1989	V1.1-2	Madison	    Remove local node name from routes.
+!   05-FEB-1990	V1.2-3	Madison	    Add UUCP support.
+!   09-FEB-1990	V1.2-4	Madison	    Avoid div by 0 problem.
+!   05-MAR-1990	V1.2-5	Madison	    Fix local next-hop problem.
+!   23-MAR-1990	V1.2-6	Madison	    If address doesn't parse, don't use it!
+!   04-APR-1990	V1.3-7	Madison	    Add debug/trace.
+!   27-JUN-1990	V1.4-8	Madison	    Add new paths; centralize path processing.
+!   19-SEP-1990	V1.5-9	Madison	    INIT should now handle re-inits.
+!   24-SEP-1990	V1.6	Madison	    some more init changes.
+!   02-OCT-1990	V1.6-1	Madison	    Fix zero recips bug.
+!   02-NOV-1990	V1.6-2	Madison	    Fix MLF_REQUEST.
+!   15-NOV-1990	V1.6-3	Madison	    Fix SITE bug.
+!   19-FEB-1991	V1.6-4	Madison	    Neaten up returned messages.
+!   02-MAR-1991	V1.7	Madison	    Do extra domain expansion on src=lcl msgs.
+!   08-MAR-1991	V1.7-1	Madison	    Only do domain expansion if it's there.
+!   14-MAR-1991	V1.7-2	Madison	    Handle PARSE_ADDRLIST failure.
+!   18-OCT-1991	V1.8	Madison	    Use new RCPT structure in INFO files.
+!   29-OCT-1991	V1.8-1	Madison	    Add DNSMTP support.
+!   05-NOV-1991	V1.8-2	Madison	    Make sure LOCAL source gets propagated.
+!   15-NOV-1991	V1.8-3	Madison	    New MEM rtns.
+!   18-NOV-1991	V1.8-4	Madison	    Add BITNET gateway check.
+!   18-FEB-1992	V1.9	Madison	    Add X25-SMTP support.
+!   08-APR-1992	V1.9-1	Madison	    Fix Sender header processing.
+!   18-MAY-1992	V1.9-2	Madison	    Hack in dot check to prevent domexp death.
+!   01-JUN-1992	V1.9-3	Madison	    Fix INIT_QUEUE references in INIT.
+!   13-MAY-1993 V1.10	Allebrandi  Add outcalls to header address rewriter.
+!   20-JAN-1994 V1.10-1	Goatley	    Allow omission of Sender: for VMS Mail msgs.
+!   10-FEB-1994 V1.11	Goatley     Modify to work with FLQ V2.
+!   14-MAY-1994	V1.12	Altmayer    Add LSV_INIT, LSV_REQUEST, MXQ_L_LSVREF
+!   15-JUN-1994 V1.12-1	Goatley     Add check for bad RFC821 addr after rewrite.
+!    4-DEC-1995 V2.0    Goatley     Beef up error handling some.
+!   05-JAN-1997	V2.1	Madison	    Eliminate MDMLIB.
+!   12-MAR-1997	V2.2	Madison	    Added FORCEDROUTE flag to RCPTDEF.
+!   26-APR-1997	V2.3	Madison	    Added DSN flags to RCPTDEF.
+!   28-APR-1997	V2.4	Madison	    Translate VMS MAIL messages to ISO-8859-1
+!                                   and Q-P encode them if they contain 8-bit chars.
+!   	    	    	    	    Use new address formatting routine.
+!   05-MAY-1997	V2.4-1	Madison	    Pick up env. from host from SRC_INFO.
+!   09-MAY-1997	V2.4-2	Madison	    Use LOWERCASE modifier on VMS MAIL sender fmt.
+!    4-JUN-1997 V2.4-3	Goatley     On REINIT, free MLST text queues too.  Also
+!				    free STR in PROCESS_QUEUE.
+!   28-JUL-1997 V2.4-4	Goatley     Add a TRACE line on HDR_INFO error.
+!   29-AUG-1997	V2.5	Madison	    RCPT change.
+!   18-OCT-1997	V2.5-1	Madison	    Fix formation of msg file spec for filter calls.
+!   08-JAN-1998	V2.5-2	Madison	    Fix memory leak in filter interface.
+!   24-APR-1998	V2.6	Madison	    Add accounting (from Hunter's original changes).
+!   28-JUN-1998	V2.7	Madison	    DSN support.
+!   10-JUL-1998	V2.8	Madison	    New ENVLDEF structure.
+!   27-AUG-1998	V2.9	Madison	    Holding queue support.
+!   30-JAN-2000	V2.9-1	Madison	    More holding queues.
+!   25-NOV-2000	V2.10	Madison	    Remove Jnet support.
+!   23-APR-2001 V2.11   Madison     no-qp-encoding flag.
+!   16-SEP-2001 V2.12   Madison     Fix forced route problem with site rewrites.
+!   17-FEB-2002 V2.13   Madison     Fixes for ORCPT handling.
+!   03-Feb-2008 V3.0    Madison     Remove LSV, UUCP, XSMTP.
+!--
+    LIBRARY 'SYS$LIBRARY:STARLET';
+    LIBRARY 'MX_SRC_COMMON:FIELDS';
+    LIBRARY 'MX_SRC_COMMON:FLQ';
+    LIBRARY 'MX_SRC_COMMON:MX';
+    LIBRARY 'MX_SRC_COMMON:AGENT';
+    LIBRARY 'MX_SRC_COMMON:ACCOUNTING';
+    LIBRARY 'MX_SRC_COMMON:MX_LCLDEFS';
+    LIBRARY 'MX_SRC_COMMON:ROUTER';
+    LIBRARY 'MX_SRC_COMMON:REGEX';
+    LIBRARY 'FILTER';
+
+    ACC_DEFINE;
+
+    LITERAL
+    	MX_K_PATH_HOLDQ_LAST = MX_K_PATH_HOLDQ_BASE + MX_K_HOLDQ_MAX - 1;
+
+    FORWARD ROUTINE
+	INIT,
+	PROCESS,
+	FREE_RECIPS,
+	PROCESS_QUEUE;
+
+    EXTERNAL ROUTINE
+	REWRITE_INIT, REWRITE, FINDPATH, FINDALIAS,
+    	FILTER_INIT, FILTER_MESSAGE, FILTER_FINISH,
+	LOAD_MXCONFIG,
+	MLF_REQUEST,
+    	QP_ENCODE,
+    	G_HAT (DSN_REPORT_INIT, DSN_REPORT_ADD_RCPT, DSN_REPORT_SEND),
+	G_HAT (FORMAT821, PARSE821, READ_ENVELOPE, WRITE_ENVELOPE,
+    	    DISPOSE_ENVELOPE, READ_HDRS,
+	    WRITE_HDRS, PARSE_ADDRLIST, PARSE_MBOX, MEM_GETTXT,
+	    MEM_GETRCPT, MEM_FREERCPT, MX_MKDATE, MX_FMT_LCL_ADDR,
+    	    XTEXT_ENCODE),
+	G_HAT (LIB$GET_VM, LIB$FREE_VM, LIB$GET_EF, LIB$FREE_EF, LIB$SYS_FAO),
+	G_HAT (STR$COPY_R, STR$COPY_DX, STR$CASE_BLIND_COMPARE,
+	      STR$CONCAT, STR$APPEND, STR$COMPARE_EQL);
+
+    EXTERNAL
+	CONFIG	    : CFGDEF,
+	EXPCTX,
+	EXP_EXPAND,
+	RWCTX,
+	RW_REWRITE_HEADER,
+    	MX_IDENT_STRING	: BLOCK [,BYTE];
+
+    EXTERNAL LITERAL
+    	MX__REJECTED, MX__NONJEGWY, MX__NOPATH, MX__BADRFC821ADDR, MX__ADDRALIAS;
+
+    GLOBAL
+	RWRULES	    : QUEDEF,
+	PATHLIST    : QUEDEF,
+	ALIASES	    : QUEDEF,
+	MLISTS	    : QUEDEF,
+	FSRVQUE	    : QUEDEF,
+	ROUTER_INFO : ROUTERDEF;
+
+    TRACE_DECLARATIONS (GLOBAL);
+
+    BIND
+    	qp_tag = %ASCID'quoted-printable' : BLOCK [,BYTE];
+
+
+%SBTTL 'INIT'
+GLOBAL ROUTINE INIT (REINIT) =
+BEGIN
+!++
+! FUNCTIONAL DESCRIPTION:
+!
+!   Initialization routine.
+!
+! RETURNS:	cond_value, longword (unsigned), write only, by value
+!
+! PROTOTYPE:
+!
+!   INIT  reinit
+!
+! reninit:  boolean
+!
+! IMPLICIT INPUTS:  None.
+!
+! IMPLICIT OUTPUTS: None.
+!
+! COMPLETION CODES:
+!
+!   SS$_NORMAL:		normal successful completion.
+!
+! SIDE EFFECTS:
+!
+!   None.
+!--
+    BIND
+    	rstmsk	= reinit    	: RSTDEF;
+
+    LOCAL
+	R   : REF RULEDEF,
+	F   : REF FSRVDEF,
+	P   : REF PATHDEF,
+	M   : REF MLSTDEF,
+	T   : REF TXTDEF,
+	STATUS;
+
+    IF .REINIT NEQ 0 THEN
+    BEGIN
+    	IF .rstmsk [RST_V_CONFIG] THEN
+    	BEGIN
+	    WHILE NOT REMQUE (.RWRULES [QUE_L_HEAD], R) DO
+            BEGIN
+                IF .R [RULE_A_LHSREGEX] THEN
+                BEGIN
+                    MX_REGFREE (.R [RULE_A_LHSREGEX]);
+                    LIB$FREE_VM (%REF (REGEX_S_REGEXDEF), R [RULE_A_LHSREGEX]);
+                END;
+                FREETXT (R [RULE_A_LHS], R [RULE_A_RHS]);
+	    	LIB$FREE_VM (%REF (RULE_S_RULEDEF), R);
+            END;
+	    WHILE NOT REMQUE (.ALIASES [QUE_L_HEAD], R) DO
+	    	LIB$FREE_VM (%REF (RULEPRE53_S_RULEPRE53DEF), R);
+	    WHILE NOT REMQUE (.FSRVQUE [QUE_L_HEAD], F) DO
+	    	LIB$FREE_VM (%REF (FSRV_S_FSRVDEF), F);
+	    WHILE NOT REMQUE (.PATHLIST [QUE_L_HEAD], P) DO
+	    	LIB$FREE_VM (%REF (PATH_S_PATHDEF), P);
+	    WHILE NOT REMQUE (.MLISTS [QUE_L_HEAD], M) DO
+	    BEGIN
+	    	BIND
+		    OWNQ	= m [MLST_Q_OWNQ]   : QUEDEF,
+		    MODQ	= m [MLST_Q_MODQ]   : QUEDEF,
+		    hdrq	= m [MLST_Q_HDRQ]   : QUEDEF;
+	    	WHILE NOT REMQUE (.ownq [QUE_L_HEAD], t) DO FREETXT (t);
+	    	WHILE NOT REMQUE (.modq [QUE_L_HEAD], t) DO FREETXT (t);
+	    	WHILE NOT REMQUE (.hdrq [QUE_L_HEAD], t) DO FREETXT (t);
+	    	LIB$FREE_VM (%REF (MLST_S_MLSTDEF), M);
+	    END;
+    	END;
+    END
+    ELSE
+    BEGIN   ! INIT_QUEUE is not a single instruction equivalent macro!!!!!
+	INIT_QUEUE (RWRULES, PATHLIST, ALIASES, MLISTS, FSRVQUE);
+    END;
+
+    ACC_CLOSE;
+
+    IF .reinit EQL 0 OR .rstmsk [RST_V_CONFIG] THEN
+    BEGIN
+    	STATUS = LOAD_MXCONFIG (%ASCID'MX_CONFIG', %ASCID'MX_DIR:.MXCFG', 0,
+	    	    	    	CFG_M_RWRULES OR CFG_M_PATHLIST OR CFG_M_ALIASES OR CFG_M_MLISTS
+	    	    	    	    OR CFG_M_FSRVINFO OR CFG_M_ROUTERINFO);
+    	IF .STATUS THEN
+	    STATUS = REWRITE_INIT (.rstmsk [RST_V_CONFIG]);
+
+    END
+    ELSE status = SS$_NORMAL;
+
+    IF .status AND .router_info [ROUTER_V_ACCTG] THEN
+    	status = ACC_INIT (%ASCID'MX_ROUTER_ACC', %ASCID'MX_ROUTER_DIR:.DAT', .rstmsk [RST_V_ACCTG]);
+
+    .STATUS
+
+END; ! INIT
+
+%SBTTL 'PROCESS'
+GLOBAL ROUTINE PROCESS (QCTX, QENT_A) =
+BEGIN
+!++
+! FUNCTIONAL DESCRIPTION:
+!
+!   Processes a single queue entry.
+!
+! RETURNS:	cond_value, longword (unsigned), write only, by value
+!
+! PROTOTYPE:
+!
+!   PROCESS  qctx, qent
+!
+! IMPLICIT INPUTS:  None.
+!
+! IMPLICIT OUTPUTS: None.
+!
+! COMPLETION CODES:
+!
+!   SS$_NORMAL:		normal successful completion.
+!
+! SIDE EFFECTS:
+!
+!   None.
+!--
+    BIND
+	QENT	= .QENT_A   : QENTDEF;
+
+    LOCAL
+    	envl	: ENVLDEF,
+    	RCPTQ	: QUEDEF,
+	LOCALQ	: QUEDEF,
+	SMTPQ	: QUEDEF,
+	DNSMTPQ	: QUEDEF,
+	ERRORQ	: QUEDEF,
+	RTEQ	: QUEDEF,
+	MLFQ	: QUEDEF,
+	SITEQ	: QUEDEF,
+	RCP 	: REF RCPDEF,
+	TXT 	: REF TXTDEF,
+	SMTPQE	: QENTDEF,
+	LCLQE	: QENTDEF,
+	MLFQE	: QENTDEF,
+	SITEQE	: QENTDEF,
+	DNSMTPQE: QENTDEF,
+    	holdq	: BLOCKVECTOR [MX_K_HOLDQ_MAX,QUE_S_QUEDEF,BYTE],
+    	holdent	: BLOCKVECTOR [MX_K_HOLDQ_MAX,QENT_S_QENTDEF,BYTE],
+	RCPT	: REF RCPTDEF,
+	SENDER	: BLOCK [DSC$K_S_BLN,BYTE],
+	USR 	: BLOCK [DSC$K_S_BLN,BYTE],
+	SDSC	: BLOCK [DSC$K_S_BLN,BYTE],
+	ROUTE	: BLOCK [DSC$K_S_BLN,BYTE],
+    	EFHOST	: BLOCK [DSC$K_S_BLN,BYTE],
+	MSG_SIZE,
+	MARKFIN,
+	STATUS,
+    	dsnctx,
+	PATHID,
+    	i;
+
+    BIND_ENVL_FIELDS (envl);
+    BIND RCPT_COUNT = envl [ENVL_L_RCPTCOUNT];
+
+    INIT_DYNDESC (USR, ROUTE);
+
+    TRACE_INIT ('router', 'router');
+    TRACE ('%PROCESS, ===================================================');
+    TRACE ('%PROCESS, Processing entry number !UL', .QENT [QENT_L_ENTNUM]);
+
+    INIT_QUEUE (RCPTQ, LOCALQ, SMTPQ, MLFQ, SITEQ, DNSMTPQ, ERRORQ, RTEQ);
+    INCR i FROM 0 TO MX_K_HOLDQ_MAX-1 DO
+    	INIT_QUEUE (holdq [.i,0,0,0,0]);
+
+    CH$FILL (%CHAR (0), ENVL_S_ENVLDEF, envl);
+    INIT_QUEUE (envl [ENVL_Q_RCPTQUE]);
+
+    SDSC [DSC$B_DTYPE] = DSC$K_DTYPE_T;
+    SDSC [DSC$B_CLASS] = DSC$K_CLASS_S;
+
+    status = READ_ENVELOPE (.qctx, qent, %ASCID'SRC_INFO', envl);
+    TRACE ('%PROCESS, Status from READ_INFO was !XL', .STATUS);
+
+    IF NOT(.status)
+    THEN
+	BEGIN
+	ALARM ('MX Router: error reading SRC_INFO file for entry !UL: !XL',
+			.qent [QENT_L_ENTNUM], .status);
+	ALARM ('MX Router: HOLDing Router entry !UL', .qent [QENT_L_ENTNUM]);
+	TRACE ('%PROCESS, HOLDing entry !UL', .qent [QENT_L_ENTNUM]);
+	qent [QENT_L_STATUS] = FLQ_K_STOPH;
+	status = FLQ_UPDATE (qctx, qent);
+	IF NOT(.status)
+	THEN
+	    ALARM ('MX Router: HOLD FLQ_UPDATE error !XL', .status);
+    	FREE_STRINGS (usr, route);
+	RETURN (SS$_NORMAL);
+	END;
+
+    INIT_SDESC (SENDER, .fromadr [TXT_W_LEN], fromadr [TXT_T_TEXT]);
+    IF .envl [ENVL_V_ENVFROMHOST] THEN
+    	INIT_SDESC (efhost, .envfromhost [TXT_W_LEN], envfromhost [TXT_T_TEXT]);
+
+    MSG_SIZE = .QENT [QENT_L_SIZE] / (IF .RCPT_COUNT NEQ 0 THEN .RCPT_COUNT ELSE 1);
+
+    DSN_REPORT_INIT (dsnctx, envl);
+
+    IF .envl [ENVL_L_ORIGIN] EQL MX_K_ORG_VMSMAIL THEN
+    BEGIN
+	LOCAL
+	    HDRQ    : QUEDEF,
+	    HDRQ2   : QUEDEF,
+	    ADRQ    : QUEDEF,
+	    RCPT    : REF RCPTDEF,
+	    TMP1    : BLOCK [DSC$K_S_BLN,BYTE],
+	    TMP2    : BLOCK [DSC$K_S_BLN,BYTE],
+	    LCLP    : BLOCK [DSC$K_S_BLN,BYTE],
+	    DOMP    : BLOCK [DSC$K_S_BLN,BYTE],
+	    NAM	    : BLOCK [DSC$K_S_BLN,BYTE],
+	    TMPFROM : BLOCK [DSC$K_S_BLN,BYTE],
+	    HDR	    : REF TXTDEF,
+    	    ctype   : REF TXTDEF,
+    	    cte	    : REF TXTDEF;
+
+	TRACE ('%PROCESS, Message originated in VMS Mail.');
+	INIT_QUEUE (HDRQ, HDRQ2, ADRQ);
+	INIT_DYNDESC (TMP1, TMP2, LCLP, DOMP, NAM, TMPFROM);
+    	IF MX_FMT_LCL_ADDR (MX__FMT_ENVFROM OR FMT_M_LOWERCASE, sender, tmp1, 0, 0,
+    	    (IF .envl [ENVL_V_ENVFROMHOST] THEN efhost ELSE 0)) THEN
+    	BEGIN
+    	    FREETXT (fromadr);
+    	    fromadr = MEM_GETTXT (.tmp1 [DSC$W_LENGTH], .tmp1 [DSC$A_POINTER]);
+    	    INIT_SDESC (sender, .fromadr [TXT_W_LEN], fromadr [TXT_T_TEXT]);
+    	    FREE_STRINGS (tmp1);
+    	END;
+
+	IF .EXPCTX NEQA 0 THEN
+	BEGIN
+	    TRACE ('%PROCESS,  will run domain expander on envelope addresses.');
+	    RCPT = .rcptque [QUE_L_HEAD];
+	    WHILE .RCPT NEQA rcptque DO
+	    BEGIN
+    	    	BIND Xaddr = rcpt [RCPT_A_ADDR] : REF TXTDEF;
+		SDSC [DSC$W_LENGTH] = .Xaddr [TXT_W_LEN];
+		SDSC [DSC$A_POINTER] = Xaddr [TXT_T_TEXT];
+		TRACE ('%PROCESS,  Processing address: !AS', SDSC);
+		IF PARSE821 (SDSC, RTEQ, LCLP, DOMP) THEN
+		BEGIN
+		    IF .RTEQ [QUE_L_HEAD] EQLA RTEQ THEN
+		    BEGIN
+			IF .DOMP [DSC$W_LENGTH] GTR 0 THEN
+			IF (.EXP_EXPAND) (EXPCTX, DOMP, TMP2) THEN
+			BEGIN
+			    TRACE ('%PROCESS,    ... expanded !AS to !AS', DOMP, TMP2);
+			    STR$COPY_DX (DOMP, TMP2);
+			END;
+			FORMAT821 (RTEQ, LCLP, DOMP, TMP2);
+    	    	    	FREETXT (Xaddr);
+    	    	    	Xaddr = MEM_GETTXT (.tmp2 [DSC$W_LENGTH], .tmp2 [DSC$A_POINTER]);
+		    END;
+		    WHILE NOT REMQUE (.RTEQ [QUE_L_HEAD], TXT) DO FREETXT (TXT);
+		    TRACE ('%PROCESS,    ... address now reads: !AD',
+			    .Xaddr [TXT_W_LEN], Xaddr [TXT_T_TEXT]);
+    	    	    IF .rcpt [RCPT_L_FLAGS] EQL 0 THEN rcpt [RCPT_V_DSN_FAILURE] = 1;
+		END
+		ELSE
+		    TRACE ('%PROCESS,    ... skipping: invalid syntax.');
+		RCPT = .RCPT [RCPT_L_FLINK];
+	    END;
+	    TRACE ('%PROCESS,  will run domain expander on message headers.');
+	END;
+
+	STATUS = READ_HDRS (.QCTX, QENT, %ASCID'HDR_INFO', HDRQ);
+	IF NOT(.status)
+	THEN
+	    BEGIN
+	    ALARM ('MX Router: error reading HDR_INFO file for entry !UL: !XL',
+			.qent [QENT_L_ENTNUM], .status);
+	    TRACE ('%PROCESS, error reading HDR_INFO file for entry !UL: !XL',
+			.qent [QENT_L_ENTNUM], .status);
+	    END;
+	IF .STATUS THEN
+	BEGIN
+    	    ctype = cte = 0;
+	    WHILE NOT REMQUE (.HDRQ [QUE_L_HEAD], HDR) DO
+	    IF (.EXPCTX NEQA 0) OR (.RW_REWRITE_HEADER NEQA 0) THEN
+	    BEGIN
+		SDSC [DSC$W_LENGTH] = .HDR [TXT_W_LEN];
+		SDSC [DSC$A_POINTER] = HDR [TXT_T_TEXT];
+		CASE .HDR [TXT_W_CODE] FROM MX_K_HDR_FIRSTCODE TO
+					MX_K_HDR_LASTCODE OF
+		SET
+		    [MX_K_HDR_TO, MX_K_HDR_R_TO, MX_K_HDR_CC, MX_K_HDR_R_CC,
+			MX_K_HDR_BCC, MX_K_HDR_R_BCC, MX_K_HDR_REPLY_TO,
+			MX_K_HDR_SENDER, MX_K_HDR_R_SENDER,
+			MX_K_HDR_R_REPLY_TO, MX_K_HDR_FROM, MX_K_HDR_R_FROM] :
+		    BEGIN
+			STATUS = PARSE_ADDRLIST (SDSC, ADRQ, 1);
+			IF .STATUS THEN
+			BEGIN
+			    FREE_STRINGS (TMP1);
+			    WHILE NOT REMQUE (.ADRQ [QUE_L_HEAD], TXT) DO
+			    BEGIN
+				IF .TMP1 [DSC$W_LENGTH] GTR 0 THEN
+				    STR$APPEND (TMP1, %ASCID', ');
+				SDSC [DSC$W_LENGTH] = .TXT [TXT_W_LEN];
+				SDSC [DSC$A_POINTER] = TXT [TXT_T_TEXT];
+				IF .RW_REWRITE_HEADER NEQA 0 THEN
+				BEGIN
+				    STATUS = (.RW_REWRITE_HEADER) (RWCTX, SDSC,
+						 TMP2, .HDR [TXT_W_CODE]);
+				    IF .STATUS THEN
+				    BEGIN
+					TRACE ('%PROCESS,   ... Header rewrite of !AS gave !AS',
+					    SDSC, TMP2);
+				    END
+				    ELSE
+				    BEGIN
+					TRACE ('%PROCESS,   ... Header rewrite of !AS failed !XL',
+					    SDSC, .STATUS);
+					STR$COPY_DX(TMP2, SDSC);
+				    END;
+				    STR$APPEND(TMP1,TMP2);
+				END
+				ELSE
+				BEGIN
+				    IF PARSE_MBOX (SDSC, LCLP, DOMP, NAM) THEN
+				    BEGIN
+					IF .DOMP [DSC$W_LENGTH] GTR 0 THEN
+					IF (.EXP_EXPAND) (EXPCTX, DOMP, TMP2) THEN
+					BEGIN
+					    TRACE ('%PROCESS,    ... for !AS expanded !AS to !AS',
+						SDSC, DOMP, TMP2);
+					    STR$COPY_DX (DOMP, TMP2);
+					END;
+					IF .NAM [DSC$W_LENGTH] EQL 0 THEN
+					STR$CONCAT (TMP2, LCLP, %ASCID'@', DOMP)
+					ELSE
+					    STR$CONCAT (TMP2, NAM, %ASCID' <', LCLP,
+						%ASCID'@', DOMP, %ASCID'>');
+					STR$APPEND (TMP1, TMP2);
+				    END
+				    ELSE
+				    BEGIN
+					TRACE ('%PROCESS,    invalid syntax: !AS',
+					    SDSC);
+					STR$APPEND (TMP1, SDSC);
+				    END;
+				END;
+				FREETXT (TXT);
+			    END;
+			    INSTXT (TMP1, .HDRQ2 [QUE_L_TAIL], .HDR [TXT_W_CODE]);
+			    IF .HDR [TXT_W_CODE] EQL MX_K_HDR_FROM THEN
+				STR$CONCAT (TMPFROM, LCLP, %ASCID'@', DOMP);
+			    FREETXT (HDR);
+			END
+			ELSE
+			    INSQUE (.HDR, .HDRQ2 [QUE_L_TAIL]);
+		    END;
+    	    	    [MX_K_HDR_MIME_C_T_E] :
+    	    	    	BEGIN
+    	    	    	    cte = .hdr;
+    	    	    	    INSQUE (.hdr, .hdrq2 [QUE_L_TAIL]);
+    	    	    	END;
+    	    	    [MX_K_HDR_MIME_C_TYPE] :
+    	    	    	BEGIN
+    	    	    	    ctype = .hdr;
+    	    	    	    INSQUE (.hdr, .hdrq2 [QUE_L_TAIL]);
+    	    	    	END;
+		    [INRANGE, OUTRANGE] : INSQUE (.HDR, .HDRQ2 [QUE_L_TAIL]);
+		TES;
+	    END
+	    ELSE
+    	    BEGIN
+    	    	IF .hdr [TXT_W_CODE] EQLU MX_K_HDR_MIME_C_T_E THEN
+    	    	    cte = .hdr
+    	    	ELSE IF .hdr [TXT_W_CODE] EQLU MX_K_HDR_MIME_C_TYPE THEN
+    	    	    ctype = .hdr;
+    	    	INSQUE (.HDR, .HDRQ2 [QUE_L_TAIL]);
+    	    END;
+
+	    STR$COPY_R (TMP1, %REF (.SENDER [DSC$W_LENGTH]-2),
+		    .SENDER [DSC$A_POINTER]+1);
+	    IF .TMPFROM [DSC$W_LENGTH] NEQ 0
+	    THEN
+		BEGIN
+		!
+		!  If the manager does not want to omit the Sender: line
+		!  if it's from VMS Mail, then include the Sender: if the
+		!  Sender and From: addresses are different.
+		!
+		IF NOT(.router_info [ROUTER_V_OMIT_VMSMAIL_SENDER]) AND
+		   (STR$CASE_BLIND_COMPARE (TMP1, TMPFROM) NEQ 0)
+		THEN
+		    INSTXT (TMP1, HDRQ2, MX_K_HDR_SENDER);
+		END
+	    ELSE
+		INSTXT (TMP1, HDRQ2, MX_K_HDR_SENDER);
+
+	    MX_MKDATE (0, TMP2, 0);
+	    LIB$SYS_FAO (%ASCID'by !AS (!AS) id !UL; !AS', 0, TMP1,
+		   CONFIG [CFG_Q_MXNODE], MX_IDENT_STRING, .QENT [QENT_L_ENTNUM],
+		    TMP2);
+	    INSTXT (TMP1, HDRQ2, MX_K_HDR_RECEIVED);
+
+    	    IF .envl [ENVL_V_CONTAINS8BIT] AND NOT .envl [ENVL_V_NO_ENCODE] THEN  ! N.B.: this is only set for text messages
+    	    BEGIN
+    	    	FLQ_MAKE_FSPEC (.qent [QENT_L_ENTNUM], %ASCID'MSG_TEXT', TMP1);
+    	    	STATUS = QP_ENCODE (TMP1, MSG_SIZE);
+    	    	IF NOT .STATUS THEN
+    	    	    ALARM ('MX Router: error encoding 8bit MSG_TEXT file for !UL: !XL',
+    	    	    	    .qent [QENT_L_ENTNUM], .STATUS)
+    	    	ELSE
+    	    	BEGIN
+    	    	    envl [ENVL_V_CONTAINS8BIT] = 0;
+    	    	    qent [QENT_L_SIZE] = .MSG_SIZE *
+    	    	    	(IF .RCPT_COUNT NEQ 0 THEN .RCPT_COUNT ELSE 1);
+    	    	    IF .cte NEQA 0 THEN
+    	    	    BEGIN
+    	    	    	hdr = .cte [TXT_L_BLINK];
+    	    	    	REMQUE (.cte, cte);
+    	    	    	FREETXT (cte);
+    	    	    	INSTXT (qp_tag, .hdr, MX_K_HDR_MIME_C_T_E);
+    	    	    END
+    	    	    ELSE
+    	    	    BEGIN
+    	    	    	INSTXT (%ASCID'1.0', .HDRQ2 [QUE_L_TAIL], MX_K_HDR_MIME_VERSION);
+    	    	    	INSTXT (qp_tag, .HDRQ2 [QUE_L_TAIL], MX_K_HDR_MIME_C_T_E);
+    	    	    END;
+    	    	END;
+    	    END
+    	    ELSE IF NOT .envl [ENVL_V_NO_ENCODE] THEN
+    	    BEGIN
+    	    	IF .cte NEQA 0 THEN
+    	    	    IF CH$EQL (.cte [TXT_W_LEN], cte [TXT_T_TEXT], 6, UPLIT ('binary')) THEN
+    	    	    BEGIN
+    	    	    	hdr = .cte [TXT_L_BLINK];
+    	    	    	REMQUE (.cte, cte);
+    	    	    	FREETXT (cte);
+    	    	    	INSTXT (%ASCID'7bit', .hdr, MX_K_HDR_MIME_C_T_E);
+    	    	    END;
+    	    END;
+
+
+	    status = WRITE_HDRS (.QCTX, QENT, %ASCID'HDR_INFO', HDRQ2);
+	    IF NOT(.status)
+	    THEN
+		ALARM ('MX Router: error writing new HDR_INFO file for !UL: !XL',
+			.qent [QENT_L_ENTNUM], .status);
+	    WHILE NOT REMQUE (.HDRQ2 [QUE_L_HEAD], HDR) DO FREETXT (HDR);
+
+	END;
+	envl [ENVL_L_ORIGIN] = MX_K_ORG_LOCAL;
+	status = WRITE_ENVELOPE (.QCTX, QENT, %ASCID'SRC_INFO', envl);
+	IF NOT(.status)
+	THEN
+	    ALARM ('MX Router: error writing new SRC_INFO file for !UL: !XL',
+			.qent [QENT_L_ENTNUM], .status);
+	TRACE ('%PROCESS, Updating the QENT source address.');
+	qent [QENT_W_ORGADR] = MIN (QENT_S_ORGADR, .sender [DSC$W_LENGTH]);
+	CH$MOVE (.qent [QENT_W_ORGADR], .sender [DSC$A_POINTER], qent [QENT_T_ORGADR]);
+	FLQ_UPDATE (QCTX, QENT);
+	TRACE ('%PROCESS, Finished VMSmail-origin preprocessing.');
+	FREE_STRINGS (TMP1, TMP2, LCLP, DOMP, NAM);
+    END
+    ELSE
+	BEGIN
+	LOCAL
+	    HDRQ    : QUEDEF;
+	INIT_QUEUE (hdrq);
+	IF (.rw_rewrite_header NEQA 0) AND
+	   (status = READ_HDRS (.qctx, qent, %ASCID'HDR_INFO', hdrq))
+	THEN
+	    BEGIN
+	    LOCAL
+		hdrq2	: QUEDEF,
+		adrq	: QUEDEF,
+		tmp1	: BLOCK [DSC$K_S_BLN,BYTE],
+		tmp2	: BLOCK [DSC$K_S_BLN,BYTE],
+		hdr	: REF TXTDEF;
+
+	    INIT_QUEUE (hdrq2, adrq);
+	    INIT_DYNDESC (tmp1, tmp2);
+	    !
+	    !Pull the headers out of the queue
+	    !
+	    WHILE NOT REMQUE (.hdrq [QUE_L_HEAD], hdr) DO
+		BEGIN
+		sdsc [DSC$W_LENGTH] = .hdr [TXT_W_LEN];
+		sdsc [DSC$A_POINTER] = hdr [TXT_T_TEXT];
+		CASE .HDR [TXT_W_CODE] FROM MX_K_HDR_FIRSTCODE TO
+					MX_K_HDR_LASTCODE OF
+		SET
+		    !
+		    !  If the header contains addresses, rewrite them
+		    !  if desired.
+		    !
+		    [MX_K_HDR_TO, MX_K_HDR_R_TO, MX_K_HDR_CC, MX_K_HDR_R_CC,
+				MX_K_HDR_BCC, MX_K_HDR_R_BCC, MX_K_HDR_REPLY_TO,
+				MX_K_HDR_SENDER, MX_K_HDR_R_SENDER,
+				MX_K_HDR_R_REPLY_TO, MX_K_HDR_FROM,
+				MX_K_HDR_R_FROM] :
+			BEGIN
+			status = PARSE_ADDRLIST (sdsc, adrq, 1);
+			IF .status
+			THEN
+			    BEGIN
+			    FREE_STRINGS (tmp1);
+			    WHILE NOT REMQUE (.adrq [QUE_L_HEAD], txt) DO
+				BEGIN
+				IF (.tmp1 [DSC$W_LENGTH] GTR 0)
+				THEN
+				    STR$APPEND (tmp1, %ASCID', ');
+				sdsc [DSC$W_LENGTH] = .txt [TXT_W_LEN];
+				sdsc [DSC$A_POINTER] = txt [TXT_T_TEXT];
+				status = (.rw_rewrite_header) (rwctx, sdsc,
+						 tmp2, .hdr [TXT_W_CODE]);
+				IF .status
+				THEN
+				    BEGIN
+				    TRACE ('%PROCESS,   ... Header rewrite of !AS gave !AS',
+					    SDSC, TMP2);
+				    END
+				ELSE
+				    BEGIN
+				    TRACE ('%PROCESS,   ... Header rewrite of !AS failed !XL',
+					    SDSC, .STATUS);
+				    STR$COPY_DX(TMP2, SDSC);
+				    END;
+				STR$APPEND(tmp1,tmp2);
+				FREETXT (txt);
+				END;
+
+			    INSTXT (tmp1, .hdrq2 [QUE_L_TAIL],
+					.hdr [TXT_W_CODE]);
+			    FREETXT (hdr);
+			    END
+			ELSE
+			    INSQUE (.HDR, .HDRQ2 [QUE_L_TAIL]);
+			END;
+		    [INRANGE, OUTRANGE] : INSQUE (.hdr, .hdrq2 [QUE_L_TAIL]);
+		TES;
+
+		END;	!WHILE NOT REMQUE (hdrq....
+
+	    status = WRITE_HDRS (.qctx, qent, %ASCID'HDR_INFO', hdrq2);
+	    IF NOT(.status)
+	    THEN
+		ALARM ('MX Router: error writing new HDR_INFO file for !UL: !XL',
+			.qent [QENT_L_ENTNUM], .status);
+	    WHILE NOT REMQUE (.hdrq2 [QUE_L_HEAD], hdr) DO FREETXT (hdr);
+
+	    FREE_STRINGS (tmp1, tmp2);
+
+	    END;
+	END;
+
+    BEGIN
+	LOCAL
+	    HDRQ    : QUEDEF,
+    	    fltrctx;
+
+    	fltrctx = 0;
+    	IF FILTER_INIT (fltrctx) THEN
+    	BEGIN
+    	    LOCAL flags : FLTRFLGDEF;
+    	    INIT_QUEUE (hdrq);
+    	    status = READ_HDRS (.qctx, qent, %ASCID'HDR_INFO', hdrq);
+    	    IF .status THEN
+    	    BEGIN
+    	    	LOCAL
+    	    	    h       : REF TXTDEF,
+    	    	    r	    : REF RCPTDEF,
+    	    	    bounceq : QUEDEF,
+    	    	    tmp	    : BLOCK [DSC$K_S_BLN,BYTE],
+    	    	    tmp2    : BLOCK [DSC$K_S_BLN,BYTE];
+    	    	INIT_DYNDESC (tmp, tmp2);
+    	    	INIT_QUEUE (bounceq);
+    	    	FLQ_MAKE_FSPEC (.qent [QENT_L_ENTNUM], %ASCID'MSG_TEXT', tmp);
+    	    	STR$COPY_R (tmp2, fromadr [TXT_W_LEN], fromadr [TXT_T_TEXT]);
+    	    	status = FILTER_MESSAGE (fltrctx, .envl [ENVL_L_ORIGIN], tmp2, .msg_size, rcptque, hdrq, tmp, flags, bounceq);
+    	    	FILTER_FINISH (fltrctx);
+    	    	FREE_STRINGS (tmp);
+    	    	IF NOT .status THEN FREE_STRINGS (tmp2);
+    	    	IF .status THEN
+    	    	BEGIN
+    	    	    IF .flags [FLTR_V_MODHDRS] THEN
+    	    	    BEGIN
+    	    	    	status = WRITE_HDRS (.qctx, qent, %ASCID'HDR_INFO', hdrq);
+    	    	    	IF NOT .status THEN
+    	    	    	    ALARM ('MX Router: error writing new HDR_INFO file for !UL: !XL',
+    	    	    	    	.qent [QENT_L_ENTNUM], .status);
+    	    	    END;
+    	    	    IF .flags [FLTR_V_MODENV] THEN
+    	    	    BEGIN
+    	    	    	IF .fromadr [TXT_W_LEN] NEQ .tmp2 [DSC$W_LENGTH] OR
+    	    	    	    CH$NEQ (.fromadr [TXT_W_LEN], fromadr [TXT_T_TEXT], .tmp2 [DSC$W_LENGTH], .tmp2 [DSC$A_POINTER]) THEN
+    	    	    	BEGIN
+    	    	    	    FREETXT (fromadr);
+    	    	    	    fromadr = MEM_GETTXT (.tmp2 [DSC$W_LENGTH], .tmp2 [DSC$A_POINTER]);
+    	    	    	    INIT_SDESC (sender, .fromadr [TXT_W_LEN], fromadr [TXT_T_TEXT]);
+    	    	    	END;
+    	    	    	RCPT_COUNT = 0;
+    	    	    	r = .rcptque [QUE_L_HEAD];
+    	    	    	WHILE .r NEQA rcptque DO
+    	    	    	BEGIN
+    	    	    	    RCPT_COUNT = .RCPT_COUNT + 1;
+    	    	    	    r = .r [RCPT_L_FLINK];
+    	    	    	END;
+    	    	    	status = WRITE_ENVELOPE (.qctx, qent, %ASCID'SRC_INFO', envl);
+    	    	    	IF NOT .status THEN
+    	    	    	    ALARM ('MX Router: error writing new SRC_INFO file for !UL: !XL',
+    	    	    	    	.qent [QENT_L_ENTNUM], .status);
+	    	    	qent [QENT_W_ORGADR] = MIN (QENT_S_ORGADR, .sender [DSC$W_LENGTH]);
+	    	    	CH$MOVE (.qent [QENT_W_ORGADR], .sender [DSC$A_POINTER], qent [QENT_T_ORGADR]);
+	    	    	FLQ_UPDATE (QCTX, QENT);
+    	    	    	FREE_STRINGS (tmp2);
+    	    	    END
+    	    	    ELSE FREE_STRINGS (tmp2);
+    	    	    WHILE NOT REMQUE (.bounceq [QUE_L_HEAD], r) DO
+    	    	    BEGIN
+    	    	    	r [RCPT_L_DSN_STATUS] = MX__DSN_FA_OTHER;
+    	    	    	r [RCPT_L_STATUS] = MX__REJECTED;
+    	    	    	DSN_REPORT_ADD_RCPT (dsnctx, r, 0);
+    	    	    	MEM_FREERCPT (r);
+    	    	    END;
+    	    	END;
+    	    	WHILE NOT REMQUE (.hdrq [QUE_L_HEAD], h) DO FREETXT (h);
+    	    END
+    	    ELSE FILTER_FINISH (fltrctx);
+    	END;
+    END;  ! filter stuff
+
+    i = 0;
+    WHILE NOT REMQUE (.rcptque [QUE_L_HEAD], RCPT) DO
+    BEGIN
+    	BIND Xaddr = RCPT [RCPT_A_ADDR] : REF TXTDEF;
+    	i = .i + 1;
+	LIB$GET_VM (%REF (RCP_S_RCPDEF), RCP);
+        CH$FILL (%CHAR (0), RCP_S_RCPDEF, .rcp);
+	INIT_DYNDESC (RCP [RCP_Q_RWADR], RCP [RCP_Q_ORGADR], RCP [RCP_Q_ERRMSG], RCP [RCP_Q_NEXTHOP]);
+    	rcp [RCP_A_RCPT] = .rcpt;
+	STR$COPY_R (RCP [RCP_Q_ORGADR], Xaddr [TXT_W_LEN], Xaddr [TXT_T_TEXT]);
+	TRACE ('%PROCESS, Recipient #!UL: !AS', .i, RCP [RCP_Q_ORGADR]);
+	INSQUE (.RCP, .RCPTQ [QUE_L_TAIL]);
+    END;
+
+    WHILE NOT REMQUE (.RCPTQ [QUE_L_HEAD], RCP) DO
+    IF PARSE821 (RCP [RCP_Q_ORGADR], RTEQ, USR, RCP [RCP_Q_NEXTHOP]) THEN
+    BEGIN
+    	BIND
+    	    rcpt = rcp [RCP_A_RCPT] 	    : REF RCPTDEF;
+
+        IF .rcpt EQLA 0 THEN
+        BEGIN
+            BIND
+                orgadr = rcp [RCP_Q_ORGADR] : BLOCK [,BYTE];
+            MEM_GETRCPT (rcpt);
+            rcpt [RCPT_A_ADDR] = MEM_GETTXT (.orgadr [DSC$W_LENGTH], .orgadr [DSC$A_POINTER]);
+        END;
+
+	WHILE NOT REMQUE (.RTEQ [QUE_L_HEAD], TXT) DO
+	BEGIN
+	    SDSC [DSC$W_LENGTH] = .TXT [TXT_W_LEN];
+	    SDSC [DSC$A_POINTER] = TXT [TXT_T_TEXT];
+	    STATUS = FINDPATH (SDSC, PATHID);
+	    IF .PATHID NEQ MX_K_PATH_LOCAL THEN
+	    BEGIN
+		INSQUE (.TXT, RTEQ);
+		EXITLOOP;
+	    END;
+	    FREETXT (TXT);
+	END;
+	FORMAT821 (RTEQ, USR, RCP [RCP_Q_NEXTHOP], RCP [RCP_Q_ORGADR]);
+	WHILE NOT REMQUE (.RTEQ [QUE_L_HEAD], TXT) DO FREETXT (TXT);
+
+	REWRITE (RCP [RCP_Q_ORGADR], RCP [RCP_Q_RWADR]);
+        IF .rcpt [RCPT_A_ORADDR] EQLA 0 AND
+                STR$CASE_BLIND_COMPARE (rcp [RCP_Q_ORGADR], rcp [RCP_Q_RWADR]) NEQ 0 THEN
+        BEGIN
+            FREETXT (rcpt [RCPT_A_ORTYPE]);
+            rcpt [RCPT_A_ORTYPE] = MEM_GETTXT (6, UPLIT ('rfc822'));
+            rcpt [RCPT_A_ORADDR] = XTEXT_ENCODE (rcpt [RCPT_A_ADDR]);
+        END;
+	status = PARSE821 (RCP [RCP_Q_RWADR], RTEQ, USR, RCP [RCP_Q_NEXTHOP]);
+	IF .RTEQ [QUE_L_HEAD] NEQA RTEQ THEN
+	BEGIN
+	    LOCAL R : REF TXTDEF;
+	    REMQUE (.RTEQ [QUE_L_HEAD], R);
+	    STR$COPY_R (RCP [RCP_Q_NEXTHOP], R [TXT_W_LEN], R [TXT_T_TEXT]);
+	    FREETXT (R);
+	    WHILE NOT REMQUE (.RTEQ [QUE_L_HEAD], R) DO
+		FREETXT (R);
+	END;
+	IF .status THEN
+	    status = FINDPATH (rcp [RCP_Q_NEXTHOP], pathid, route)
+	ELSE
+    	BEGIN
+    	    rcpt [RCPT_L_DSN_STATUS] = MX__DSN_FA_DSTSYN;
+    	    rcpt [RCPT_L_STATUS] = MX__BADRFC821ADDR;
+	    TRACE ('%PROCESS, Invalid RFC821 address resulted from rewrite!');
+    	END;
+
+    	IF NOT .status THEN
+    	    PATHID = 0
+    	ELSE IF .ROUTE [DSC$W_LENGTH] GTR 0 THEN
+    	BEGIN
+    	    STR$COPY_DX (RCP [RCP_Q_NEXTHOP], ROUTE);
+            RCP [RCP_V_FORCEDROUTE] = 1;
+    	END;
+	TRACE (%STRING ('%PROCESS, Rewrote !AS as !AS!/-',
+	    '         next hop !AS!AS, path !UL'), RCP [RCP_Q_ORGADR],
+	    RCP [RCP_Q_RWADR], RCP [RCP_Q_NEXTHOP],
+    	    (IF .rcp [RCP_V_FORCEDROUTE] THEN %ASCID' [set by path route]' ELSE %ASCID''),
+    	    .PATHID);
+	SELECTONE .PATHID OF
+	SET
+	    [0] :
+		BEGIN
+    	    	    IF .rcpt [RCPT_L_DSN_STATUS] EQL 0 THEN
+    	    	    BEGIN
+    	    	    	rcpt [RCPT_L_DSN_STATUS] = MX__DSN_FA_BADSYS;
+    	    	    	rcpt [RCPT_L_STATUS] = MX__NOPATH;
+    	    	    END;
+    	    	    DSN_REPORT_ADD_RCPT (dsnctx, rcpt, 0);
+		    INSQUE (.RCP, .ERRORQ [QUE_L_TAIL]);
+		END;
+
+	    [MX_K_PATH_LOCAL] :
+		BEGIN
+		    LOCAL 
+                        newq    : QUEDEF,
+                        ADDLCL;
+                    INIT_QUEUE (newq);
+		    ADDLCL = NOT FINDALIAS (USR, newq);
+		    IF .ADDLCL THEN
+		    BEGIN
+			LOCAL NEWRCP : REF RCPDEF;
+			TRACE ('%PROCESS, no alias found for !AS', USR);
+			STR$COPY_DX (RCP [RCP_Q_RWADR], USR);
+			NEWRCP = 0;
+			IF MLF_REQUEST (USR, NEWRCP) THEN
+			BEGIN
+			    IF .NEWRCP NEQA 0 THEN
+			    BEGIN
+                                BIND
+                                    newrcpt = newrcp [RCP_A_RCPT]   : REF RCPTDEF,
+                                    neworga = newrcp [RCP_Q_ORGADR] : BLOCK [,BYTE];
+
+				TRACE ('%PROCESS, This was a filesrv mgr msg.');
+				INSQUE (.NEWRCP, .RCPTQ [QUE_L_TAIL]);
+                                
+                                IF .newrcpt EQLA 0 THEN
+                                    MEM_GETRCPT (newrcpt);
+                                FREETXT (newrcpt [RCPT_A_ADDR], newrcpt [RCPT_A_ORTYPE], newrcpt [RCPT_A_ORADDR]);
+                                newrcpt [RCPT_A_ADDR] = MEM_GETTXT (.neworga [DSC$W_LENGTH], .neworga [DSC$A_POINTER]);
+                                IF .rcpt [RCPT_A_ORADDR] NEQA 0 THEN
+                                BEGIN
+                                    newrcpt [RCPT_A_ORTYPE] = .rcpt [RCPT_A_ORTYPE];
+                                    newrcpt [RCPT_A_ORADDR] = .rcpt [RCPT_A_ORADDR];
+                                    rcpt [RCPT_A_ORTYPE] = rcpt [RCPT_A_ORADDR] = 0;
+                                END
+                                ELSE
+                                BEGIN
+                                    newrcpt [RCPT_A_ORTYPE] = MEM_GETTXT (6, UPLIT ('rfc822'));
+                                    newrcpt [RCPT_A_ORADDR] = XTEXT_ENCODE (rcpt [RCPT_A_ADDR]);
+                                END;
+    	    	    	    	rcpt [RCPT_L_DSN_ACTION] = DSN__EXPANDED;
+    	    	    	    	rcpt [RCPT_L_DSN_STATUS] = MX__DSN_S__OTHER;
+    	    	    	    	rcpt [RCPT_L_STATUS] = MX__ADDRALIAS;
+    	    	    	    	DSN_REPORT_ADD_RCPT (dsnctx, rcpt, 2);
+    	    	    	    	MEM_FREERCPT (rcpt);
+    	    	    	    	rcpt = 0;
+				FREE_STRINGS (RCP [RCP_Q_ORGADR], RCP [RCP_Q_RWADR], RCP [RCP_Q_NEXTHOP]);
+				LIB$FREE_VM (%REF (RCP_S_RCPDEF), RCP);
+			    END
+			    ELSE
+			    BEGIN
+				TRACE ('%PROCESS, this is an MList or File req');
+				INSQUE (.RCP, .MLFQ [QUE_L_TAIL])
+			    END;
+			END
+			ELSE
+			BEGIN
+			    TRACE ('%PROCESS, this is just a local delivery');
+			    INSQUE (.RCP, .LOCALQ [QUE_L_TAIL]);
+			END;
+		    END
+		    ELSE
+		    BEGIN
+    	    	    	BIND
+                            orga = rcp [RCP_Q_ORGADR] : BLOCK [,BYTE];
+                        LOCAL
+                            r : REF RCPDEF;
+                        WHILE NOT REMQUE (.newq [QUE_L_HEAD], r) DO
+                        BEGIN
+                            BIND
+                                newrcpt = r [RCP_A_RCPT]   : REF RCPTDEF,
+                                neworga = r [RCP_Q_ORGADR] : BLOCK [,BYTE];
+                            IF .newrcpt EQLA 0 THEN
+                                MEM_GETRCPT (newrcpt);
+                            FREETXT (newrcpt [RCPT_A_ADDR], newrcpt [RCPT_A_ORTYPE], newrcpt [RCPT_A_ORADDR]);
+                            newrcpt [RCPT_A_ADDR] = MEM_GETTXT (.neworga [DSC$W_LENGTH], .neworga [DSC$A_POINTER]);
+                            IF .rcpt [RCPT_A_ORADDR] NEQA 0 THEN
+                            BEGIN
+                                newrcpt [RCPT_A_ORTYPE] = .rcpt [RCPT_A_ORTYPE];
+                                newrcpt [RCPT_A_ORADDR] = .rcpt [RCPT_A_ORADDR];
+                                rcpt [RCPT_A_ORTYPE] = rcpt [RCPT_A_ORADDR] = 0;
+                            END
+                            ELSE
+                            BEGIN
+                                newrcpt [RCPT_A_ORTYPE] = MEM_GETTXT (6, UPLIT ('rfc822'));
+                                newrcpt [RCPT_A_ORADDR] = XTEXT_ENCODE (rcpt [RCPT_A_ADDR]);
+                            END;
+                            INSQUE_TAIL (.r, rcptq);
+                        END;
+    	    	    	rcpt [RCPT_L_DSN_ACTION] = DSN__EXPANDED;
+    	    	    	rcpt [RCPT_L_STATUS] = MX__ADDRALIAS;
+    	    	    	rcpt [RCPT_L_DSN_STATUS] = MX__DSN_S__OTHER;
+    	    	    	DSN_REPORT_ADD_RCPT (dsnctx, rcpt, 2);
+    	    	    	MEM_FREERCPT (rcpt);
+    	    	    	rcpt = 0;
+			FREE_STRINGS (RCP [RCP_Q_ORGADR], RCP [RCP_Q_RWADR], RCP [RCP_Q_NEXTHOP]);
+			LIB$FREE_VM (%REF (RCP_S_RCPDEF), RCP);
+		    END;
+		END;
+
+	    [MX_K_PATH_SMTP] :
+		INSQUE (.RCP, .SMTPQ [QUE_L_TAIL]);
+
+	    [MX_K_PATH_SITE] :
+		INSQUE (.RCP, .SITEQ [QUE_L_TAIL]);
+
+	    [MX_K_PATH_DNSMTP] :
+		INSQUE (.RCP, .DNSMTPQ [QUE_L_TAIL]);
+
+    	    [MX_K_PATH_HOLDQ_BASE TO MX_K_PATH_HOLDQ_LAST] :
+    	    	INSQUE_TAIL (.RCP, holdq [(.PATHID-MX_K_PATH_HOLDQ_BASE),0,0,0,0]);
+
+	TES;
+    END
+    ELSE
+    BEGIN
+    	BIND
+    	    orgadr = rcp [RCP_Q_ORGADR] : BLOCK [,BYTE],
+    	    rcpt = rcp [RCP_A_RCPT] : REF RCPTDEF;
+    	IF .rcp [RCP_A_RCPT] EQLA 0 THEN
+    	BEGIN
+    	    MEM_GETRCPT (rcpt);
+    	    rcpt [RCPT_A_ADDR] = MEM_GETTXT (.orgadr [DSC$W_LENGTH], .orgadr [DSC$A_POINTER]);
+    	END;
+    	rcpt [RCPT_L_DSN_STATUS] = MX__DSN_FA_DSTSYN;
+    	rcpt [RCPT_L_STATUS] = MX__BADRFC821ADDR;
+    	DSN_REPORT_ADD_RCPT (dsnctx, rcpt, 0);
+	TRACE ('%PROCESS, Invalid address: !AS', RCP [RCP_Q_ORGADR]);
+	INSQUE (.RCP, .ERRORQ [QUE_L_TAIL]);
+    END;
+
+    MARKFIN = 1;
+
+    IF .LOCALQ [QUE_L_HEAD] NEQA LOCALQ THEN
+	PROCESS_QUEUE (LOCALQ, %ASCID'LOCAL', QENT, LCLQE, .QCTX, envl,
+	    MARKFIN, ERRORQ, .MSG_SIZE, MX_K_PATH_LOCAL, .dsnctx);
+
+    IF .MLFQ [QUE_L_HEAD] NEQA MLFQ THEN
+	PROCESS_QUEUE (MLFQ, %ASCID'MLF', QENT, MLFQE, .QCTX, envl,
+	    MARKFIN, ERRORQ, .MSG_SIZE, MX_K_PATH_MLF, .dsnctx);
+
+    IF .SMTPQ [QUE_L_HEAD] NEQA SMTPQ THEN
+	PROCESS_QUEUE (SMTPQ, %ASCID'SMTP', QENT, SMTPQE, .QCTX, envl,
+	    MARKFIN, ERRORQ, .MSG_SIZE, MX_K_PATH_SMTP, .dsnctx);
+
+    IF .DNSMTPQ [QUE_L_HEAD] NEQA DNSMTPQ THEN
+	PROCESS_QUEUE (DNSMTPQ, %ASCID'DNSMTP', QENT, DNSMTPQE, .QCTX, envl,
+	    MARKFIN, ERRORQ, .MSG_SIZE, MX_K_PATH_DNSMTP, .dsnctx);
+
+    IF .SITEQ [QUE_L_HEAD] NEQA SITEQ THEN
+	PROCESS_QUEUE (SITEQ, %ASCID'SITE', QENT, SITEQE, .QCTX, envl,
+	    MARKFIN, ERRORQ, .MSG_SIZE, MX_K_PATH_SITE, .dsnctx);
+
+    INCR i FROM 0 TO MX_K_HOLDQ_MAX-1 DO
+    BEGIN
+    	IF NOT QUEUE_EMPTY (holdq [.i,0,0,0,0]) THEN
+    	BEGIN
+    	    LOCAL
+    	    	hndsc   : BLOCK [DSC$K_S_BLN,BYTE],
+    	    	hnbuf   : VECTOR [16,BYTE];
+
+    	    INIT_SDESC (hndsc, %ALLOCATION (hnbuf), hnbuf);
+    	    $FAO (%ASCID'HOLD!UL', hndsc [DSC$W_LENGTH], hndsc, .i+1);
+    	    PROCESS_QUEUE (holdq [.i,0,0,0,0], hndsc, qent,
+    	    	    	   holdent [.i,0,0,0,0], .qctx, envl,
+    	    	    	   markfin, errorq, .msg_size,
+    	    	    	   MX_K_PATH_HOLDQ_BASE+.i, .dsnctx);
+    	END;
+    END;
+
+    BEGIN
+    	LOCAL hdrq : QUEDEF, txt : REF TXTDEF;
+    	INIT_QUEUE (hdrq);
+    	READ_HDRS (.QCTX, QENT, %ASCID'HDR_INFO', HDRQ);
+    	dsn_report_send (dsnctx, .qctx, 0, hdrq, qent, envl);
+    	WHILE NOT REMQUE_HEAD (hdrq, txt) DO FREETXT (txt);
+    END;
+
+    IF .ERRORQ [QUE_L_HEAD] NEQA ERRORQ THEN
+    BEGIN
+	TRACE ('%PROCESS, Beginning ERRORQ processing.');
+
+    	IF .router_info [ROUTER_V_ACCTG] THEN
+    	BEGIN
+    	    LOCAL r : REF RCPDEF;
+    	    r = .ERRORQ [QUE_L_HEAD];
+    	    WHILE .r NEQA ERRORQ DO
+    	    BEGIN
+    	    	LOCAL
+    	    	    buf	    : VECTOR [256,BYTE],
+    	    	    edsc    : BLOCK  [DSC$K_S_BLN,BYTE];
+    	    	INIT_SDESC (edsc, %ALLOCATION (buf), buf);
+    	    	$GETMSG (MSGID=.rcpt [RCPT_L_STATUS], MSGLEN=edsc [DSC$W_LENGTH], BUFADR=edsc, FLAGS=1);
+    	    	ACC_LOG ('!17%D BOUNCE: SENDER="!AS", RCPT="!AS", ORIGRCPT="!AS", ERROR="!AS"',
+    	    	    	    0, sender, r [RCP_Q_RWADR], r [RCP_Q_ORGADR], edsc);
+    	    	r = .r [RCP_L_FLINK];                                  
+    	    END;
+    	END;
+
+	FREE_RECIPS (ERRORQ);
+
+    END;
+
+    IF .MARKFIN THEN
+    BEGIN
+	TRACE ('%PROCESS, Marking this entry as finished.');
+	QENT [QENT_L_STATUS] = FLQ_K_STFIN;
+	FLQ_UPDATE (QCTX, QENT);
+    END
+    ELSE
+    BEGIN
+	FLQ_UPDATE (QCTX, QENT);
+	IF .QENT [MXQ_L_SMTPREF] NEQ 0 THEN FLQ_UPDATE (QCTX, SMTPQE);
+	IF .QENT [MXQ_L_DNSMTPREF] NEQ 0 THEN FLQ_UPDATE (QCTX, DNSMTPQE);
+	IF .QENT [MXQ_L_LOCALREF] NEQ 0 THEN FLQ_UPDATE (QCTX, LCLQE);
+	IF .QENT [MXQ_L_MLFREF] NEQ 0 THEN FLQ_UPDATE (QCTX, MLFQE);
+	IF .QENT [MXQ_L_SITEREF] NEQ 0 THEN FLQ_UPDATE (QCTX, SITEQE);
+    	INCR i FROM 0 TO MX_K_HOLDQ_MAX-1 DO
+    	BEGIN
+    	    BIND fwdref = QENT [MXQ_L_HOLDQREF_BASE] : VECTOR [,LONG];
+    	    IF .fwdref [.i] NEQ 0 THEN FLQ_UPDATE (qctx, holdent [.i,0,0,0,0]);
+    	END;
+    END;
+
+    FREE_STRINGS (USR, ROUTE);
+
+    DISPOSE_ENVELOPE (envl);
+
+    TRACE_CLOSE;
+
+    IF .router_info [ROUTER_V_ACCTG] THEN ACC_FLUSH;
+
+    SS$_NORMAL
+
+END; ! PROCESS
+
+%SBTTL 'FREE_RECIPS'
+ROUTINE FREE_RECIPS (QUE_A) =
+BEGIN
+!++
+! FUNCTIONAL DESCRIPTION:
+!
+!   Frees up RCPDEF structures from a queue.
+!
+! RETURNS:	cond_value, longword (unsigned), write only, by value
+!
+! PROTOTYPE:
+!
+!   FREE_RECIPS que
+!
+! IMPLICIT INPUTS:  None.
+!
+! IMPLICIT OUTPUTS: None.
+!
+! COMPLETION CODES:
+!
+!   SS$_NORMAL:		normal successful completion.
+!
+! SIDE EFFECTS:
+!
+!   None.
+!--
+    BIND
+	QUE = .QUE_A : QUEDEF;
+    LOCAL
+	R : REF RCPDEF;
+
+    WHILE NOT REMQUE (.QUE [QUE_L_HEAD], R) DO
+    BEGIN
+	FREE_STRINGS (R [RCP_Q_RWADR], R [RCP_Q_ORGADR], R [RCP_Q_ERRMSG], R [RCP_Q_NEXTHOP]);
+    	IF .r [RCP_A_RCPT] NEQA 0 THEN MEM_FREERCPT (r [RCP_A_RCPT]);
+	LIB$FREE_VM (%REF (RCP_S_RCPDEF), R);
+    END;
+
+    SS$_NORMAL
+
+END; ! FREE_RECIPS
+
+%SBTTL 'PROCESS_QUEUE'
+ROUTINE PROCESS_QUEUE (QUE_A, PATH_A, SRCQE_A, QENT_A, QCTX, envl_a,
+		       MARKFIN_A, ERRQ_A, MSG_SIZE, PCODE, dsnctx) =
+BEGIN
+!++
+! FUNCTIONAL DESCRIPTION:
+!
+!  Performs the new entry processing for any path.
+!
+! RETURNS:	cond_value, longword (unsigned), write only, by value
+!
+! PROTOTYPE:
+!
+!   PROCESS_QUEUE  que, path, srcqe, qent, qctx, sender, infoq, markfin, errq
+!
+! IMPLICIT INPUTS:  None.
+!
+! IMPLICIT OUTPUTS: None.
+!
+! COMPLETION CODES:
+!
+!   SS$_NORMAL:		normal successful completion.
+!
+! SIDE EFFECTS:
+!
+!   None.
+!--
+    BIND
+    	envl	= .envl_a   : ENVLDEF,
+	QUE 	= .QUE_A    : QUEDEF,
+	PATH	= .PATH_A   : $BBLOCK,
+	SRCQE	= .SRCQE_A  : QENTDEF,
+	QENT	= .QENT_A   : QENTDEF,
+	MARKFIN	= .MARKFIN_A,
+	ERRORQ	= .ERRQ_A   : QUEDEF;
+    BIND_ENVL_FIELDS (envl);
+
+    LOCAL
+    	newenv	: ENVLDEF,
+	STR 	: BLOCK [DSC$K_S_BLN,BYTE],
+	RCP 	: REF RCPDEF,
+	RCPT	: REF RCPTDEF,
+	STATUS;
+
+    INIT_DYNDESC (STR);
+
+    CH$MOVE (ENVL_S_ENVLDEF, envl, newenv);
+    INIT_QUEUE (newenv [ENVL_Q_RCPTQUE]);
+    newenv [ENVL_L_RCPTCOUNT] = 0;
+
+    IF .envl [ENVL_V_FROMADR] THEN newenv [ENVL_A_FROMADR] = MEM_GETTXT (.fromadr [TXT_W_LEN], fromadr [TXT_T_TEXT]);
+    IF .envl [ENVL_V_ORGSENDER] THEN newenv [ENVL_A_ORGSENDER] = MEM_GETTXT (.orgsender [TXT_W_LEN], orgsender [TXT_T_TEXT]);
+    IF .envl [ENVL_V_ENVFROMHOST] THEN
+    	newenv [ENVL_A_ENVFROMHOST] = MEM_GETTXT (.envfromhost [TXT_W_LEN], envfromhost [TXT_T_TEXT]);
+    IF .envl [ENVL_V_RCVDFROM] THEN newenv [ENVL_A_RCVDFROM] = MEM_GETTXT (.rcvdfrom [TXT_W_LEN], rcvdfrom [TXT_T_TEXT]);
+    IF .envl [ENVL_V_DSN_ENVID] THEN newenv [ENVL_A_DSN_ENVID] = MEM_GETTXT (.dsn_envid [TXT_W_LEN], dsn_envid [TXT_T_TEXT]);
+
+    CH$MOVE (QENT_S_QENTDEF, SRCQE, QENT);
+    QENT [QENT_L_STATUS] = FLQ_K_STINP;
+    SELECTONE .pcode OF
+	SET
+	[MX_K_PATH_LOCAL] :	qent [QENT_L_DSTPRC] = FLQ_K_MX_LOCAL;
+	[MX_K_PATH_SMTP] :	qent [QENT_L_DSTPRC] = FLQ_K_MX_SMTP;
+	[MX_K_PATH_MLF] :	qent [QENT_L_DSTPRC] = FLQ_K_MX_MLF;
+	[MX_K_PATH_SITE] :	qent [QENT_L_DSTPRC] = FLQ_K_MX_SITE;
+	[MX_K_PATH_DNSMTP] :	qent [QENT_L_DSTPRC] = FLQ_K_MX_DNSMTP;
+    	[MX_K_PATH_HOLDQ_BASE TO
+         MX_K_PATH_HOLDQ_LAST] : qent [QENT_L_DSTPRC] = FLQ_K_MX_HOLDQ_BASE +
+    	    	    	    	    	    	       (.pcode-MX_K_PATH_HOLDQ_BASE);
+	TES;
+
+    STATUS = FLQ_ADD (QCTX, QENT);
+    IF .STATUS THEN
+    BEGIN
+	BIND E = QENT [QENT_L_ENTNUM];
+	QENT [MXQ_L_BACKREF] = .SRCQE [QENT_L_ENTNUM];
+	CASE .PCODE FROM MX_K_PATH_LOCAL TO MX_K_PATH_HOLDQ_LAST OF
+	SET
+	    [MX_K_PATH_LOCAL]	: SRCQE [MXQ_L_LOCALREF] = .E;
+	    [MX_K_PATH_SMTP]	: SRCQE [MXQ_L_SMTPREF] = .E;
+	    [MX_K_PATH_DNSMTP]	: SRCQE [MXQ_L_DNSMTPREF] = .E;
+	    [MX_K_PATH_MLF]	: SRCQE [MXQ_L_MLFREF] = .E;
+	    [MX_K_PATH_SITE]	: SRCQE [MXQ_L_SITEREF] = .E;
+    	    [MX_K_PATH_HOLDQ_BASE TO
+            MX_K_PATH_HOLDQ_LAST] : BEGIN
+    	    	    	    	    BIND fwdref = srcqe [MXQ_L_HOLDQREF_BASE] : VECTOR [,LONG];
+    	    	    	    	    fwdref [.pcode-MX_K_PATH_HOLDQ_BASE] = .e;
+    	    	    	    	  END;
+    	    [3,4,6,9,10] : ; ! ignore - obsolete
+	TES;
+
+	WHILE NOT REMQUE (.QUE [QUE_L_HEAD], RCP) DO
+	BEGIN
+	    BIND
+		ADR = RCP [RCP_Q_RWADR]	    : BLOCK [,BYTE],
+		RTE = RCP [RCP_Q_NEXTHOP]   : BLOCK [,BYTE];
+	    newenv [ENVL_L_RCPTCOUNT] = .newenv [ENVL_L_RCPTCOUNT] + 1;
+	    TRACE ('%PROCESS, Adding to !AS path: !AS.', PATH, RCP [RCP_Q_RWADR]);
+	    rcpt = .rcp [RCP_A_RCPT];
+    	    rcp [RCP_A_RCPT] = 0;
+
+    	    IF .rcpt EQLA 0 THEN
+    	    BEGIN
+    	    	BIND
+    	    	    orgadr = rcp [RCP_Q_ORGADR] : BLOCK [,BYTE];
+    	    	MEM_GETRCPT (rcpt);
+    	    	rcpt [RCPT_A_ADDR] = MEM_GETTXT (.orgadr [DSC$W_LENGTH], .orgadr [DSC$A_POINTER]);
+    	    END;
+
+            rcpt [RCPT_V_FORCEDROUTE] = .rcp [RCP_V_FORCEDROUTE];
+
+    	    BEGIN
+    	    	BIND_RCPT_FIELDS (rcpt);
+    	    	FREETXT (addr);
+    	    	addr = MEM_GETTXT (.adr [DSC$W_LENGTH], .adr [DSC$A_POINTER]);
+    	    	FREETXT (route);
+    	    	IF .rte [DSC$W_LENGTH] NEQ 0 THEN
+    	    	    route = MEM_GETTXT (.rte [DSC$W_LENGTH], .rte [DSC$A_POINTER])
+    	    	ELSE
+    	    	    route = 0;
+    	    END;
+    	    IF .router_info [ROUTER_V_ACCTG] THEN
+    	    	ACC_LOG ('!17%D ROUTE: SENDER="!AD", RCPT="!AS", ROUTE="!AS", PATH=!AS, BYTES=!UL',
+    	    	    	    0, .fromadr [TXT_W_LEN], fromadr [TXT_T_TEXT], adr, rte, path, .msg_size);
+
+	    INSQUE_TAIL (.rcpt, newenv [ENVL_Q_RCPTQUE]);
+	    FREE_STRINGS (RCP [RCP_Q_RWADR], RCP [RCP_Q_ORGADR], RCP [RCP_Q_ERRMSG], RCP [RCP_Q_NEXTHOP]);
+	    LIB$FREE_VM (%REF (RCP_S_RCPDEF), RCP);
+	END;
+
+	STR$CONCAT (STR, PATH, %ASCID'_INFO');
+	status = WRITE_ENVELOPE (QCTX, QENT, STR, newenv);
+	IF NOT(.status)
+	THEN
+	    ALARM ('MX Router: error writing new !AS file for !UL: !XL',
+			str, .qent [QENT_L_ENTNUM], .status);
+	QENT [QENT_L_STATUS] = (IF .status THEN FLQ_K_STRDY ELSE FLQ_K_STOPH);
+	QENT [QENT_L_SIZE] = .MSG_SIZE * .newenv [ENVL_L_RCPTCOUNT];
+	TRACE ('%PROCESS, Path !AS gets !UL rcpts, entry number !UL',
+		PATH, .newenv [ENVL_L_RCPTCOUNT], .QENT [QENT_L_ENTNUM]);
+    	DISPOSE_ENVELOPE (newenv);
+	FREE_RECIPS (QUE);
+	MARKFIN = 0;
+    END
+    ELSE
+    BEGIN
+	WHILE NOT REMQUE (.QUE [QUE_L_HEAD], RCP) DO
+	BEGIN
+    	    BIND rcpt = rcp [RCP_A_RCPT] : REF RCPTDEF;
+    	    IF .rcpt EQLA 0 THEN
+    	    BEGIN
+    	    	BIND
+    	    	    orgadr = rcp [RCP_Q_ORGADR] : BLOCK [,BYTE],
+    	    	    adr    = rcp [RCP_Q_RWADR]  : BLOCK [,BYTE];
+    	    	MEM_GETRCPT (rcpt);
+    	    	rcpt [RCPT_A_ADDR] = MEM_GETTXT (.adr [DSC$W_LENGTH], .adr [DSC$A_POINTER]);
+    	    END;
+    	    rcpt [RCPT_L_STATUS] = .status;
+    	    rcpt [RCPT_L_DSN_STATUS] = MX__DSN_WS_OTHER;
+    	    DSN_REPORT_ADD_RCPT (dsnctx, rcpt, 0);
+	    INSQUE (.RCP, .ERRORQ [QUE_L_TAIL]);
+	END;
+    END;
+
+    FREE_STRINGS (STR);
+
+    .STATUS
+
+END; ! PROCESS_QUEUE
+
+END
+ELUDOM

@@ -1,0 +1,109 @@
+!+
+!   FILTER.R32
+!
+!   Constants and structures defining the Router filter callout interface.
+!
+!
+! Copyright (c) 2008, Matthew Madison.
+! 
+! All rights reserved.
+! 
+! Redistribution and use in source and binary forms, with or without
+! modification, are permitted provided that the following conditions
+! are met:
+! 
+!     * Redistributions of source code must retain the above
+!       copyright notice, this list of conditions and the following
+!       disclaimer.
+!     * Redistributions in binary form must reproduce the above
+!       copyright notice, this list of conditions and the following
+!       disclaimer in the documentation and/or other materials provided
+!       with the distribution.
+!     * Neither the name of the copyright owner nor the names of any
+!       other contributors may be used to endorse or promote products
+!       derived from this software without specific prior written
+!       permission.
+! 
+! THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
+! "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
+! LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
+! A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
+! OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
+! SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
+! LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
+! DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
+! THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
+! (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
+! OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+!
+!   N.B.:  This is an undocumented interface and may change at any time.
+!-
+
+!  Flags
+
+    LITERAL
+    	FLTR_M_MODENV	    = 1,
+    	FLTR_M_MODHDR	    = 2,
+    	FLTR_S_FLTRFLGDEF   = 4;
+
+    MACRO
+    	FLTR_V_MODENV	= 0,0,1,0%,
+    	FLTR_V_MODHDRS	= 0,1,1,0%,
+    	FLTRFLGDEF  	= BLOCK [FLTR_S_FLTRFLGDEF,BYTE]%;
+
+
+!  Item codes
+
+    LITERAL
+    	FLTR__ENV_MSGSIZE	= 101,
+    	FLTR__ENV_SOURCE	= 102,
+    	FLTR__ENV_SENDER	= 103,
+    	FLTR__ENV_RECIPIENT	= 104,
+
+    	FLTR__HDR_FROM	    	= 1,
+    	FLTR__HDR_SENDER	= 2,
+    	FLTR__HDR_TO   	    	= 3,
+    	FLTR__HDR_R_TO	    	= 4,
+    	FLTR__HDR_CC   	    	= 5,
+    	FLTR__HDR_R_CC	    	= 6,
+    	FLTR__HDR_BCC  	    	= 7,
+    	FLTR__HDR_R_BCC	    	= 8,
+    	FLTR__HDR_MESSAGE_ID 	= 9,
+    	FLTR__HDR_R_MESSAGE_ID	= 10,
+    	FLTR__HDR_IN_REPLY_TO	= 11,
+    	FLTR__HDR_REFERENCES 	= 12,
+    	FLTR__HDR_KEYWORDS   	= 13,
+    	FLTR__HDR_SUBJECT    	= 14,
+    	FLTR__HDR_ENCRYPTED  	= 15,
+    	FLTR__HDR_DATE	    	= 16,
+    	FLTR__HDR_REPLY_TO   	= 17,
+    	FLTR__HDR_RECEIVED   	= 18,
+    	FLTR__HDR_R_REPLY_TO 	= 19,
+    	FLTR__HDR_R_FROM	= 20,
+    	FLTR__HDR_R_SENDER   	= 21,
+    	FLTR__HDR_R_DATE	= 22,
+    	FLTR__HDR_RETURN_PATH	= 23,
+    	FLTR__HDR_OTHER	    	= 24,
+    	FLTR__HDR_X_WARNING  	= 25,
+    	FLTR__HDR_X_TO	    	= 26,
+    	FLTR__HDR_X_R_TO	= 27,
+    	FLTR__HDR_X_CC	    	= 28,
+    	FLTR__HDR_X_R_CC	= 29,
+    	FLTR__HDR_X_BCC	    	= 30,
+    	FLTR__HDR_X_R_BCC    	= 31,
+	FLTR__HDR_MIME_VERSION	= 32,
+	FLTR__HDR_MIME_C_T_E	= 33,
+	FLTR__HDR_MIME_C_TYPE	= 34,
+	FLTR__HDR_LIST_SUB	= 35,
+	FLTR__HDR_LIST_UNSUB	= 36,
+	FLTR__HDR_LIST_HELP	= 37,
+	FLTR__HDR_LIST_OTHER	= 38;
+
+!  Returned information codes
+
+    LITERAL
+    	FLTR__NOCHANGE	    	= 0,  ! hdrs/rcpts/sender
+    	FLTR__REWRITE	    	= 1,  ! hdrs/rcpts/sender
+    	FLTR__REJECT	    	= 2,  ! rcpts only
+    	FLTR__DELETE	    	= 3;  ! hdrs/rcpts
+    	

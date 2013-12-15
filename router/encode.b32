@@ -1,0 +1,175 @@
+%TITLE 'ENCODE'
+MODULE ENCODE (IDENT='V1.1',
+    	ADDRESSING_MODE (EXTERNAL=LONG_RELATIVE, NONEXTERNAL=LONG_RELATIVE)) =
+BEGIN
+!++
+! FACILITY: 	    ENCODE
+!
+! ABSTRACT: 	    ROUTER
+!
+! MODULE DESCRIPTION:
+!
+!   Encodes a message into quoted-printable format.
+!
+! AUTHOR:   	    M. Madison
+!
+! Copyright (c) 2008, Matthew Madison.
+! 
+! All rights reserved.
+! 
+! Redistribution and use in source and binary forms, with or without
+! modification, are permitted provided that the following conditions
+! are met:
+! 
+!     * Redistributions of source code must retain the above
+!       copyright notice, this list of conditions and the following
+!       disclaimer.
+!     * Redistributions in binary form must reproduce the above
+!       copyright notice, this list of conditions and the following
+!       disclaimer in the documentation and/or other materials provided
+!       with the distribution.
+!     * Neither the name of the copyright owner nor the names of any
+!       other contributors may be used to endorse or promote products
+!       derived from this software without specific prior written
+!       permission.
+! 
+! THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
+! "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
+! LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
+! A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
+! OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
+! SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
+! LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
+! DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
+! THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
+! (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
+! OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+!
+! CREATION DATE:    28-APR-1997
+!
+! MODIFICATION HISTORY:
+!
+!   28-APR-1997	V1.0	Madison	    Initial coding.
+!    8-MAY-1997 V1.0-1	Goatley     Write out blank lines too.
+!   17-JUL-1998	V1.0-2	Madison	    Fix trailing-blank encoding.
+!   01-JAN-2001	V1.1	Madison	    Use new QP routines.
+!--
+
+    LIBRARY 'SYS$LIBRARY:STARLET';
+    LIBRARY 'MX_SRC_COMMON:MX';
+    LIBRARY 'MX_SRC_COMMON:QP';
+
+    FORWARD ROUTINE
+    	QP_ENCODE;
+
+    EXTERNAL ROUTINE
+    	G_HAT (MX_FILE_OPEN, MX_FILE_READ, MX_FILE_WRITE, MX_FILE_CLOSE),
+    	G_HAT (QP_ENCODE_STRING);
+
+%SBTTL 'QP_ENCODE'
+GLOBAL ROUTINE QP_ENCODE (FSPEC_A, NEW_SIZE) = 
+BEGIN
+!++
+! FUNCTIONAL DESCRIPTION:
+!
+!   Encodes a message into quoted-printable form.
+!
+!   NOTE: because DEC MCS and ISO-Latin-1 are almost
+!         identical character sets, we cheat here
+!         and don't convert them.  Probably should, though.
+!
+! RETURNS:  	cond_value, longword (unsigned), write only, by value
+!
+! PROTOTYPE:
+!
+!   QP_ENCODE  fspec, new_size
+!
+!   fspec:  file specification, character string, read only, by descriptor
+!   new_size: longword_unsigned, write only, by reference
+!
+! IMPLICIT INPUTS:  None.
+!
+! IMPLICIT OUTPUTS: None.
+!
+! COMPLETION CODES:
+!
+!   SS$_NORMAL:	    	normal successful completion.
+!
+! SIDE EFFECTS:
+!
+!   None.
+!--
+    LOCAL
+    	in_unit,
+    	out_unit,
+    	instr	    : BLOCK [DSC$K_S_BLN,BYTE],
+    	indsc	    : BLOCK [DSC$K_S_BLN,BYTE],
+    	outdsc	    : BLOCK [DSC$K_S_BLN,BYTE],
+    	inptr,
+    	inremain,
+    	len,
+    	outbuf	    : VECTOR [76,BYTE],
+    	count,
+    	status;
+
+    status = MX_FILE_OPEN (MX__FILE_READ, .fspec_a, in_unit);
+    IF NOT .status THEN RETURN .status;
+    status = MX_FILE_OPEN (MX__FILE_WRITE, .fspec_a, out_unit);
+    IF NOT .status THEN
+    BEGIN
+    	MX_FILE_CLOSE (.in_unit);
+    	RETURN .status;
+    END;
+
+    INIT_DYNDESC (instr);
+
+    count = 0;
+    status = SS$_NORMAL;
+
+    WHILE .status AND MX_FILE_READ (.in_unit, instr) DO
+    BEGIN
+    	IF .instr [DSC$W_LENGTH] EQLU 0 THEN
+    	    status = MX_FILE_WRITE (.out_unit, instr)
+    	ELSE
+    	BEGIN
+    	    inremain = .instr [DSC$W_LENGTH];
+    	    inptr    = .instr [DSC$A_POINTER];
+    	    WHILE .inremain GTRU 0 DO
+    	    BEGIN	
+    	    	len = MINU (.inremain, 76);
+    	    	WHILE .len GTRU 0 DO
+    	    	BEGIN
+    	    	    INIT_SDESC (indsc, .len, .inptr);
+    	    	    INIT_SDESC (outdsc, %ALLOCATION (outbuf), outbuf);
+    	    	    status = QP_ENCODE_STRING (QP__BODY OR (IF .len EQLU .inremain THEN QP_M_BODY_EOL ELSE 0), 
+    	    	    	    	    	   indsc, outdsc [DSC$W_LENGTH], outdsc);
+    	    	    IF .status THEN
+    	    	    	EXITLOOP;
+    	    	    len = .len - 1;
+    	    	END;
+    	    	IF .status THEN
+    	    	BEGIN
+    	    	    status = MX_FILE_WRITE (.out_unit, outdsc);
+    	    	    IF NOT .status THEN
+    	    	    	EXITLOOP;
+    	    	    count = .count + .outdsc [DSC$W_LENGTH];
+    	    	    inremain = .inremain - .len;
+    	    	    inptr = CH$PLUS (.inptr, .len);
+    	    	END
+    	    	ELSE
+    	    	    EXITLOOP;
+    	    END;
+    	END;
+    END;
+
+    MX_FILE_CLOSE (.out_unit, (IF .status THEN 0 ELSE 1));
+    MX_FILE_CLOSE (.in_unit);
+
+    FREE_STRINGS (instr);
+
+    .status
+
+END; ! qp_encode
+
+END
+ELUDOM

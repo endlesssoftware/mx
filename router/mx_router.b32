@@ -1,0 +1,88 @@
+%TITLE 'MX_ROUTER'
+MODULE MX_ROUTER (IDENT='V2.7-1', MAIN=MX_ROUTER) =
+BEGIN
+!++
+! FACILITY: 	    MX Router
+!
+! ABSTRACT: 	    Main mail router routines.
+!
+! MODULE DESCRIPTION:
+!
+!   This module contains the main processing routines for the MX mail router.
+!
+! AUTHOR:   	    M. Madison
+!
+! Copyright (c) 2008, Matthew Madison.
+! 
+! All rights reserved.
+! 
+! Redistribution and use in source and binary forms, with or without
+! modification, are permitted provided that the following conditions
+! are met:
+! 
+!     * Redistributions of source code must retain the above
+!       copyright notice, this list of conditions and the following
+!       disclaimer.
+!     * Redistributions in binary form must reproduce the above
+!       copyright notice, this list of conditions and the following
+!       disclaimer in the documentation and/or other materials provided
+!       with the distribution.
+!     * Neither the name of the copyright owner nor the names of any
+!       other contributors may be used to endorse or promote products
+!       derived from this software without specific prior written
+!       permission.
+! 
+! THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
+! "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
+! LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
+! A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
+! OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
+! SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
+! LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
+! DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
+! THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
+! (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
+! OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+!
+! CREATION DATE:    28-APR-1989
+!
+! MODIFICATION HISTORY:
+!
+!   28-APR-1989	V1.0	Madison	    Initial coding.
+!   05-DEC-1989	V1.1	Madison	    Separated out common agent code.
+!   16-JAN-1990	V1.1-2	Madison	    Add FLQ cleanup code.
+!   19-SEP-1990	V1.2-3	Madison	    IPC update.
+!   11-OCT-1990	V1.3	Madison	    Add cluster backup sync stuff, fix shutdns.
+!   11-FEB-1991	V2.0	Madison	    Do real size-based ordering.
+!   13-FEB-1991	V2.0-1	Madison	    If we're notified, check delay date.
+!   02-MAR-1991	V2.1	Madison	    Allow multiple Routers.
+!   14-FEB-1992	V2.2	Madison	    Log events.
+!    6-FEB-1993 V2.3	Goatley     Added final status to exit LOG_EVENT.
+!   12-FEB-1993 V2.3-1	Goatley     Rename FLQ_ locks & logicals to MX_FLQ_.
+!   10-FEB-1994 V2.4	Goatley     Modify to work with FLQ V2.
+!   22-MAR-1994 V2.4-1	Goatley     Fix problem with entries left INPROG!!!
+!   10-APR-1994 V2.5	Altmayer    Include agent status codes for MCP STAT
+!   29-APR-1994 V2.6	Altmayer    Change to use [MX.COMMON]AGENT.R32
+!   30-AUG-1997	V2.7	Madison	    Agent routines are now in a shared module.
+!   27-NOV-2000	V2.7-1	Madison	    Have FLQ_MGR process override queue-managing Routers.
+!--
+    LIBRARY 'MX_SRC_COMMON:FLQ';
+
+    EXTERNAL ROUTINE
+    	AGENT_MAIN,
+    	INIT,
+    	PROCESS,
+    	FLQ_CLUP_INIT,
+    	FLQ_CLEANUP;
+
+    GLOBAL
+    	FLQ_MGR_PROC;
+
+GLOBAL ROUTINE MX_ROUTER =
+BEGIN
+    FLQ_MGR_PROC = 0;
+    AGENT_MAIN (FLQ_K_MX_ROUTER, 0, INIT, PROCESS, FLQ_CLUP_INIT, FLQ_CLEANUP)
+END;
+
+END
+ELUDOM

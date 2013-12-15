@@ -1,0 +1,997 @@
+%TITLE 'FLQ_CLUP'
+MODULE FLQ_CLUP (IDENT='V2.4-3') =
+BEGIN
+!++
+! FACILITY: 	    MX Router
+!
+! ABSTRACT: 	    FLQ cleanup routines
+!
+! MODULE DESCRIPTION:
+!
+!   This module contains FLQ cleanup routines, which are used when
+!   the Router, in absence of a separate FLQ manager process, has to
+!   do file queue cleanups.
+!
+!   Every CINTVL centiseconds, the CHECK flag is set, indicating that
+!   a check for purgeable entries should take place.  Three kinds of
+!   purges can occur:  ordinary purges of finished and cancelled entries,
+!   controlled by MX_FLQ_PURGE_WAIT (default = 15 minutes); "full" purge
+!   of in-process entries that have been hanging around without modification
+!   for longer than MX_FLQ_FULL_PURGE_WAIT (default = 1 day); and expired
+!   entries - entries that are still at ready status but whose expiration
+!   date has gone by.
+!
+! AUTHOR:   	    M. Madison
+!
+! Copyright (c) 2008, Matthew Madison.
+! 
+! All rights reserved.
+! 
+! Redistribution and use in source and binary forms, with or without
+! modification, are permitted provided that the following conditions
+! are met:
+! 
+!     * Redistributions of source code must retain the above
+!       copyright notice, this list of conditions and the following
+!       disclaimer.
+!     * Redistributions in binary form must reproduce the above
+!       copyright notice, this list of conditions and the following
+!       disclaimer in the documentation and/or other materials provided
+!       with the distribution.
+!     * Neither the name of the copyright owner nor the names of any
+!       other contributors may be used to endorse or promote products
+!       derived from this software without specific prior written
+!       permission.
+! 
+! THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
+! "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
+! LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
+! A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
+! OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
+! SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
+! LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
+! DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
+! THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
+! (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
+! OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+!
+! CREATION DATE:    16-JAN-1990
+!
+! MODIFICATION HISTORY:
+!
+!   16-JAN-1990	V1.0	Madison	    Initial coding.
+!   05-DEC-1990	V1.0-1	Madison	    Increase full-purge delay to 2 weeks.
+!   14-DEC-1990	V1.1	Madison	    Signal when queue reclaim fails.
+!   06-FEB-1991	V1.2	Madison	    Add debug/trace. Work around timer problem.
+!   02-MAR-1991	V1.3	Madison	    Allow backup Router to take over.
+!   13-MAR-1991	V1.3-1	Madison	    Remove FULL_PURGE temporarily.
+!   21-NOV-1991	V1.3-2	Madison	    Make sure FLQ_OPEN was successful.
+!   12-FEB-1993 V1.4	Goatley     Rename FLQ_ locks & logicals to MX_FLQ_.
+!   12-FEB-1993 V1.4-1	Goatley     Changed default RECLAIM_WAIT to 2 hours.
+!   12-NOV-1993 V1.5	Goatley     Removed RECLAIM code; not needed w/ FLQ V4.
+!   23-NOV-1993 V1.5-1	Goatley     Added call to LIB$FILE_SCAN_END in PURGE.
+!				    Also changed order in PURGE so files are
+!				    deleted *before* entry is removed.
+!   10-DEC-1993 V1.5-2	Goatley     Added call to FLQ_SYNCH_BITMAP in init rtn.
+!   28-JAN-1994 V1.5-3	Goatley     Modify so only FLQ RQC guy does synch.
+!   10-FEB-1994 V1.6	Goatley     Modify to work with FLQ V2.
+!   25-MAR-1994 V1.6-1	Goatley     Handle READY or CANCEL of INPROG messages.
+!   28-MAR-1994 V1.6-2	Goatley     Fix valid process check in READY_OR_CANCEL.
+!    1-MAY-1994 V1.6-3	Altmayer    Add IPC definitions
+!   13-MAY-1994 V1.6-4	Altmayer    SET QENT_V_LOCK = 1 before FLQ_UPDATE
+!   14-MAY-1994 V1.6-5	Altmayer    Add MXQ_L_LSVREF
+!   22-MAY-1994 V1.6-6	Goatley     Remove PURGE; call FLQ_PURGE instead.
+!    6-JUN-1994 V1.6-7	Goatley     Move a FREE_STRINGS.
+!   15-NOV-1995 V2.0	Goatley     When PURGEing, save FIN ROUTER for last.
+!   29-NOV-1995 V2.0-1	Goatley     And check that they're still FIN!
+!   05-JAN-1997	V2.1	Madison	    Eliminate MDMLIB.
+!   28-APR-1997	V2.1-1	Madison	    Add callout to SMTP_CLUP.
+!   30-AUG-1997	V2.2	Madison	    Change invocation to accommodate new
+!   	    	    	    	    agent structure.
+!    7-SEP-1997 V2.2-1	Goatley	    For invalid time logicals, use defaults.
+!   09-MAR-1999	V2.2-2	Madison	    Add some armor plating.
+!   20-JUN-1999	V2.3	Madison	    More cleanup changes.
+!   29-JAN-2000	V2.3-1	Madison	    More holding queues, FLQ_MGR precedence.
+!   15-FEB-2002 V2.4    Madison     Add MLF_CLUP callout.
+!   02-MAR-2002 V2.4-1  Madison     Removed MLF_CLUP callout; MLF does this itself.
+!   14-NOV-2004 V2.4-2  Madison     Don't let FLQ_MGR just hang waiting for the CLUP lock.
+!   13-APR-2005 V2.4-3  Madison     FLQ_SEARCH_END.
+!--
+    LIBRARY 'SYS$LIBRARY:STARLET';
+    LIBRARY 'MX_SRC_COMMON:FLQ';
+    LIBRARY 'MX_SRC_COMMON:MX';
+    LIBRARY 'MX_SRC_COMMON:IPC';
+    LIBRARY 'MX_SRC_COMMON:AGENT';
+    LIBRARY 'MX_SRC_COMMON:STATUS';
+    LIBRARY 'MX_SRC_COMMON:FIELDS';
+
+    FORWARD ROUTINE
+    	FLQ_CLUP_INIT,
+    	FLQ_CLEANUP,
+	READY_OR_CANCEL,
+    	exit_handler,
+    	release_lock,
+        flq_mgr_ast;
+
+    EXTERNAL ROUTINE
+    	SMTP_CLUP   : NOVALUE,
+    	G_HAT (LOG_EVENT),
+    	G_HAT (STR$CONCAT, LIB$DELETE_FILE, LIB$GET_EF, LIB$FREE_EF,
+    	    LIB$FILE_SCAN_END, LIB$ADD_TIMES, LIB$SUB_TIMES, STR$COPY_DX,
+	    LIB$GET_VM_PAGE, LIB$FREE_VM_PAGE),
+        G_HAT (LIB$SHOW_VM_ZONE, FLQ_SEARCH_END);
+
+    EXTERNAL LITERAL
+    	MX__QRECLERR, LIB$_NORMAL, LIB$_NEGTIM;
+
+    EXTERNAL
+    	CONFIG	    : CFGDEF,
+    	STATUS_CODE,
+    	FLQ_MGR_PROC;
+
+    _DEF (FCFG)
+    	FCFG_Q_CINTVL	= _QUAD,
+    	FCFG_Q_PINTVL	= _QUAD,
+    	FCFG_Q_SMTPINTVL = _QUAD,
+    	FCFG_Q_LASTC	= _QUAD,
+    	FCFG_Q_FLQNODE	= _QUAD,
+    	FCFG_L_EFN  	= _LONG,
+    	FCFG_L_QCTX 	= _LONG,
+    	FCFG_L_FLAGS	= _LONG,
+    	_OVERLAY (FCFG_L_FLAGS)
+    	    FCFG_V_ENABLE   = _BIT,
+    	_ENDOVERLAY
+    	FCFG_L_LKID 	= _LONG
+    _ENDDEF (FCFG);
+
+    OWN
+    	fcfg		: FCFGDEF,
+    	exhblk 	    	: EXHDEF,
+	boottime	: VECTOR [2, LONG],
+    	lastwarntime	: VECTOR [2, LONG],
+    	one_hour    	: VECTOR [2, LONG],
+        mainlsb         : LSBDEF,
+    	exit_status;
+
+    TRACE_DECLARATIONS (OWN);
+
+    LITERAL
+    	FWDREF_COUNT = 11;
+
+    MACRO BYTENUM (A,B,C,D) = (A)%;
+
+    OWN
+    	do_release,
+        main_ast_pending,
+    	fwdref	    : VECTOR [FWDREF_COUNT,LONG] PSECT ($PLIT$) INITIAL (
+    	    	    	BYTENUM (MXQ_L_SMTPREF),
+    	    	    	BYTENUM (MXQ_L_LOCALREF),
+    	    	    	BYTENUM (MXQ_L_JNETREF),
+    	    	    	BYTENUM (MXQ_L_UUCPREF),
+    	    	    	BYTENUM (MXQ_L_MLFREF),
+    	    	    	BYTENUM (MXQ_L_X400REF),
+    	    	    	BYTENUM (MXQ_L_SITEREF),
+    	    	    	BYTENUM (MXQ_L_DNSMTPREF),
+    	    	    	BYTENUM (MXQ_L_XSMTPREF),
+    	    	    	BYTENUM (MXQ_L_LSVREF),
+			BYTENUM (MXQ_L_HOLDQREF_BASE));
+
+    BIND
+	ten_minutes_d		= %ASCID'0 00:10:00',
+	fifteen_minutes_d	= %ASCID'0 00:15:00',
+	twelve_hours_d		= %ASCID'0 12:00:00',
+	LNM$FILE_DEV		= %ASCID'LNM$FILE_DEV',
+	flq_lock_d		= %ASCID'FLQ_LOCK_',
+	rqc_d			= %ASCID'_RQC';
+
+
+%SBTTL 'FLQ_CLUP_INIT'
+GLOBAL ROUTINE FLQ_CLUP_INIT =
+BEGIN
+!++
+! FUNCTIONAL DESCRIPTION:
+!
+!   Initializes the FLQ_CLUP data areas, timers, etc.
+!
+! RETURNS:  	cond_value, longword (unsigned), write only, by value
+!
+! PROTOTYPE:
+!
+!   FLQ_CLUP_INIT
+!
+! IMPLICIT INPUTS:  None.
+!
+! IMPLICIT OUTPUTS: None.
+!
+! COMPLETION CODES:
+!
+!   SS$_NORMAL:	    	normal successful completion.
+!
+! SIDE EFFECTS:
+!
+!   None.
+!--
+    LOCAL
+    	LOCKSB	: LSBDEF,
+    	NOW 	: BLOCK [8,BYTE],
+    	STR 	: BLOCK [DSC$K_S_BLN,BYTE],
+	itmlst	: $ITMLST_DECL (ITEMS = 1),
+    	lnmbuf	: VECTOR [256,BYTE],
+	qctx,
+	cluster_member	: BYTE,
+    	JUNK,
+    	STATUS;
+
+    TRACE_INIT ('flq', 'router');
+
+    CH$FILL (%CHAR (0), FCFG_S_FCFGDEF, FCFG);
+    LIB$GET_EF (FCFG [FCFG_L_EFN]);
+    INIT_DYNDESC (FCFG [FCFG_Q_FLQNODE]);
+    STR$COPY_DX (FCFG [FCFG_Q_FLQNODE], CONFIG [CFG_Q_FLQNODE]);
+
+    !
+    !  Get the system boottime.  If we're a cluster member, then use the
+    !  boottime of the founding cluster node, since $GETSYI won't return
+    !  the boottime for other nodes.
+    !
+    cluster_member = 0;
+    $ITMLST_INIT (ITMLST=itmlst,
+		(ITMCOD = SYI$_CLUSTER_MEMBER,
+		 BUFSIZ = %ALLOCATION(cluster_member),
+		 BUFADR = cluster_member));
+    IF NOT $GETSYIW (ITMLST = itmlst) THEN
+    	cluster_member = 0;
+
+    $ITMLST_INIT (ITMLST=itmlst,
+		(ITMCOD = (IF (.cluster_member) THEN SYI$_CLUSTER_FTIME
+			   ELSE SYI$_BOOTTIME),
+		 BUFSIZ = %ALLOCATION(boottime),
+		 BUFADR = boottime));
+    status = $GETSYIW (ITMLST = itmlst);
+    IF NOT .status THEN
+    	SIGNAL_STOP (.status);
+
+    TRACE ('%FLQ_CLUP_INIT, Getting timer values from FLQ logicals...');
+
+    $ITMLST_INIT (ITMLST=itmlst,
+    	(ITMCOD=LNM$_STRING, BUFSIZ=%ALLOCATION (lnmbuf),
+    	 BUFADR=lnmbuf, RETLEN=str [DSC$W_LENGTH]));
+
+    INIT_SDESC (str, 0, lnmbuf);
+
+    $BINTIM (TIMBUF=%ASCID'0 01:00:00.00', TIMADR=one_hour);
+
+    status = $TRNLNM (LOGNAM=%ASCID'MX_FLQ_CHECK_WAIT', TABNAM=LNM$FILE_DEV, ITMLST=itmlst);
+    status = $BINTIM (TIMBUF=(IF .status THEN str ELSE ten_minutes_d),
+			TIMADR=FCFG [FCFG_Q_CINTVL]);
+    IF NOT(.status) THEN $BINTIM (TIMBUF=ten_minutes_d, TIMADR=fcfg [FCFG_Q_CINTVL]);
+    TRACE ('                   MX_FLQ_CHECK_WAIT = !%D', FCFG [FCFG_Q_CINTVL]);
+
+    status = $TRNLNM (LOGNAM=%ASCID'MX_FLQ_PURGE_WAIT', TABNAM=LNM$FILE_DEV, ITMLST=itmlst);
+    status = $BINTIM (TIMBUF=(IF .status THEN str ELSE fifteen_minutes_d), TIMADR=FCFG [FCFG_Q_PINTVL]);
+    IF NOT(.status) THEN $BINTIM (TIMBUF=fifteen_minutes_d, TIMADR=fcfg [FCFG_Q_PINTVL]);
+    TRACE ('                   MX_FLQ_PURGE_WAIT = !%D', FCFG [FCFG_Q_PINTVL]);
+
+    status = $TRNLNM (LOGNAM=%ASCID'MX_SMTP_CLEANUP_WAIT', TABNAM=LNM$FILE_DEV, ITMLST=itmlst);
+    status = $BINTIM (TIMBUF=(IF .status THEN str ELSE twelve_hours_d), TIMADR=FCFG [FCFG_Q_SMTPINTVL]);
+    IF NOT(.status) THEN $BINTIM (TIMBUF=twelve_hours_d, TIMADR=fcfg [FCFG_Q_SMTPINTVL]);
+    TRACE ('                MX_SMTP_CLEANUP_WAIT = !%D', FCFG [FCFG_Q_SMTPINTVL]);
+
+    $GETTIM (TIMADR=NOW);
+    LIB$SUB_TIMES (NOW, FCFG [FCFG_Q_CINTVL], FCFG [FCFG_Q_LASTC]);
+
+    !
+    !  When the Router starts, it is responsible for synching the
+    !  FLQ bitmap with the actual records (entries) in use.
+    !
+    $INIT_DYNDESC (str);
+    STR$CONCAT (STR, flq_lock_d, FCFG [FCFG_Q_FLQNODE], rqc_d);
+    IF .flq_mgr_proc THEN
+    BEGIN
+        main_ast_pending = 1;
+    	status = $ENQ (EFN=.FCFG [FCFG_L_EFN], LKMODE=LCK$K_EXMODE,
+		        LKSB=mainlsb, FLAGS=LCK$M_SYSTEM, RESNAM=STR,
+                        ASTADR=flq_mgr_ast);
+        IF .status EQL SS$_SYNCH THEN
+        BEGIN
+            IF .mainlsb [LSB_W_STATUS] THEN
+            BEGIN
+                fcfg [FCFG_V_ENABLE] = 1;
+                TRACE ('%FLQ_CLUP_INIT, I am the queue cleanup owner');
+            END;
+            main_ast_pending = 0;
+        END;
+    END
+    ELSE
+    BEGIN
+    	LOCAL
+    	    flq_lsb 	: LSBDEF,
+    	    flq_mgr 	: BLOCK [DSC$K_S_BLN,BYTE];
+    	$SETAST (ENBFLG=0);  ! Make sure blocking AST doesn't fire until we initialize do_release
+    	INIT_DYNDESC (flq_mgr);
+    	! Take out the FLQ Manager's main synchronization lock first (not queued).  If we can't get it,
+    	! then the FLQ Manager is running and we should buzz off.
+    	STR$CONCAT (flq_mgr, %ASCID'FLQ_LOCK_', fcfg [FCFG_Q_FLQNODE], %ASCID %STRING ('_', MX_FLQ_MGR));
+    	status = $ENQW (EFN=.fcfg [FCFG_L_EFN], LKMODE=LCK$K_EXMODE, LKSB=flq_lsb,
+    	    	    	FLAGS=LCK$M_NOQUEUE OR LCK$M_SYSTEM OR LCK$M_NODLCKBLK OR LCK$M_NODLCKWT,
+    	    	    	RESNAM=flq_mgr);
+    	IF .status AND .flq_lsb [LSB_W_STATUS] THEN
+    	BEGIN
+    	    status = $ENQW (EFN=.FCFG [FCFG_L_EFN], LKMODE=LCK$K_EXMODE, BLKAST=release_lock,
+		    	    LKSB=LOCKSB, FLAGS=LCK$M_SYSTEM OR LCK$M_NOQUEUE, RESNAM=STR);
+    	    IF .status AND .locksb [LSB_W_STATUS] THEN
+    	    	FCFG [FCFG_L_LKID] = .locksb [LSB_L_LKID];
+    	    $DEQ (LKID=.flq_lsb [LSB_L_LKID]);
+    	END;
+    	FREE_STRINGS (flq_mgr);
+        FCFG [FCFG_V_ENABLE] = .STATUS AND .LOCKSB [LSB_W_STATUS];
+    END;
+    IF .FCFG [FCFG_V_ENABLE]
+    THEN
+	BEGIN
+	!
+	!  We're the FLQ guy, so READY or CANCEL any leftover INPROG messages.
+	!
+	LOCAL
+	    flqlst	: _FLQSRCHLST_DECL (ITEMS=2),
+	    junk	: VECTOR [2, LONG],
+	    qent	: QENTDEF,
+	    srchctx,
+	    forward_exists,
+	    pid;
+
+    	do_release = 0;
+    	IF NOT .flq_mgr_proc THEN
+    	    $SETAST (ENBFLG=1);
+
+	TRACE ('%FLQ_CLUP_INIT, Searching for INPROG entries to READY or CANCEL');
+	$ITMLST_INIT (ITMLST=itmlst,		!Re-use item-list for $GETJPI
+		(ITMCOD = JPI$_PID, BUFSIZ = %ALLOCATION(pid),
+		 BUFADR = pid));
+
+	qctx = 0;
+	status = FLQ_OPEN (FLQ__RDONLY, qctx);		!Open FLQ file
+	IF (.status)
+	THEN
+	    status = FLQ_OPEN (FLQ__FULL, fcfg [FCFG_L_QCTX], 0, 0, 0, 1); !Open again for mods
+	IF (.status)
+	THEN
+	    BEGIN
+	    !
+	    !  Loop through the FLQ file looking for all INPROG entries.
+	    !
+	    _FLQSRCHLST_INIT (SRCHLST=flqlst,
+		(CODE=FLQS__STATUS, COUNT=1, STATUS=(FLQ_K_STINP)));
+	    srchctx = 0;
+	    WHILE (status = FLQ_SEARCH (qctx, flqlst, srchctx, qent)) DO
+		BEGIN
+		READY_OR_CANCEL (.fcfg [FCFG_L_QCTX], qent, %ASCID'%FLQ_CLUP_INIT');
+		END;
+            FLQ_SEARCH_END (qctx, srchctx);
+	    TRACE ('%FLQ_CLUP_INIT, INPROG final FLQ_SEARCH status = !XL', .status);
+	    END;
+
+	IF (.qctx NEQU 0) THEN FLQ_CLOSE (qctx);
+!  we leave the other (read/write) queue context open
+	IF NOT(.status) AND (.status NEQU RMS$_EOF)
+	THEN
+	    TRACE ('%FLQ_CLUP_INIT, error searching for INPROG entries, status = !XL',
+		.status);
+	END
+    ELSE
+        BEGIN
+    	IF NOT .flq_mgr_proc THEN
+    	    $SETAST (ENBFLG=1)
+        ELSE
+            TRACE ('%FLQ_CLUP_INIT, I am waiting to own the queue cleanup lock');
+        END;
+
+    TRACE_CLOSE;
+
+!  Set up an exit handler.  This is important, since we leave
+!  an FLQ context open the whole time we're enabled, to let everyone
+!  know that the queue is valid.
+
+    exhblk [EXH_L_HANDLER] = exit_handler;
+    exhblk [EXH_L_ARGCNT]  = 1;
+    exhblk [EXH_L_P1]	   = exit_status;
+
+    $DCLEXH (DESBLK=exhblk);
+
+    FREE_STRINGS (str);
+
+    SS$_NORMAL
+
+END; ! FLQ_CLUP_INIT
+
+%SBTTL 'FLQ_CLEANUP'
+GLOBAL ROUTINE FLQ_CLEANUP =
+BEGIN
+!++
+! FUNCTIONAL DESCRIPTION:
+!
+!   Performs a file queue cleanup.
+!
+! RETURNS:  	cond_value, longword (unsigned), write only, by value
+!
+! PROTOTYPE:
+!
+!   FLQ_CLEANUP
+!
+! IMPLICIT INPUTS:  None.
+!
+! IMPLICIT OUTPUTS: None.
+!
+! COMPLETION CODES:
+!
+!   SS$_NORMAL:	    	normal successful completion.
+!
+! SIDE EFFECTS:
+!
+!   None.
+!--
+    LOCAL
+    	LOCKSB	: LSBDEF,
+    	NOW 	: BLOCK [8,BYTE],
+    	PURTIM	: BLOCK [8,BYTE],
+    	JUNK	: BLOCK [8,BYTE],
+    	TEST	: BLOCK [8,BYTE],
+    	STATBLK	: VECTOR [5,LONG],
+    	FLQLST2	: _FLQSRCHLST_DECL (ITEMS=2),
+    	STR 	: BLOCK [DSC$K_S_BLN,BYTE],
+    	QENT	: QENTDEF,
+    	qctx2,
+    	SRCHCTX,
+    	STATUS;
+
+    INIT_DYNDESC (STR);
+
+    TRACE_INIT ('flq', 'router');
+
+    IF NOT .FCFG [FCFG_V_ENABLE] THEN
+    BEGIN
+    	STR$CONCAT (STR, flq_lock_d, FCFG [FCFG_Q_FLQNODE], rqc_d);
+    	TRACE ('%FLQ_CLEANUP: Checking lock, resnam=!AS', STR);
+    	IF .flq_mgr_proc THEN
+        BEGIN
+            $SETAST(ENBFLG=0);
+            IF .main_ast_pending THEN
+            BEGIN
+                $SETAST(ENBFLG=1);
+                TRACE ('%FLQ_CLEANUP: Still waiting to own cleanup lock');
+                TRACE_CLOSE;
+                FREE_STRINGS (str);
+                RETURN SS$_NORMAL;
+            END;
+            $SETAST(ENBFLG=1);
+            main_ast_pending = 1;
+    	    status = $ENQ (EFN=.FCFG [FCFG_L_EFN], LKMODE=LCK$K_EXMODE,
+		    	LKSB=mainlsb, FLAGS=LCK$M_SYSTEM, RESNAM=STR,
+                        ASTADR=flq_mgr_ast);
+            IF .status EQL SS$_SYNCH THEN
+            BEGIN
+                IF .mainlsb [LSB_W_STATUS] THEN
+                BEGIN
+                    fcfg [FCFG_V_ENABLE] = 1;
+                    TRACE ('%FLQ_CLEANUP: I am now the queue cleanup owner');
+                END;
+                main_ast_pending = 0;
+            END
+            ELSE
+            BEGIN
+                TRACE ('%FLQ_CLEANUP: cleanup lock requeust queued');
+                TRACE_CLOSE;
+                FREE_STRINGS (str);
+                RETURN SS$_NORMAL;
+            END;
+        END
+    	ELSE
+    	BEGIN
+    	    LOCAL
+    	    	flq_lsb 	: LSBDEF,
+    	    	flq_mgr 	: BLOCK [DSC$K_S_BLN,BYTE];
+
+    	    $SETAST (ENBFLG=0);
+    	    INIT_DYNDESC (flq_mgr);
+    	    ! Take out the FLQ Manager's main synchronization lock first (not queued).  If we can't get it,
+    	    ! then the FLQ Manager is running and we should buzz off.
+    	    STR$CONCAT (flq_mgr, %ASCID'FLQ_LOCK_', fcfg [FCFG_Q_FLQNODE], %ASCID %STRING ('_', MX_FLQ_MGR));
+    	    status = $ENQW (EFN=.fcfg [FCFG_L_EFN], LKMODE=LCK$K_EXMODE, LKSB=flq_lsb,
+    	    	    	    FLAGS=LCK$M_NOQUEUE OR LCK$M_SYSTEM OR LCK$M_NODLCKBLK OR LCK$M_NODLCKWT,
+    	    	    	    RESNAM=flq_mgr);
+    	    IF .status AND .flq_lsb [LSB_W_STATUS] THEN
+    	    BEGIN
+    	    	status = $ENQW (EFN=.FCFG [FCFG_L_EFN], LKMODE=LCK$K_EXMODE, BLKAST=release_lock,
+		    	    	LKSB=LOCKSB, FLAGS=LCK$M_SYSTEM OR LCK$M_NOQUEUE, RESNAM=STR);
+    	    	IF .status AND .locksb [LSB_W_STATUS] THEN
+    	    	    FCFG [FCFG_L_LKID] = .locksb [LSB_L_LKID];
+    	    	$DEQ (LKID=.flq_lsb [LSB_L_LKID]);
+    	    END;
+    	    FREE_STRINGS (flq_mgr);
+    	END;
+    	FCFG [FCFG_V_ENABLE] = .STATUS AND .LOCKSB [LSB_W_STATUS];
+    	IF NOT .FCFG [FCFG_V_ENABLE] THEN
+    	BEGIN
+    	    IF NOT .flq_mgr_proc THEN
+    	    	$SETAST (ENBFLG=1);
+    	    TRACE ('%FLQ_CLEANUP: Someone else is doing the cleanups.  Bye.');
+    	    FREE_STRINGS (STR);
+    	    TRACE_CLOSE;
+    	    RETURN SS$_NORMAL;
+    	END;
+    	do_release = 0;
+    	IF NOT .flq_mgr_proc THEN
+    	    $SETAST (ENBFLG=1);
+!  open our permanent queue context
+    	status = FLQ_OPEN (FLQ__FULL, fcfg [FCFG_L_QCTX], 0, 0, 0, 1);
+    	IF NOT .status THEN
+    	BEGIN
+    	    TRACE ('%FLQ_CLEANUP: could not open queue file, status=!XL', .status);
+    	    TRACE_PUTMSG ('             -- !AS', .status);
+    	    fcfg [FCFG_L_QCTX] = 0;
+    	    TRACE_CLOSE;
+    	    FREE_STRINGS (STR);
+    	    RETURN SS$_NORMAL;
+    	END;
+    END;
+
+    TRACE ('%FLQ_CLEANUP, time to check for cleanups');
+
+    IF .do_release THEN
+    BEGIN
+    	TRACE ('%FLQ_CLEANUP, releasing cleanup chores to FLQ_MGR process');
+    	FLQ_CLOSE (fcfg [FCFG_L_QCTX]);
+    	fcfg [FCFG_L_QCTX] = 0;
+    	$DEQ (LKID=.FCFG [FCFG_L_LKID]);
+    	FCFG [FCFG_L_LKID] = 0;
+    	FCFG [FCFG_V_ENABLE] = 0;
+    	TRACE_CLOSE;
+    	FREE_STRINGS (STR);
+    	RETURN SS$_NORMAL;
+    END;
+
+    STATUS_CODE = MX_K_STATUS_FLQ_CLUP;
+
+!   Re-validate the queue by closing it at reopening it.
+!   This will make sure we catch any invalid-queue conditions
+!   caused by abnormal process terminations or system crashes.
+
+    $GETTIM (TIMADR=NOW);
+    LIB$ADD_TIMES (FCFG [FCFG_Q_LASTC], FCFG [FCFG_Q_CINTVL], TEST);
+
+    status = LIB$SUB_TIMES (now, test, junk);
+    IF .status EQL LIB$_NORMAL THEN
+    BEGIN
+    	IF .fcfg [FCFG_L_QCTX] NEQ 0 THEN FLQ_CLOSE (fcfg [FCFG_L_QCTX]);
+    	fcfg [FCFG_L_QCTX] = 0;
+    	status = FLQ_OPEN (FLQ__FULL, fcfg [FCFG_L_QCTX], 0, 0, 0, 1);
+    	IF NOT .status THEN
+    	BEGIN
+    	    TRACE ('%FLQ_CLEANUP: could not open queue file, status=!XL', .status);
+    	    TRACE_PUTMSG ('             -- !AS', .status);
+    	    fcfg [FCFG_L_QCTX] = 0;
+    	END;
+    END;
+
+    IF .status THEN
+    BEGIN
+    	LOCAL
+    	    maxbytes;
+
+    	IF NOT FLQ_GET_MAXSIZE (fcfg [FCFG_L_QCTX], maxbytes) THEN
+    	BEGIN
+    	    LOCAL do_warn;
+    	    IF .lastwarntime [0] EQL 0 AND .lastwarntime [1] EQL 0 THEN
+    	    	do_warn = 1
+    	    ELSE
+    	    BEGIN
+    	    	LIB$SUB_TIMES (now, lastwarntime, test);
+    	    	do_warn = LIB$SUB_TIMES (test, one_hour, junk) EQL LIB$_NORMAL;
+    	    END;
+    	    IF .do_warn THEN
+    	    BEGIN
+    	    	LOG_EVENT (%ASCID'MX WARNING: Message queue exceeds allowed maximum disk space, or disk full');
+    	    	CH$MOVE (8, now, lastwarntime);
+    	    END;
+    	    status = SS$_NORMAL;
+    	END;
+    END;
+
+    IF .status THEN
+    BEGIN
+    	BIND  QCTX = fcfg [FCFG_L_QCTX];
+	LOCAL to_do_map	: REF VECTOR[,LONG];	!Bitmap for ROUTER entries
+
+    	TRACE ('%FLQ_CLEANUP, time to make a purge pass');
+
+    	LIB$SUB_TIMES (NOW, FCFG [FCFG_Q_PINTVL], PURTIM);
+
+	status = LIB$GET_VM_PAGE (%REF((128*2)/8), to_do_map);
+	CH$FILL(0, 32*512, .to_do_map);     !Zero out bitmap of shown entries
+
+    	_FLQSRCHLST_INIT (SRCHLST=FLQLST2,
+    	    (CODE=FLQS__STATUS, COUNT=3,STATUS=(FLQ_K_STCAN,FLQ_K_STFIN,FLQ_K_STINP)),
+    	    (CODE=FLQS__MODDT, BEFORE=PURTIM));
+    	SRCHCTX = 0;
+    	WHILE (STATUS = FLQ_SEARCH (QCTX, FLQLST2, SRCHCTX, QENT)) DO
+    	BEGIN
+	    IF (.qent [QENT_L_STATUS] EQLU FLQ_K_STINP)
+	    THEN
+		BEGIN
+		TRACE ('%FLQ_CLEANUP, PURGE: inprog entry !UL', .qent [QENT_L_ENTNUM]);
+		READY_OR_CANCEL (.qctx, qent, %ASCID'%FLQ_CLEANUP');
+		END
+	    ELSE
+		BEGIN
+		IF (.qent [QENT_L_DSTPRC] EQLU FLQ_K_MX_ROUTER)
+		THEN
+		    BEGIN
+		    !
+		    !  We have a FINished ROUTER entry.  We want to delay
+		    !  deleting all ROUTER entries until the end, when we know
+		    !  we've deleted all of the entries that point back to this
+		    !  entry.  If we don't delay and the PURGE is interrupted,
+		    !  we could leave entries that point back to non-existent
+		    !  or re-used entries.  Either case leads to confusion.
+		    !
+		    BIND the_map = .to_do_map   : BITVECTOR [128*1024];
+		    the_map [.qent [QENT_L_ENTNUM] - 1] = 1;
+		    END
+		ELSE
+		    BEGIN
+		    TRACE ('%FLQ_CLEANUP, PURGE: purging entry !UL', .qent [QENT_L_ENTNUM]);
+		    FLQ_PURGE (qctx, qent);
+		    END;
+		END;
+    	END;
+        FLQ_SEARCH_END (qctx, srchctx);
+	!
+	!  Now we need to step through and PURGE the ROUTER entries that
+	!  were found.
+	!
+	INCR i FROM 0 TO 4095 DO		!(FLQ_K_BMAPSIZE+3)/4-1 DO
+	    BEGIN
+	    IF (.to_do_map [.i] NEQU 0)
+	    THEN
+		BEGIN
+		BIND cell = to_do_map [.i] : BITVECTOR [32];
+		INCR j FROM 0 TO 31 DO
+		    IF (.cell [.j] NEQU 0)
+		    THEN
+			BEGIN
+			status = FLQ_READ (qctx, ((.i*32)+.j)+1, qent);
+			!
+			!  If the entry is still there and is FIN or CAN, then
+			!  purge it.  The check for FIN or CAN is necessary
+			!  in case somebody else has already purged this entry
+			!  before we got here.
+			!
+			IF (.status) AND
+				((.qent [QENT_L_STATUS] EQLU FLQ_K_STFIN)
+				OR (.qent [QENT_L_STATUS] EQLU FLQ_K_STCAN))
+			THEN
+			    BEGIN
+			    TRACE ('%FLQ_CLEANUP, PURGE: purging entry !UL', .qent [QENT_L_ENTNUM]);
+			    FLQ_PURGE (qctx, qent);
+			    END;
+			END;
+		END;
+	    END;
+
+	LIB$FREE_VM_PAGE (%REF((128*2)/8), to_do_map);
+
+    	TRACE ('%FLQ_CLEANUP, PURGE: final FLQ_SEARCH status = !XL', .STATUS);
+
+    	_FLQSRCHLST_INIT (SRCHLST=FLQLST2,
+    	    (CODE=FLQS__EXPDT, BEFORE=NOW),
+    	    (CODE=FLQS__DSTPRC, COUNT=1, DSTPRC=FLQ_K_MX_ROUTER));
+    	SRCHCTX = 0;
+    	WHILE (STATUS = FLQ_SEARCH (QCTX, FLQLST2, SRCHCTX, QENT)) DO
+    	BEGIN
+    	    LOCAL do_expire;
+
+    	    TRACE ('%FLQ_CLEANUP, entry !UL is a candiate for expiration', .QENT [QENT_L_ENTNUM]);
+    	    do_expire = 1;
+    	    INCR i FROM 1 TO FWDREF_COUNT+MX_K_HOLDQ_MAX-1 DO
+    	    BEGIN
+    	    	LOCAL
+    	    	    offset;
+    	    	    offset = (IF .I LSSU FWDREF_COUNT THEN .fwdref [.I-1]
+    	    	      	      ELSE .fwdref [FWDREF_COUNT-1] + 4 * (.I-FWDREF_COUNT));
+    	    	BEGIN
+    	    	    BIND en = qent [.offset,0,32,0]  : LONG;
+            	    IF .en NEQU 0 THEN
+    	    	    BEGIN
+    	    	    	LOCAL tmpent : QENTDEF;
+    	    	    	TRACE ('%FLQ_CLEANUP,    ... found forward entry to !UL', .en);
+	    	    	status = FLQ_READ (qctx, .en, tmpent, 1);  ! don't lock sub-entry
+    	    	    	IF .status THEN
+    	    	    	    IF LIB$SUB_TIMES (tmpent [QENT_Q_EXPDT], NOW, junk) EQL LIB$_NORMAL THEN
+    	    	    	    BEGIN
+    	    	    	    	do_expire = 0;
+    	    	    	    	TRACE ('%FLQ_CLEANUP,    fwdref entry !UL still valid, expiration cancelled', .en);
+    	    	    	    	EXITLOOP;
+    	    	    	    END;
+    	    	    END;
+    	    	END;
+    	    END;
+            FLQ_SEARCH_END (qctx, srchctx);
+
+    	    IF .do_expire THEN
+    	    BEGIN
+    	    	! Temporarily set the entry's status to CANCELLED
+    	    	qent [QENT_L_STATUS] = FLQ_K_STCAN;
+    	    	FLQ_UPDATE (qctx, qent);
+    	    	! Purge any forward reference entries first
+    	    	INCR i FROM 1 TO FWDREF_COUNT+MX_K_HOLDQ_MAX-1 DO
+    	    	BEGIN
+    	    	    LOCAL offset;
+    	    	    offset = (IF .i LSSU FWDREF_COUNT THEN .fwdref [.i-1]
+    	    	    	      ELSE .fwdref [FWDREF_COUNT-1] + 4 * (.i-FWDREF_COUNT));
+    	    	    BEGIN
+            	    	BIND en = qent [.offset, 0, 32, 0] : LONG;
+            	    	IF .en NEQU 0 THEN
+    	    	    	BEGIN
+    	    	    	    LOCAL tmpent : QENTDEF;
+    	    	    	    TRACE ('%FLQ_CLEANUP,    ... expiring fwdref entry !UL', .en);
+    	    	    	    status = FLQ_READ (qctx, .en, tmpent);
+    	    	    	    IF .status THEN
+    	    	    	    	FLQ_PURGE (qctx, tmpent);
+    	    	    	END;
+    	    	    END;
+    	    	END;
+    	    	! Now purge the main entry
+    	    	TRACE ('%FLQ_CLEANUP,   purging expired entry !UL', .qent [QENT_L_ENTNUM]);
+    	    	FLQ_PURGE (QCTX, QENT);
+    	    END;
+    	END;
+
+    	TRACE ('%FLQ_CLEANUP, EXPIRE: final FLQ_SEARCH status = !XL', .STATUS);
+
+    	CH$MOVE (8, NOW, FCFG [FCFG_Q_LASTC]);
+    END;
+
+    LIB$ADD_TIMES (FCFG [FCFG_Q_LASTC], FCFG [FCFG_Q_SMTPINTVL], TEST);
+    IF LIB$SUB_TIMES (NOW, TEST, JUNK) THEN SMTP_CLUP ();
+
+    $SCHDWK (DAYTIM=fcfg [FCFG_Q_CINTVL]);
+
+    TRACE_CLOSE;
+
+    FREE_STRINGS (STR);
+
+    SS$_NORMAL
+
+END; ! FLQ_CLEANUP
+
+
+%SBTTL 'READY_OR_CANCEL'
+ROUTINE READY_OR_CANCEL (QCTX, QENT_A, name_a) =
+BEGIN
+!++
+! FUNCTIONAL DESCRIPTION:
+!
+!   READYs or CANCELs an entry.
+!
+! RETURNS:  	cond_value, longword (unsigned), write only, by value
+!
+! PROTOTYPE:
+!
+!  PURGE  qctx, qent
+!
+! IMPLICIT INPUTS:  None.
+!
+! IMPLICIT OUTPUTS: None.
+!
+! COMPLETION CODES:
+!
+!   SS$_NORMAL:	    	normal successful completion.
+!
+! SIDE EFFECTS:
+!
+!   None.
+!--
+    BIND
+	qent	= .QENT_A   : QENTDEF;
+
+    LOCAL
+    	junk	    	: VECTOR [2,LONG],
+	forward_exists,
+	status;
+
+    !
+    !  An INPROG was found.  See if it has any forward references.
+    !
+    forward_exists = 0;
+    INCR i FROM 0 TO FWDREF_COUNT-1 DO
+    BEGIN
+        BIND en = qent [.fwdref [.I], 0, 32, 0] : LONG;
+        IF .en NEQU 0 THEN
+    	BEGIN
+	    forward_exists = 1;
+    	    EXITLOOP;
+    	END;
+    END;
+    !
+    !  If there are no forward references, then it's a candidate.
+    !  If there are forward references, then those entries will
+    !  handled later.
+    !
+    IF NOT(.forward_exists)		!If no forwards, then READY it
+    THEN
+        BEGIN
+        !
+        !  An entry should be READYed or CANCELled if:
+        !
+        !	o  the stored PID no longer matches a process
+        !	o  the stored PID does match an existing process,
+        !	   but the MODDT was before the last system boot.
+        !
+        !  The entry is CANCELled if one of the above is true
+        !  and the size is 0.  These are usually caused by
+        !  VMS Mail users getting bumped off, etc.
+        !
+    	IF .qent [QENT_L_INPPID] EQLU 0 THEN
+    	    status = 1
+    	ELSE
+    	BEGIN
+            status = $GETJPIW (PIDADR=qent [QENT_L_INPPID], ITMLST=%REF (0)) NEQ SS$_NONEXPR;
+
+            IF .status THEN
+            	status = LIB$SUB_TIMES (qent [QENT_Q_MODDT], boottime, junk)
+    	    	    	    NEQU LIB$_NEGTIM;
+    	END;
+
+        IF NOT .status
+        THEN
+	    BEGIN
+	    !
+	    !  Here, either the process doesn't exist, or the
+	    !  MODDT was before the last system boot.
+	    !
+	    IF (.qent [QENT_L_SIZE] EQLU 0)	!If 0 bytes, CANCEL
+	    THEN
+		BEGIN
+		TRACE ('!AS, CANCEL: 0-byte INPROG entry !UL...',
+				.name_a, .qent [QENT_L_ENTNUM]);
+		qent [QENT_L_STATUS] = FLQ_K_STCAN;
+		qent [QENT_V_LOCK]   = 1;
+		END
+	    ELSE
+		BEGIN
+		TRACE ('!AS, READY: INPROG entry !UL...', .name_a,
+					.qent [QENT_L_ENTNUM]);
+		qent [QENT_L_STATUS] = FLQ_K_STRDY;
+		qent [QENT_V_LOCK]   = 1;
+		END;
+	    FLQ_UPDATE (qctx, qent);	!Update it
+	    END;
+	END;
+
+    SS$_NORMAL
+
+END; ! READY_OR_CANCEL
+
+%SBTTL 'exit_handler'
+ROUTINE exit_handler (exit_status_a) = 
+BEGIN
+!++
+! FUNCTIONAL DESCRIPTION:
+!
+!   Cleans up after this module on exit.
+!
+! RETURNS:  	cond_value, longword (unsigned), write only, by value
+!
+! PROTOTYPE:
+!
+!   EXIT_HANDLER  exit_status
+!
+! IMPLICIT INPUTS:  None.
+!
+! IMPLICIT OUTPUTS: None.
+!
+! COMPLETION CODES:
+!
+!   SS$_NORMAL:	    	normal successful completion.
+!
+! SIDE EFFECTS:
+!
+!   None.
+!--
+    BIND node = FCFG [FCFG_Q_FLQNODE] : BLOCK [,BYTE];
+
+    IF .fcfg [FCFG_V_ENABLE] THEN
+    	IF .fcfg [FCFG_L_QCTX] NEQ 0 THEN
+    	BEGIN
+    	    FLQ_CLOSE (fcfg [FCFG_L_QCTX]);
+    	    fcfg [FCFG_L_QCTX] = 0;
+    	END;
+
+    fcfg [FCFG_V_ENABLE] = 0;
+
+    IF .node [DSC$B_CLASS] EQL DSC$K_CLASS_D AND
+       .node [DSC$A_POINTER] NEQA 0 THEN FREE_STRINGS (node);
+
+    SS$_NORMAL
+
+END; ! exit_handler
+
+%SBTTL 'release_lock'
+ROUTINE release_lock = 
+BEGIN
+!++
+! FUNCTIONAL DESCRIPTION:
+!
+!   Blocking AST fired when a request for the cleanup lock has been issued.
+!   This should happen only if an FLQ_MGR process is started after a Router
+!   process that has started doing queue cleanups.
+!
+!   This routine simply sets a global flag that tells the main-line code
+!   to give up the lock.
+!
+! RETURNS:  	cond_value, longword (unsigned), write only, by value
+!
+! PROTOTYPE:
+!
+!   RELEASE_LOCK
+!
+! IMPLICIT INPUTS:  None.
+!
+! IMPLICIT OUTPUTS: None.
+!
+! COMPLETION CODES:
+!
+!   SS$_NORMAL:	    	normal successful completion.
+!
+! SIDE EFFECTS:
+!
+!   None.
+!--
+
+    do_release = 1;
+    $WAKE ();
+
+    SS$_NORMAL
+
+END; ! release_lock
+
+%SBTTL 'flq_mgr_ast'
+ROUTINE flq_mgr_ast = 
+BEGIN
+!++
+! FUNCTIONAL DESCRIPTION:
+!
+! AST completion routine to tell FLQ_MGR that it's now the owner
+! of the FLQ cleanup lock.
+!
+! RETURNS:  	cond_value, longword (unsigned), write only, by value
+!
+! PROTOTYPE:
+!
+!   FLQ_MGR_AST
+!
+! IMPLICIT INPUTS:  None.
+!
+! IMPLICIT OUTPUTS: None.
+!
+! COMPLETION CODES:
+!
+!   SS$_NORMAL:	    	normal successful completion.
+!
+! SIDE EFFECTS:
+!
+!   None.
+!--
+    IF .mainlsb [LSB_W_STATUS] THEN
+        fcfg [FCFG_V_ENABLE] = 1;
+
+    main_ast_pending = 0;
+
+    $WAKE ();
+
+    SS$_NORMAL
+
+END; ! flq_mgr_ast
+
+END
+ELUDOM

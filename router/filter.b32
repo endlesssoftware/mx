@@ -1,0 +1,831 @@
+%TITLE 'FILTER'
+MODULE FILTER (IDENT='V1.2', ADDRESSING_MODE (EXTERNAL=LONG_RELATIVE, NONEXTERNAL=LONG_RELATIVE)) =
+BEGIN
+!++
+! FACILITY: 	    MX Router
+!
+! ABSTRACT: 	    User-installable message filter interface for Router.
+!
+! MODULE DESCRIPTION:
+!
+!   description
+!
+! AUTHOR:   	    M. Madison
+!
+! Copyright (c) 2008, Matthew Madison.
+! 
+! All rights reserved.
+! 
+! Redistribution and use in source and binary forms, with or without
+! modification, are permitted provided that the following conditions
+! are met:
+! 
+!     * Redistributions of source code must retain the above
+!       copyright notice, this list of conditions and the following
+!       disclaimer.
+!     * Redistributions in binary form must reproduce the above
+!       copyright notice, this list of conditions and the following
+!       disclaimer in the documentation and/or other materials provided
+!       with the distribution.
+!     * Neither the name of the copyright owner nor the names of any
+!       other contributors may be used to endorse or promote products
+!       derived from this software without specific prior written
+!       permission.
+! 
+! THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
+! "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
+! LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
+! A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
+! OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
+! SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
+! LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
+! DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
+! THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
+! (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
+! OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+!
+! CREATION DATE:    07-SEP-1997
+!
+! MODIFICATION HISTORY:
+!
+!   07-SEP-1997	V1.0	Madison	    Initial coding.
+!   21-OCT-1997	V1.1	Madison	    Fixed itemlist bug, header ordering bug.
+!   11-JUL-1998	V1.1-1	Madison	    Stash ORCPT if rcpt address is rewritten.
+!   17-FEB-2002 V1.1-2  Madison     Fix ORCPT processing.
+!   10-NOV-2004 V1.2    Madison     IA64 support.
+!--
+    LIBRARY 'SYS$LIBRARY:STARLET';
+    LIBRARY 'MX_SRC_COMMON:MX';
+    LIBRARY 'FILTER';
+
+    FORWARD ROUTINE
+    	FILTER_INIT,
+    	FILTER_MESSAGE,
+    	FILTER_FINISH,
+    	build_envelope_itmlst	    : NOVALUE,
+    	build_header_itmlst 	    : NOVALUE,
+    	dispose_itmlst	    	    : NOVALUE,
+    	process_envelope_itmlsts,
+    	process_header_itmlsts,
+    	fis_sig_to_ret,
+    	find_image_symbol;
+
+    MACRO
+    	itmlst_add (_lst, _i, _cod, _siz, _adr, _ret) =
+    	BEGIN
+    	    _lst [._i,ITM$W_ITMCOD] = _cod;
+    	    _lst [._i,ITM$W_BUFSIZ] = _siz;
+    	    _lst [._i,ITM$L_BUFADR] = _adr;
+    	    _lst [._i,ITM$L_RETLEN] = _ret;
+    	    _i = ._i + 1;
+    	END%,
+    	itmlst_terminate (_lst, _i) = _lst [._i,0,0,32,0] = 0%;
+
+    OWN
+    	located_symbols	: INITIAL (0),
+    	init_rtn,
+    	filter_rtn,
+    	finish_rtn;
+
+    EXTERNAL ROUTINE
+    	G_HAT (LIB$FIND_IMAGE_SYMBOL, LIB$GET_VM, LIB$FREE_VM, STR$COPY_R),
+    	G_HAT (MEM_GETTXT, MEM_GETRCPT, MEM_FREERCPT, XTEXT_ENCODE);
+
+%SBTTL 'FILTER_INIT'
+GLOBAL ROUTINE FILTER_INIT (ctx_a_a) = 
+BEGIN
+!++
+! FUNCTIONAL DESCRIPTION:
+!
+!   description
+!
+! RETURNS:  	cond_value, longword (unsigned), write only, by value
+!
+! PROTOTYPE:
+!
+!   x
+!
+! IMPLICIT INPUTS:  None.
+!
+! IMPLICIT OUTPUTS: None.
+!
+! COMPLETION CODES:
+!
+!   SS$_NORMAL:	    	normal successful completion.
+!
+! SIDE EFFECTS:
+!
+!   None.
+!--
+    BIND
+    	imgnam_d    = %ASCID'MX_SITE_MESSAGE_FILTER';
+    LOCAL
+    	status;
+
+    IF NOT .located_symbols THEN
+    BEGIN
+    	status = $TRNLNM (LOGNAM=imgnam_d, TABNAM=%ASCID'LNM$FILE_DEV');
+    	IF .status THEN
+    	    status = find_image_symbol (imgnam_d, %ASCID'INIT', init_rtn);
+    	IF .status THEN
+    	    status = find_image_symbol (imgnam_d, %ASCID'FILTER', filter_rtn);
+    	IF .status THEN
+    	    status = find_image_symbol (imgnam_d, %ASCID'FINISH', finish_rtn);
+    	located_symbols = .status;
+    END;
+
+    IF .located_symbols THEN (.init_rtn) (.ctx_a_a)
+    ELSE 0
+
+END; ! FILTER_INIT
+
+%SBTTL 'FILTER_MESSAGE'
+GLOBAL ROUTINE FILTER_MESSAGE (ctx_a_a, source, sender_a, msgsize, infoq_a, hdrq_a, msgtext_a, flags_a, bounceq_a) = 
+BEGIN
+!++
+! FUNCTIONAL DESCRIPTION:
+!
+!   description
+!
+! RETURNS:  	cond_value, longword (unsigned), write only, by value
+!
+! PROTOTYPE:
+!
+!   x
+!
+! IMPLICIT INPUTS:  None.
+!
+! IMPLICIT OUTPUTS: None.
+!
+! COMPLETION CODES:
+!
+!   SS$_NORMAL:	    	normal successful completion.
+!
+! SIDE EFFECTS:
+!
+!   None.
+!--
+    BIND
+    	flags	= .flags_a  	: FLTRFLGDEF,
+    	bounceq = .bounceq_a	: QUEDEF;
+
+    LOCAL
+    	envlst	: REF BLOCKVECTOR [,ITM$S_ITEM,BYTE],
+    	hdrlst	: REF BLOCKVECTOR [,ITM$S_ITEM,BYTE],
+    	newelst	: REF BLOCKVECTOR [,ITM$S_ITEM,BYTE],
+    	newhlst	: REF BLOCKVECTOR [,ITM$S_ITEM,BYTE],
+    	status;
+
+    IF NOT .located_symbols OR .filter_rtn EQLA 0 THEN
+    BEGIN
+    	.flags_a = 0;
+    	RETURN SS$_NORMAL;
+    END;
+
+    build_envelope_itmlst (envlst, source, .sender_a, msgsize, .infoq_a);
+    build_header_itmlst (hdrlst, .hdrq_a);
+
+    newelst = newhlst = 0;
+    status = (.filter_rtn)(.ctx_a_a, .envlst, .hdrlst, .msgtext_a, newelst, newhlst);
+    IF NOT .status THEN
+    BEGIN
+    	dispose_itmlst (.envlst);
+    	dispose_itmlst (.hdrlst);
+    	.flags_a = 0;
+    	RETURN .status;
+    END;
+
+    IF process_envelope_itmlsts (.envlst, .newelst, .sender_a, .infoq_a, .bounceq_a) THEN
+    	flags [FLTR_V_MODENV] = 1;
+
+    IF process_header_itmlsts (.hdrlst, .newhlst, .hdrq_a) THEN
+    	flags [FLTR_V_MODHDRS] = 1;
+
+    .status
+
+END;  ! FILTER_MESSAGE
+
+%SBTTL 'FILTER_FINISH'
+GLOBAL ROUTINE FILTER_FINISH (ctx_a_a) = 
+BEGIN
+!++
+! FUNCTIONAL DESCRIPTION:
+!
+!   description
+!
+! RETURNS:  	cond_value, longword (unsigned), write only, by value
+!
+! PROTOTYPE:
+!
+!   x
+!
+! IMPLICIT INPUTS:  None.
+!
+! IMPLICIT OUTPUTS: None.
+!
+! COMPLETION CODES:
+!
+!   SS$_NORMAL:	    	normal successful completion.
+!
+! SIDE EFFECTS:
+!
+!   None.
+!--
+    IF NOT .located_symbols OR .finish_rtn EQLA 0 THEN RETURN SS$_NORMAL;
+
+    (.finish_rtn) (.ctx_a_a)
+
+END; ! FILTER_FINISH
+
+%SBTTL 'build_envelope_itmlst'
+ROUTINE build_envelope_itmlst (itmlst_a_a, source_a, sender_a, msgsize_a, infoq_a) : NOVALUE = 
+BEGIN
+!++
+! FUNCTIONAL DESCRIPTION:
+!
+!   description
+!
+! RETURNS:  	cond_value, longword (unsigned), write only, by value
+!
+! PROTOTYPE:
+!
+!   x
+!
+! IMPLICIT INPUTS:  None.
+!
+! IMPLICIT OUTPUTS: None.
+!
+! COMPLETION CODES:
+!
+!   SS$_NORMAL:	    	normal successful completion.
+!
+! SIDE EFFECTS:
+!
+!   None.
+!--
+    BIND
+    	itmlstptr   = .itmlst_a_a   : REF BLOCKVECTOR [,ITM$S_ITEM,BYTE],
+    	sender	    = .sender_a     : BLOCK [,BYTE],
+    	infoq	    = .infoq_a      : QUEDEF;
+
+    LOCAL
+    	size,
+    	rcount,
+    	buf 	: REF BLOCK [,BYTE],
+    	r   	: REF RCPTDEF,
+    	in,
+    	out,
+    	status;
+
+    rcount = 0;
+    r = .infoq [QUE_L_HEAD];
+    WHILE .r NEQA infoq DO
+    BEGIN
+    	rcount = .rcount + 1;
+    	r = .r [RCPT_L_FLINK];
+    END;
+
+    size = ((.rcount * 2) + 5) * ITM$S_ITEM + 8; 
+    	! 5 = 1 for source, 1 for sender, 1 for msgsize, 1 for returned sender info
+    	!     and 1 for list terminator
+    	! plus 8 bytes so we can stash the length (and keep quad alignment)
+
+    status = LIB$GET_VM (size, buf);
+    IF NOT .status THEN SIGNAL_STOP (.status);
+    CH$FILL (%CHAR (0), .size, .buf);
+    buf [0,0,32,0] = .size;
+    itmlstptr = buf [8,0,32,0];
+
+    BEGIN
+    	BIND itmlst = .itmlstptr : BLOCKVECTOR [,ITM$S_ITEM,BYTE];
+    	in = 0;
+    	out = 3 + .rcount + 1; ! static info, recipients, terminator
+    	itmlst_add (itmlst, in, FLTR__ENV_MSGSIZE, 4, .msgsize_a, 0);
+    	itmlst_add (itmlst, in, FLTR__ENV_SOURCE, 4, .source_a, 0);
+    	itmlst_add (itmlst, in, FLTR__ENV_SENDER, .sender [DSC$W_LENGTH], .sender [DSC$A_POINTER],
+    	    	    itmlst [.out,0,0,0,0]);
+    	out = .out + 1;
+    	r = .infoq [QUE_L_HEAD];
+    	WHILE .r NEQA infoq DO
+    	BEGIN
+    	    BIND adr = r [RCPT_A_ADDR] : REF TXTDEF;
+    	    itmlst_add (itmlst, in, FLTR__ENV_RECIPIENT, .adr [TXT_W_LEN], adr [TXT_T_TEXT],
+    	    	    	itmlst [.out,0,0,0,0]);
+    	    out = .out + 1;
+    	    r = .r [RCPT_L_FLINK];
+    	END;
+    	itmlst_terminate (itmlst, in);  ! should already be zero, but for completeness...
+    END;
+
+END; ! build_envelope_itmlst
+
+%SBTTL 'build_header_itmlst'
+ROUTINE build_header_itmlst (itmlst_a_a, hdrq_a) : NOVALUE = 
+BEGIN
+!++
+! FUNCTIONAL DESCRIPTION:
+!
+!   description
+!
+! RETURNS:  	cond_value, longword (unsigned), write only, by value
+!
+! PROTOTYPE:
+!
+!   x
+!
+! IMPLICIT INPUTS:  None.
+!
+! IMPLICIT OUTPUTS: None.
+!
+! COMPLETION CODES:
+!
+!   SS$_NORMAL:	    	normal successful completion.
+!
+! SIDE EFFECTS:
+!
+!   None.
+!--
+    BIND
+    	itmlstptr   = .itmlst_a_a   : BLOCKVECTOR [,ITM$S_ITEM,BYTE],
+    	hdrq	    = .hdrq_a       : QUEDEF;
+
+    LOCAL
+    	size,
+    	hcount,
+    	buf 	: REF BLOCK [,BYTE],
+    	h   	: REF TXTDEF,
+    	in,
+    	out,
+    	status;
+
+    hcount = 0;
+    h = .hdrq [QUE_L_HEAD];
+    WHILE .h NEQA hdrq DO
+    BEGIN
+    	hcount = .hcount + 1;
+    	h = .h [TXT_L_FLINK];
+    END;
+
+    size = ((.hcount * 2) + 1) * ITM$S_ITEM + 8; 
+    	! one extra item for list terminator
+    	! plus 8 bytes so we can stash the length (and keep quad alignment)
+
+    status = LIB$GET_VM (size, buf);
+    IF NOT .status THEN SIGNAL_STOP (.status);
+    CH$FILL (%CHAR (0), .size, .buf);
+    buf [0,0,32,0] = .size;
+    itmlstptr = buf [8,0,32,0];
+
+    BEGIN
+    	BIND itmlst = .itmlstptr : BLOCKVECTOR [,ITM$S_ITEM,BYTE];
+    	in = 0;
+    	out = .hcount + 1;
+    	h = .hdrq [QUE_L_HEAD];
+    	WHILE .h NEQA hdrq DO
+    	BEGIN
+    	    itmlst_add (itmlst, in, .h [TXT_W_CODE], .h [TXT_W_LEN], h [TXT_T_TEXT],
+    	    	    	itmlst [.out,0,0,0,0]);
+    	    out = .out + 1;
+    	    h = .h [TXT_L_FLINK];
+    	END;
+    	itmlst_terminate (itmlst, in);  ! should already be zero, but for completeness...
+    END;
+
+END; ! build_header_itmlst
+
+%SBTTL 'dispose_itmlst'
+ROUTINE dispose_itmlst (itmlst_a) : NOVALUE = 
+BEGIN
+!++
+! FUNCTIONAL DESCRIPTION:
+!
+!   description
+!
+! RETURNS:  	cond_value, longword (unsigned), write only, by value
+!
+! PROTOTYPE:
+!
+!   x
+!
+! IMPLICIT INPUTS:  None.
+!
+! IMPLICIT OUTPUTS: None.
+!
+! COMPLETION CODES:
+!
+!   SS$_NORMAL:	    	normal successful completion.
+!
+! SIDE EFFECTS:
+!
+!   None.
+!--
+
+    LOCAL
+    	buf 	: REF BLOCK [,BYTE];
+
+    buf = .itmlst_a - 8;
+
+    LIB$FREE_VM (buf [0,0,32,0], buf);
+
+END; ! dispose_itmlst
+
+%SBTTL 'process_envelope_itmlsts'
+ROUTINE process_envelope_itmlsts (itmlst_a, addlst_a, sender_a, infoq_a, bounceq_a) = 
+BEGIN
+!++
+! FUNCTIONAL DESCRIPTION:
+!
+!   description
+!
+! RETURNS:  	cond_value, longword (unsigned), write only, by value
+!
+! PROTOTYPE:
+!
+!   x
+!
+! IMPLICIT INPUTS:  None.
+!
+! IMPLICIT OUTPUTS: None.
+!
+! COMPLETION CODES:
+!
+!   SS$_NORMAL:	    	normal successful completion.
+!
+! SIDE EFFECTS:
+!
+!   None.
+!--
+    BIND
+    	itmlst	    = .itmlst_a     : BLOCKVECTOR [,ITM$S_ITEM,BYTE],
+    	addlst	    = .addlst_a     : BLOCKVECTOR [,ITM$S_ITEM,BYTE],
+    	infoq	    = .infoq_a	    : QUEDEF,
+    	bounceq	    = .bounceq_a    : QUEDEF;
+
+    LOCAL
+    	r   	: REF RCPTDEF,
+    	modified;
+
+! Process sender info.
+!
+!   N.B.  we are assuming that the filter routine DID NOT screw
+!         with our item list!
+
+    modified = 0;
+
+    BEGIN
+    	BIND ri = .itmlst [2,ITM$L_RETLEN] : BLOCK [,BYTE];
+    	IF .ri [ITM$W_ITMCOD] EQL FLTR__REWRITE AND .ri [ITM$W_BUFSIZ] NEQ 0 THEN
+    	BEGIN
+    	    STR$COPY_R (.sender_a, ri [ITM$W_BUFSIZ], .ri [ITM$L_BUFADR]);
+    	    modified = 1;
+    	END;
+    END;
+
+    r = .infoq [QUE_L_HEAD];
+    INCR i FROM 3 DO
+    BEGIN
+    	BIND
+    	    ri 	= .itmlst [.i,ITM$L_RETLEN]	: BLOCK [,BYTE];
+    	BIND_RCPT_FIELDS (r);
+
+    	IF .itmlst [.i,0,0,32,0] EQL 0 THEN EXITLOOP;
+
+    	SELECTONE .ri [ITM$W_ITMCOD] OF
+    	SET
+    	[FLTR__REWRITE] :
+    	    BEGIN
+    	    	IF .ri [ITM$W_BUFSIZ] NEQ 0 THEN
+    	    	BEGIN
+    	    	    IF .oraddr EQLA 0 THEN
+    	    	    BEGIN
+    	    	    	oraddr = XTEXT_ENCODE (addr);
+    	    	    	FREETXT (ortype);
+    	    	    	ortype = MEM_GETTXT (6, UPLIT ('rfc822'));
+    	    	    END;
+    	    	    FREETXT (addr);
+    	    	    addr = MEM_GETTXT (.ri [ITM$W_BUFSIZ], .ri [ITM$L_BUFADR]);
+    	    	    modified = 1;
+    	    	END;
+    	    	r = .r [RCPT_L_FLINK];
+    	    END;
+    	[FLTR__DELETE] :
+    	    BEGIN
+    	    	LOCAL next : REF RCPTDEF;
+    	    	next = .r [RCPT_L_FLINK];
+    	    	REMQUE (.r, r);
+    	    	MEM_FREERCPT (r);
+    	    	r = .next;
+    	    	modified = 1;
+    	    END;
+    	[FLTR__REJECT] :
+    	    BEGIN
+    	    	LOCAL next : REF RCPTDEF;
+    	    	next = .r [RCPT_L_FLINK];
+    	    	REMQUE (.r, r);
+    	    	IF .ri [ITM$W_BUFSIZ] NEQ 0 THEN
+    	    	    r [RCPT_A_ROUTE] = MEM_GETTXT (.ri [ITM$W_BUFSIZ], .ri [ITM$L_BUFADR]);
+    	    	INSQUE (.r, .bounceq [QUE_L_TAIL]);
+    	    	r = .next;
+    	    	modified = 1;
+    	    END;
+    	[OTHERWISE] :
+    	    r = .r [RCPT_L_FLINK];
+    	TES;
+    END;
+
+    IF addlst NEQA 0 THEN INCR i FROM 0 DO
+    BEGIN
+    	IF .addlst [.i,0,0,32,0] EQL 0 THEN EXITLOOP;
+    	IF .addlst [.i,ITM$W_BUFSIZ] NEQ 0 THEN
+    	BEGIN
+    	    MEM_GETRCPT (r);
+    	    r [RCPT_A_ADDR] = MEM_GETTXT (.addlst [.i,ITM$W_BUFSIZ], .addlst [.i,ITM$L_BUFADR]);
+    	    INSQUE (.r, .infoq [QUE_L_TAIL]);
+    	    modified = 1;
+    	END;
+    END;
+
+    dispose_itmlst (itmlst);
+
+    IF .modified THEN SS$_NORMAL ELSE 0
+
+END; ! process_envelope_itmlsts
+
+%SBTTL 'process_header_itmlsts'
+ROUTINE process_header_itmlsts (itmlst_a, addlst_a, hdrq_a) =
+BEGIN
+!++
+! FUNCTIONAL DESCRIPTION:
+!
+!   description
+!
+! RETURNS:  	cond_value, longword (unsigned), write only, by value
+!
+! PROTOTYPE:
+!
+!   x
+!
+! IMPLICIT INPUTS:  None.
+!
+! IMPLICIT OUTPUTS: None.
+!
+! COMPLETION CODES:
+!
+!   SS$_NORMAL:	    	normal successful completion.
+!
+! SIDE EFFECTS:
+!
+!   None.
+!--
+    BIND
+    	itmlst	    = .itmlst_a     : BLOCKVECTOR [,ITM$S_ITEM,BYTE],
+    	addlst	    = .addlst_a     : BLOCKVECTOR [,ITM$S_ITEM,BYTE],
+    	hdrq	    = .hdrq_a	    : QUEDEF;
+
+    LOCAL
+    	h   	: REF TXTDEF,
+    	modified,
+    	reorder,
+    	low,
+    	high;
+
+    LITERAL
+    	offset = %FIELDEXPAND (TXT_T_TEXT,0);
+
+!   N.B.  we are assuming that the filter routine DID NOT screw
+!         with our item list!  We also cheat here and get the
+!   	  address of the TXTDEF for each header by subtracting
+!   	  the offset to the TXT_T_TEXT field from the BUFADR pointer.
+
+    modified = 0;
+    reorder = 0;
+    low = -1;
+    high = 0;
+
+    INCR i FROM 0 DO
+    BEGIN
+    	BIND
+    	    ri 	= .itmlst [.i,ITM$L_RETLEN]	   : BLOCK [,BYTE],
+    	    hdr = .itmlst [.i,ITM$L_BUFADR]-offset : TXTDEF;
+    	LOCAL tmp, newcode, neworder;
+
+    	IF .itmlst [.i,0,0,32,0] EQL 0 THEN EXITLOOP;
+
+    	tmp = .ri [ITM$L_RETLEN];
+    	newcode = .tmp<16,16,0>;
+    	neworder = .tmp<0,16,0>;
+
+    	IF .neworder NEQ 0 THEN
+    	BEGIN
+    	    reorder = 1;
+    	    low = MINU (.low, .neworder);
+    	    high = MAXU (.high, .neworder);
+    	END;
+
+    	SELECTONE .ri [ITM$W_ITMCOD] OF
+    	SET
+    	[FLTR__REWRITE] :
+    	    BEGIN
+    	    	IF .ri [ITM$W_BUFSIZ] NEQ 0 THEN
+    	    	BEGIN
+    	    	    h = MEM_GETTXT (.ri [ITM$W_BUFSIZ], .ri [ITM$L_BUFADR]);
+    	    	    h [TXT_W_CODE] = .newcode;
+    	    	    INSQUE (.h, .hdr [TXT_L_BLINK]);
+    	    	    REMQUE (hdr, h);
+    	    	    FREETXT (h);
+    	    	    modified = 1;
+    	    	END;
+    	    END;
+    	[FLTR__DELETE] :
+    	    BEGIN
+    	    	REMQUE (hdr, h);
+    	    	FREETXT (h);
+    	    	modified = 1;
+    	    END;
+    	[OTHERWISE] : ;
+    	TES;
+    END;
+
+    IF addlst NEQA 0 THEN INCR i FROM 0 DO
+    BEGIN
+    	LOCAL neworder;
+    	IF .addlst [.i,0,0,32,0] EQL 0 THEN EXITLOOP;
+    	neworder = (.addlst [.i,ITM$L_RETLEN])<0,16,0>;
+    	IF .neworder NEQ 0 THEN
+    	BEGIN
+    	    reorder = 1;
+    	    low = MINU (.low, .neworder);
+    	    high = MAXU (.high, .neworder);
+    	END;
+    END;
+
+    IF .reorder THEN
+    BEGIN
+    	LOCAL
+    	    newq    : QUEDEF;
+
+    	modified = 1;
+    	INIT_QUEUE (newq);
+
+    	INCR pref FROM .low TO .high DO
+    	BEGIN
+    	    INCR i FROM 0 DO
+    	    BEGIN
+    	    	BIND
+    	    	    ri 	= .itmlst [.i,ITM$L_RETLEN]	   : BLOCK [,BYTE],
+    	    	    hdr = .itmlst [.i,ITM$L_BUFADR]-offset : TXTDEF;
+    	    	LOCAL neworder;
+
+    	    	IF .itmlst [.i,0,0,32,0] EQL 0 THEN EXITLOOP;
+
+    	    	neworder = (.ri [ITM$L_RETLEN])<0,16,0>;
+    	    	IF .neworder EQL .pref THEN
+    	    	BEGIN
+    	    	    REMQUE (hdr, h);
+    	    	    INSQUE (.h, .newq [QUE_L_TAIL]);
+    	    	END;
+    	    END;
+!
+!   Now check the additional-headers list
+!
+    	    IF addlst NEQA 0 THEN INCR i FROM 0 DO
+    	    BEGIN
+    	    	LOCAL neworder;
+
+    	    	IF .addlst [.i,0,0,32,0] EQL 0 THEN EXITLOOP;
+
+    	    	neworder = (.addlst [.i,ITM$L_RETLEN])<0,16,0>;
+
+    	    	IF .addlst [.i,ITM$W_BUFSIZ] NEQ 0 AND .neworder EQL .pref THEN
+    	    	BEGIN
+    	    	    h = MEM_GETTXT (.addlst [.i,ITM$W_BUFSIZ], .addlst [.i,ITM$L_BUFADR]);
+    	    	    h [TXT_W_CODE] = .addlst [.i,ITM$W_ITMCOD];
+    	    	    INSQUE (.h, .newq [QUE_L_TAIL]);
+    	    	END;
+    	    END;
+    	END;
+
+! At this point, we should have exhausted the old queue and can just replace it
+
+    	WHILE NOT REMQUE (.newq [QUE_L_HEAD], h) DO INSQUE (.h, .hdrq [QUE_L_TAIL]);
+
+    END
+    ELSE IF addlst NEQA 0 THEN INCR i FROM 0 DO ! not reordering, just see if we have any additionals
+    BEGIN
+    	IF .addlst [.i,0,0,32,0] EQL 0 THEN EXITLOOP;
+    	IF .addlst [.i,ITM$W_BUFSIZ] NEQ 0 THEN
+    	BEGIN
+    	    h = MEM_GETTXT (.addlst [.i,ITM$W_BUFSIZ], .addlst [.i,ITM$L_BUFADR]);
+    	    h [TXT_W_CODE] = .addlst [.i,ITM$W_ITMCOD];
+    	    INSQUE (.h, .hdrq [QUE_L_TAIL]);
+    	    modified = 1;
+    	END;
+    END;
+
+    dispose_itmlst (itmlst);
+
+    IF .modified THEN SS$_NORMAL ELSE 0
+
+END; ! process_header_itmlsts
+
+%SBTTL 'FIS_SIG_TO_RET'
+ROUTINE FIS_SIG_TO_RET (SIG_A, MCH_A, ENB_A) =
+BEGIN
+!++
+! FUNCTIONAL DESCRIPTION:
+!
+!   Condition handler to convert find_image_symbol
+!   signals into return status codes.  Sort of like
+!   LIB$SIG_TO_RET, but returns the ancillary status
+!   code when the signal name is LIB$_ACTIMAGE.
+!
+! RETURNS:  	cond_value, longword (unsigned), write only, by value
+!
+! PROTOTYPE:
+!
+!   x
+!
+! IMPLICIT INPUTS:  None.
+!
+! IMPLICIT OUTPUTS: None.
+!
+! COMPLETION CODES:
+!
+!   SS$_NORMAL:	    	normal successful completion.
+!
+! SIDE EFFECTS:
+!
+!   None.
+!--
+    BIND
+    	sig 	= .SIG_A    	    	: BLOCK [,BYTE],
+    	sigvec 	= .SIG_A    	    	: VECTOR [,LONG],
+    	cond	= sig [CHF$L_SIG_NAME]	: BLOCK [,BYTE],
+    	mch 	= .MCH_A    	    	: BLOCK [,BYTE];
+
+    EXTERNAL LITERAL
+    	LIB$_ACTIMAGE;
+
+    LOCAL
+    	unwind : BLOCK [4,BYTE] INITIAL (SS$_UNWIND),
+    	libact : BLOCK [4,BYTE] INITIAL (LIB$_ACTIMAGE),
+    	status;
+
+    IF .cond [STS$V_COND_ID] EQL .unwind [STS$V_COND_ID] THEN
+    	RETURN SS$_NORMAL;
+
+    status = .sig [CHF$L_SIG_NAME];
+
+    IF .cond [STS$V_COND_ID] EQL .libact [STS$V_COND_ID] AND
+    	    .sig [CHF$L_SIG_ARGS] GEQU 6 THEN
+    	status = .sigvec [.sig [CHF$L_SIG_ARG1] + 3];
+
+%IF %BLISS (BLISS32V) %THEN
+    mch [CHF$L_MCH_SAVR0] = .status;
+%ELSE
+    mch [CHF$IL_MCH_SAVR0_LOW] = .status;
+%FI
+
+    $UNWIND ()  ! return to caller of procedure that established us
+
+END; ! fis_sig_to_ret
+
+%SBTTL 'find_image_symbol'
+ROUTINE find_image_symbol (fspec_a, symnam_a, symval_a) = 
+BEGIN
+!++
+! FUNCTIONAL DESCRIPTION:
+!
+!   Wrapper routine for calling LIB$FIND_IMAGE_SYMBOL that
+!   established a condition handler.  Need this because the
+!   handler unwinds the call stack to above where it gets
+!   established.
+!
+! RETURNS:  	cond_value, longword (unsigned), write only, by value
+!
+! PROTOTYPE:
+!
+!   FIND_IMAGE_SYMBOL  fspec, symnam, symval
+!
+! IMPLICIT INPUTS:  None.
+!
+! IMPLICIT OUTPUTS: None.
+!
+! COMPLETION CODES:
+!
+!   SS$_NORMAL:	    	normal successful completion.
+!
+! SIDE EFFECTS:
+!
+!   None.
+!--
+
+    ENABLE
+    	fis_sig_to_ret;
+
+    LIB$FIND_IMAGE_SYMBOL (.fspec_a, .symnam_a, .symval_a)
+
+END; ! find_image_symbol
+
+END
+ELUDOM
