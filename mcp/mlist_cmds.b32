@@ -1,0 +1,551 @@
+%TITLE 'MLIST_CMDS'
+MODULE MLIST_CMDS (IDENT='V1.6',
+    	ADDRESSING_MODE (EXTERNAL=LONG_RELATIVE, NONEXTERNAL=LONG_RELATIVE)) =
+BEGIN
+!++
+! FACILITY: 	    MCP
+!
+! ABSTRACT: 	    Mailing list manipulation commands for MCP.
+!
+! MODULE DESCRIPTION:
+!
+!   This module contains code for all of the commands that manipulate the
+!   MX mailing list files, for MCP.
+!
+! AUTHOR:   	    M. Madison
+!
+! Copyright (c) 2008, Matthew Madison.
+! 
+! All rights reserved.
+! 
+! Redistribution and use in source and binary forms, with or without
+! modification, are permitted provided that the following conditions
+! are met:
+! 
+!     * Redistributions of source code must retain the above
+!       copyright notice, this list of conditions and the following
+!       disclaimer.
+!     * Redistributions in binary form must reproduce the above
+!       copyright notice, this list of conditions and the following
+!       disclaimer in the documentation and/or other materials provided
+!       with the distribution.
+!     * Neither the name of the copyright owner nor the names of any
+!       other contributors may be used to endorse or promote products
+!       derived from this software without specific prior written
+!       permission.
+! 
+! THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
+! "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
+! LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
+! A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
+! OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
+! SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
+! LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
+! DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
+! THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
+! (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
+! OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+!
+! CREATION DATE:    11-NOV-1991
+!
+! MODIFICATION HISTORY:
+!
+!   11-NOV-1991	V1.0	Madison	    Initial coding.
+!   11-Oct-1992 V1.1	Munroe	    Add ACCESS.
+!   21-JAN-1993 V1.2	Goatley     Fixed some SIGNAL problems.
+!    8-FEB-1993 V1.2-1	Goatley     Changed format of .MAILING_LIST files.
+!   29-APR-1993 V1.3	Goatley     Modified to handle new MLE offsets for AXP.
+!   12-SEP-1995 V1.4	Goatley     Add support for digests.
+!   10-DEC-1995 V1.4-1	Goatley     Add support for DENY.
+!    5-MAY-1997 V1.5	Goatley	    Add support for NOPOST.
+!   29-AUG-1997	V1.6	Madison	    MLE structure change.
+!--
+    LIBRARY 'SYS$LIBRARY:STARLET';
+    LIBRARY 'MX_SRC_COMMON:MX';
+    LIBRARY 'MX_SRC_COMMON:MX_LCLDEFS';
+    LIBRARY 'MCP';
+
+    FORWARD ROUTINE
+    	CMD_REVIEW,
+    	ALT_SHOW_OUTPUT,
+    	SHOW_ENTRY  	: NOVALUE,
+    	READ_MAILING_LIST;
+
+    EXTERNAL LITERAL
+    	MCP__NOOPNOUT, MCP__NOMATCH;
+
+    EXTERNAL ROUTINE
+    	G_HAT (PARSE_MBOX, VERIFY_PHRASE, MEM_GETTXT, MEM_GETMLE, MEM_FREEMLE),
+    	G_HAT (PARSE821, FORMAT821),
+    	G_HAT (STR$CASE_BLIND_COMPARE, STR$CONCAT, STR$UPCASE);
+
+    EXTERNAL
+    	MLISTS	: QUEDEF;
+
+    OWN
+    	SHOW_FAB    : $FAB_DECL,
+    	SHOW_RAB    : $RAB_DECL;
+
+%SBTTL 'CMD_REVIEW'
+GLOBAL ROUTINE CMD_REVIEW = 
+BEGIN
+!++
+! FUNCTIONAL DESCRIPTION:
+!
+!   REVIEW command.
+!
+! RETURNS:  	cond_value, longword (unsigned), write only, by value
+!
+! PROTOTYPE:
+!
+!   CMD_REVIEW
+!
+! IMPLICIT INPUTS:  None.
+!
+! IMPLICIT OUTPUTS: None.
+!
+! COMPLETION CODES:
+!
+!   SS$_NORMAL:	    	normal successful completion.
+!
+! SIDE EFFECTS:
+!
+!   None.
+!--
+    LOCAL
+    	STR 	: BLOCK [DSC$K_S_BLN,BYTE],
+    	DSC 	: BLOCK [DSC$K_S_BLN,BYTE],
+    	MLE 	: REF MLEDEF,
+    	MLST	: REF MLSTDEF,
+    	MLSTQ	: QUEDEF,
+    	OUTRTN,
+    	STATUS;
+
+    INIT_DYNDESC (STR);
+    INIT_QUEUE (MLSTQ);
+
+    OUTRTN = LIB$PUT_OUTPUT;
+    IF CLI$PRESENT (%ASCID'OUTPUT') EQL CLI$_PRESENT THEN
+    BEGIN
+    	CLI$GET_VALUE (%ASCID'OUTPUT', STR);
+    	$FAB_INIT (FAB=SHOW_FAB, FNA=.STR [DSC$A_POINTER],
+    	    FNS=MIN (.STR [DSC$W_LENGTH], 255),
+    	    DNM='SYS$DISK:[].DAT', FAC=PUT, FOP=SQO, RAT=CR);
+    	STATUS = $CREATE (FAB=SHOW_FAB);
+    	IF .STATUS THEN
+    	BEGIN
+    	    $RAB_INIT (RAB=SHOW_RAB, FAB=SHOW_FAB, ROP=WBH);
+    	    STATUS = $CONNECT (RAB=SHOW_RAB);
+    	    IF .STATUS THEN OUTRTN = ALT_SHOW_OUTPUT
+    	    ELSE
+    	    BEGIN
+    	    	SIGNAL (MCP__NOOPNOUT, 1, STR, .STATUS,	.SHOW_RAB [RAB$L_STV]);
+    	    	SHOW_FAB [FAB$V_TMD] = 1;
+    	    	$CLOSE (FAB=SHOW_FAB);
+    	    	RETURN SS$_NORMAL;
+    	    END
+    	END
+    	ELSE
+    	BEGIN
+    	    SIGNAL (MCP__NOOPNOUT, 1, STR, .STATUS, .SHOW_FAB [FAB$L_STV]);
+    	    RETURN SS$_NORMAL;
+    	END;
+    END
+    ELSE STATUS = SS$_NORMAL;
+
+    CLI$GET_VALUE (%ASCID'MLIST', STR);
+    MLST = .MLISTS [QUE_L_HEAD];
+    WHILE .MLST NEQA MLISTS [QUE_L_HEAD] DO
+    BEGIN
+    	INIT_SDESC (DSC, .MLST [MLST_W_NAME], MLST [MLST_T_NAME]);
+    	IF STR$CASE_BLIND_COMPARE (STR, DSC) EQL 0 THEN EXITLOOP;
+    	MLST = .MLST [MLST_L_FLINK];
+    END;
+    IF .MLST EQLA MLISTS [QUE_L_HEAD] THEN
+    BEGIN
+    	SIGNAL (MCP__NOMATCH, 1, %ASCID'mailing list');
+    	IF .OUTRTN EQLA ALT_SHOW_OUTPUT THEN
+    	BEGIN
+    	    $DISCONNECT (RAB=SHOW_RAB);
+    	    SHOW_FAB [FAB$V_TMD] = 1;
+    	    $CLOSE (FAB=SHOW_FAB);
+    	    RETURN SS$_NORMAL;
+    	END;
+    END;
+
+    READ_MAILING_LIST (.MLST, MLSTQ);
+    WHILE NOT REMQUE (.MLSTQ [QUE_L_HEAD], MLE) DO
+    BEGIN
+    	SHOW_ENTRY (.OUTRTN, .MLE);
+    	MEM_FREEMLE (MLE);
+    END;
+
+    IF .OUTRTN EQLA ALT_SHOW_OUTPUT THEN
+    BEGIN
+    	$DISCONNECT (RAB=SHOW_RAB);
+    	$CLOSE (FAB=SHOW_FAB);
+    END;
+
+    FREE_STRINGS (STR);
+
+    SS$_NORMAL
+
+END; ! CMD_REVIEW
+
+%SBTTL 'ALT_SHOW_OUTPUT'
+ROUTINE ALT_SHOW_OUTPUT (STR_A) =
+BEGIN
+!++
+! FUNCTIONAL DESCRIPTION:
+!
+!   Alternate output routine for SHOW commands.  Used only when
+!   output is redirected via the /OUTPUT qualifier.
+!
+! RETURNS:  	cond_value, longword (unsigned), write only, by value
+!
+! PROTOTYPE:
+!
+!   ALT_SHOW_OUTPUT
+!
+! IMPLICIT INPUTS:  None.
+!
+! IMPLICIT OUTPUTS: None.
+!
+! COMPLETION CODES:
+!
+!   RMS$_NORMAL:    	normal successful completion.
+!
+! SIDE EFFECTS:
+!
+!   None.
+!--
+    BIND
+    	STR = .STR_A : BLOCK [,BYTE];
+
+    SHOW_RAB [RAB$L_RBF] = .STR [DSC$A_POINTER];
+    SHOW_RAB [RAB$W_RSZ] = .STR [DSC$W_LENGTH];
+
+    $PUT (RAB=SHOW_RAB)
+
+END; ! ALT_SHOW_OUTPUT
+
+%SBTTL 'SHOW_ENTRY'
+ROUTINE SHOW_ENTRY (OUTRTN, MLE_A) : NOVALUE =
+BEGIN
+!++
+! FUNCTIONAL DESCRIPTION:
+!
+!   Displays a mailing list entry.
+!
+! RETURNS:  	cond_value, longword (unsigned), write only, by value
+!
+! PROTOTYPE:
+!
+!   SHOW_ENTRY  outrtn, qent, qab, full, all, didq
+!
+! IMPLICIT INPUTS:  None.
+!
+! IMPLICIT OUTPUTS: None.
+!
+! COMPLETION CODES:
+!
+!   SS$_NORMAL:	    	normal successful completion.
+!
+! SIDE EFFECTS:
+!
+!   None.
+!--
+    BIND
+    	MLE 	= .MLE_A    	    : MLEDEF,
+    	mleadr	= mle [MLE_A_ADDR]  : REF TXTDEF,
+    	mlenam	= mle [MLE_A_NAME]  : REF TXTDEF;
+
+    LOCAL
+    	STR 	: BLOCK [DSC$K_S_BLN,BYTE],
+    	STR2	: BLOCK [DSC$K_S_BLN,BYTE],
+    	STATUS;
+
+    INIT_DYNDESC (STR, STR2);
+
+    IF .mlenam NEQA 0 THEN
+    	IF CH$RCHAR (mleadr [TXT_T_TEXT]) EQL %C'<' THEN
+    	    LIB$SYS_FAO (%ASCID'  !AD !AD', 0, STR,
+    	    	.mlenam [TXT_W_LEN], mlenam [TXT_T_TEXT],
+    	    	.mleadr [TXT_W_LEN], mleadr [TXT_T_TEXT])
+    	ELSE
+    	    LIB$SYS_FAO (%ASCID'  !AD <!AD>', 0, STR,
+    	    	.mlenam [TXT_W_LEN], mlenam [TXT_T_TEXT],
+    	    	.mleadr [TXT_W_LEN], mleadr [TXT_T_TEXT])
+    ELSE
+    	    LIB$SYS_FAO (%ASCID'  !AD', 0, STR,
+    	    	.mleadr [TXT_W_LEN], mleadr [TXT_T_TEXT]);
+
+    IF .MLE [MLE_V_NOMAIL] THEN STR$COPY_DX (STR2, %ASCID'NOMAIL');
+    IF .MLE [MLE_V_NOCASE] THEN
+    BEGIN
+    	IF .STR2 [DSC$W_LENGTH] GTR 0 THEN STR$APPEND (STR2, %ASCID',');
+    	STR$APPEND (STR2, %ASCID'NOCASE');
+    END;
+    IF .MLE [MLE_V_CONCEAL] THEN
+    BEGIN
+    	IF .STR2 [DSC$W_LENGTH] GTR 0 THEN STR$APPEND (STR2, %ASCID',');
+    	STR$APPEND (STR2, %ASCID'CONCEAL');
+    END;
+    IF .MLE [MLE_V_NOREPRO] THEN
+    BEGIN
+    	IF .STR2 [DSC$W_LENGTH] GTR 0 THEN STR$APPEND (STR2, %ASCID',');
+    	STR$APPEND (STR2, %ASCID'NOREPRO');
+    END;
+    IF .MLE [MLE_V_ACCESS] THEN
+    BEGIN
+    	IF .STR2 [DSC$W_LENGTH] GTR 0 THEN STR$APPEND (STR2, %ASCID',');
+    	STR$APPEND (STR2, %ASCID'ACCESS');
+    END;
+    IF .MLE [MLE_V_DIGEST] THEN
+    BEGIN
+    	IF .STR2 [DSC$W_LENGTH] GTR 0 THEN STR$APPEND (STR2, %ASCID',');
+    	STR$APPEND (STR2, %ASCID'DIGEST');
+    END;
+    IF .MLE [MLE_V_DENY] THEN
+    BEGIN
+    	IF .STR2 [DSC$W_LENGTH] GTR 0 THEN STR$APPEND (STR2, %ASCID',');
+    	STR$APPEND (STR2, %ASCID'DENY');
+    END;
+    IF .MLE [MLE_V_NOPOST] THEN
+    BEGIN
+    	IF .STR2 [DSC$W_LENGTH] GTR 0 THEN STR$APPEND (STR2, %ASCID',');
+    	STR$APPEND (STR2, %ASCID'NOPOST');
+    END;
+    IF .STR2 [DSC$W_LENGTH] GTR 0 THEN
+    BEGIN
+    	STR$APPEND (STR, %ASCID' (');
+    	STR$APPEND (STR, STR2);
+    	STR$APPEND (STR, %ASCID')');
+    END;
+    (.OUTRTN) (STR);
+
+    FREE_STRINGS (STR, STR2);
+
+END; ! SHOW_ENTRY
+
+%SBTTL 'READ_MAILING_LIST'
+ROUTINE READ_MAILING_LIST (MLST_A, MLSTQ_A) =
+BEGIN
+!++
+! FUNCTIONAL DESCRIPTION:
+!
+!   Reads the file containing the list of addresses in the mailing list.
+!
+! RETURNS:	cond_value, longword (unsigned), write only, by value
+!
+! PROTOTYPE:
+!
+!   READ_MAILING_LIST  mlst, mlstq
+!
+! IMPLICIT INPUTS:  None.
+!
+! IMPLICIT OUTPUTS: None.
+!
+! COMPLETION CODES:
+!
+!   SS$_NORMAL:		normal successful completion.
+!
+! SIDE EFFECTS:
+!
+!   None.
+!--
+    BIND
+	MLST	= .MLST_A	: MLSTDEF,
+	MLSTQ	= .MLSTQ_A	: QUEDEF;
+
+    LOCAL
+	STR 	: $BBLOCK [DSC$K_S_BLN],
+	LCLP	: $BBLOCK [DSC$K_S_BLN],
+	DOMP	: $BBLOCK [DSC$K_S_BLN],
+	NAM 	: $BBLOCK [DSC$K_S_BLN],
+	SDSC	: $BBLOCK [DSC$K_S_BLN],
+	RTEQ	: QUEDEF,
+	TXT 	: REF TXTDEF,
+	FAB 	: $FAB_DECL,
+	RAB 	: $RAB_DECL,
+	XAB 	: $XABFHC_DECL,
+	MLE 	: REF MLEDEF,
+	WORK_MLE : REF MLEDEF,
+	convert_pre_v3, convert_v31,
+	STATUS;
+
+    convert_pre_v3 = convert_v31 = 0;
+    SDSC [DSC$B_DTYPE] = DSC$K_DTYPE_T;
+    SDSC [DSC$B_CLASS] = DSC$K_CLASS_S;
+    INIT_DYNDESC (STR, LCLP, DOMP, NAM);
+    INIT_QUEUE (RTEQ);
+
+    LIB$SYS_FAO (%ASCID'MX_MLIST_DIR:!AD.MAILING_LIST', 0, STR,
+	.MLST [MLST_W_NAME], MLST [MLST_T_NAME]);
+    $FAB_INIT (FAB=FAB, XAB=XAB, FNA=.STR [DSC$A_POINTER],
+	FNS=.STR [DSC$W_LENGTH], FAC=GET, SHR=SHRGET);
+    $XABFHC_INIT (XAB=XAB);
+
+    STATUS = $OPEN (FAB=FAB);
+    IF NOT .STATUS THEN
+    BEGIN
+	LIB$SYS_FAO (%ASCID'MX_MLIST_DIR:!AD.MLIST', 0, STR,
+	    .MLST [MLST_W_NAME], MLST [MLST_T_NAME]);
+	$FAB_INIT (FAB=FAB, XAB=XAB, FNA=.STR [DSC$A_POINTER],
+	    FNS=.STR [DSC$W_LENGTH], FAC=GET, SHR=SHRGET);
+	$XABFHC_INIT (XAB=XAB);
+
+	STATUS = $OPEN (FAB=FAB);
+	IF NOT .STATUS THEN
+	BEGIN
+	    FREE_STRINGS (STR);
+	    RETURN .STATUS;
+	END;
+	convert_pre_v3 = 1;
+    END;
+
+    IF (.fab [FAB$B_RFM] EQLU FAB$C_FIX)
+    THEN
+	convert_v31 = 1;
+
+    FREE_STRINGS (STR);
+    $RAB_INIT (RAB=RAB, FAB=FAB, ROP=RAH);
+    STATUS = $CONNECT (RAB=RAB);
+    IF NOT .STATUS THEN
+    BEGIN
+	$CLOSE (FAB=FAB);
+	RETURN .STATUS;
+    END;
+
+    rab [RAB$W_USZ] = (IF .fab [FAB$W_MRS] EQL 0 THEN
+    	    	    IF .xab [XAB$W_LRL] EQL 0 THEN 16384
+    	    	    ELSE .xab [XAB$W_LRL] ELSE .fab [FAB$W_MRS]);
+
+    STATUS = LIB$GET_VM (%REF (.RAB [RAB$W_USZ]), RAB [RAB$L_UBF]);
+    IF NOT .STATUS THEN
+    BEGIN
+    	$CLOSE (FAB=FAB);
+	RETURN .STATUS;
+    END;
+
+    WHILE $GET (RAB=rab) DO
+    BEGIN
+    	BIND
+    	    inmle = .rab [RAB$L_UBF] : MLEDEF,
+    	    inbuf = .rab [RAB$L_UBF] : BLOCK [,BYTE]; ! for generic access
+
+    	LOCAL
+    	    ptr,
+    	    len     : WORD;
+
+    	COMPILETIME
+    	    addr_offset = %FIELDEXPAND (MLE_A_ADDR, 0);
+
+	IF NOT .convert_pre_v3
+	THEN
+	    IF .convert_v31				!Before v3.2, the
+	    THEN					!... whole MLE was
+		BEGIN					!... written out
+		!
+		!  The MLE structure changed with V3.3 - the NAME and
+    	    	!  address fields were changed to be 256 bytes instead
+    	    	!  of 255 bytes each, to ensure they'd be aligned on Alphas.
+    	    	!  each field was preceded by a word-sized length.
+		!
+    	    	len = .inbuf [addr_offset,0,16,0];
+    	    	status = MEM_GETMLE (mle, .len);
+    	    	IF NOT .status THEN EXITLOOP;
+    	    	CH$MOVE (addr_offset, inmle, .mle);
+    	    	BEGIN
+    	    	    BIND adr = .mle [MLE_A_ADDR] : TXTDEF;
+    	    	    CH$MOVE (.len, CH$PLUS (inbuf, addr_offset+2), adr [TXT_T_TEXT]);
+    	    	END;
+    	    	!  Use CH$MOVE here since it's not word-aligned
+    	    	ptr = CH$PLUS (inbuf, addr_offset+2+.len);
+    	    	CH$MOVE (2, .ptr, len);
+    	    	IF .len NEQ 0 THEN
+    	    	    mle [MLE_A_NAME] = MEM_GETTXT (.len, CH$PLUS (.ptr, 2));
+		END					!... and we're finished
+	    ELSE
+		BEGIN
+    	    	    IF .inmle [MLE_L_FLINK] EQL 0        ! this is a V5.0-format entry
+    	    	    THEN
+    	    	    	BEGIN
+    	    	    	status = MEM_GETMLE (mle);
+    	    	    	IF NOT .status THEN EXITLOOP;
+    	    	    	CH$MOVE (MLE_S_MLEDEF, inmle, .mle);
+    	    	    	mle [MLE_A_ADDR] = MEM_GETTXT (.inmle [MLE_A_ADDR], CH$PLUS (inmle, MLE_S_MLEDEF));
+    	    	    	IF .inmle [MLE_A_NAME] NEQ 0 THEN
+    	    	    	    mle [MLE_A_NAME] = MEM_GETTXT (.inmle [MLE_A_NAME],
+    	    	    	    	    CH$PLUS (inmle, MLE_S_MLEDEF+.inmle [MLE_A_ADDR]));
+    	    	    	END
+    	    	    ELSE    	    	    	    	  ! pre-V5.0 entry
+    	    	    	BEGIN
+		    	ptr = CH$PLUS (inmle, addr_offset);
+		    	len = CH$RCHAR_A (ptr);		!Get ADDR length
+    	    	    	status = MEM_GETMLE (mle, .len);
+    	    	    	IF NOT .status THEN EXITLOOP;
+    	    	    	CH$MOVE (addr_offset, inmle, .mle);
+    	    	    	BEGIN
+    	    	    	    BIND adr = .mle [MLE_A_ADDR] : TXTDEF;
+    	    	    	    CH$MOVE (.len, .ptr, adr [TXT_T_TEXT]);
+    	    	    	END;
+    	    	    	ptr = CH$PLUS (.ptr, .len);
+    	    	    	len = CH$RCHAR_A (ptr);
+    	    	    	IF .len NEQ 0 THEN mle [MLE_A_NAME] = MEM_GETTXT (.len, .ptr);
+		    	END;
+		 END
+	ELSE
+	    BEGIN
+	    INIT_SDESC (SDSC, .RAB [RAB$W_RSZ], .RAB [RAB$L_UBF]);
+	    FREE_STRINGS (NAM);
+	    IF NOT PARSE821 (SDSC, RTEQ, LCLP, DOMP)
+    	    THEN
+		    PARSE_MBOX (SDSC, LCLP, DOMP, NAM);
+	    IF .RTEQ [QUE_L_HEAD] NEQA RTEQ
+    	    THEN
+		BEGIN
+		TXT = .RTEQ [QUE_L_HEAD];
+		WHILE .TXT NEQA RTEQ DO
+		    BEGIN
+	    	    INIT_SDESC (SDSC, .TXT [TXT_W_LEN], TXT [TXT_T_TEXT]);
+		    STR$UPCASE (SDSC, SDSC);
+		    TXT = .TXT [TXT_L_FLINK];
+		    END;
+		FORMAT821 (RTEQ, LCLP, DOMP, STR);
+		WHILE NOT REMQUE (.RTEQ [QUE_L_HEAD], TXT) DO FREETXT (TXT);
+		END
+	    ELSE
+    	    	STR$CONCAT (STR, LCLP, %ASCID'@', DOMP);
+    	    status = MEM_GETMLE (mle, .str [DSC$W_LENGTH]);
+    	    IF NOT .status THEN EXITLOOP;
+    	    BEGIN
+    	    	BIND adr = .mle [MLE_A_ADDR] : TXTDEF;
+    	    	CH$MOVE (.str [DSC$W_LENGTH], .str [DSC$A_POINTER], adr [TXT_T_TEXT]);
+    	    END;
+	    IF .NAM [DSC$W_LENGTH] GTR 0 THEN
+		BEGIN
+		VERIFY_PHRASE (NAM, NAM);
+    	    	mle [MLE_A_NAME] = MEM_GETTXT (.nam [DSC$W_LENGTH], .nam [DSC$A_POINTER]);
+		END;
+	    END; ! else convert_pre_v3
+
+    	INSQUE (.mle, .mlstq [QUE_L_TAIL]);
+
+    END; ! while $get
+
+    $CLOSE (FAB=FAB);
+
+    LIB$FREE_VM (%REF (.RAB [RAB$W_USZ]), RAB [RAB$L_UBF]);
+
+    FREE_STRINGS (STR, LCLP, DOMP, NAM);
+
+    IF .STATUS EQL RMS$_EOF THEN
+	SS$_NORMAL
+    ELSE
+	.STATUS
+
+END; ! READ_MAILING_LIST
+
+END
+ELUDOM

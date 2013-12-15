@@ -1,0 +1,3919 @@
+%TITLE 'MCP'
+MODULE MCP (IDENT='V4.1', MAIN=MCP,
+    	ADDRESSING_MODE (EXTERNAL=LONG_RELATIVE, NONEXTERNAL=LONG_RELATIVE)) =
+BEGIN
+!++
+! FACILITY: 	    MCP
+!
+! ABSTRACT:
+!
+!   MX Mailer Control Program
+!
+! MODULE DESCRIPTION:
+!
+!   This module contains the routines that implement the MX Control
+!   Program.
+!
+! AUTHOR:   	    M. Madison
+!
+! Copyright (c) 2008, Matthew Madison.
+! Copyright (c) 2012, Endless Software Solutions.
+! 
+! All rights reserved.
+! 
+! Redistribution and use in source and binary forms, with or without
+! modification, are permitted provided that the following conditions
+! are met:
+! 
+!     * Redistributions of source code must retain the above
+!       copyright notice, this list of conditions and the following
+!       disclaimer.
+!     * Redistributions in binary form must reproduce the above
+!       copyright notice, this list of conditions and the following
+!       disclaimer in the documentation and/or other materials provided
+!       with the distribution.
+!     * Neither the name of the copyright owner nor the names of any
+!       other contributors may be used to endorse or promote products
+!       derived from this software without specific prior written
+!       permission.
+! 
+! THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
+! "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
+! LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
+! A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
+! OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
+! SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
+! LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
+! DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
+! THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
+! (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
+! OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+!
+! CREATION DATE:    12-DEC-1989
+!
+! MODIFICATION HISTORY:
+!
+!   12-DEC-1989	V1.0	Madison	    Initial coding (based on WCP).
+!   01-JAN-1990	V1.0-1  Madison	    Added /MASTER to DEFINE LIST.
+!   10-JAN-1990	V1.1-2	Madison	    FILESERV support, wildcards on SHOW,
+!   	    	    	    	    	remove unsupported PEER/MASTER stuff.
+!   12-JAN-1990	V1.1-3	Madison	    More FILESERV changes.
+!   16-JAN-1990	V1.1-4	Madison	    Fix /PROTECTION problem.
+!   25-JAN-1990	V1.1-5	Madison	    Allow DEF FILE/USE="" to mean no file svc.
+!   05-FEB-1990	V1.2-6	Madison	    Add UUCP support.
+!   26-MAR-1990	V1.2-7	Madison	    Fix up SAVE, EXIT.
+!   10-APR-1990	V1.2-8	Madison	    Fix bug in CMD_REMPATH.
+!   25-SEP-1990	V1.3	Madison	    FS changes, SET, SHUTDOWN, RESET, bugfixes.
+!   02-OCT-1990	V1.3-1	Madison	    Fix bug in CMD_SET.
+!   03-OCT-1990	V1.3-2	Madison	    Really fix bug in CMD_SET.
+!   04-OCT-1990	V1.3-3	Madison	    FILE_SERVER fix & change, NOCOMD handling.
+!   05-OCT-1990	V1.3-4	Madison	    Fix minor parsing bug.
+!   08-OCT-1990	V1.3-5	Madison	    Big oops in CMD_DEFFSU.
+!   23-OCT-1990	V1.3-6	Madison	    Fix up /NODELAY_THRESHOLD.
+!   09-NOV-1990	V1.3-7	Madison	    SITE path was not being handled.
+!   05-DEC-1990	V1.4	Madison	    Fix DEF FILE/THRESH, add SET JNET.
+!   10-DEC-1990	V1.5	Madison	    Add /ADD, /REM to DEF LIST.
+!   12-DEC-1990	V1.5-1	Madison	    Add /FORWARD to DEF LIST.
+!   07-FEB-1991	V1.5-2	Madison	    Add /BSMTP_REPLY to SET JNET.
+!   11-FEB-1991	V1.6	Madison	    Further JNET, LOCAL, SMTP options.
+!   13-FEB-1991	V1.6-1	Madison	    Eliminate X- header references.
+!   13-FEB-1991	V1.6-2	Madison	    Make TOP=ALL, BOT=NOALL default for hdrs.
+!   16-OCT-1991	V1.7	Madison	    DNSMTP.  QUEUE cmds. DEFLIST, DEFPATH chgs.
+!   28-OCT-1991	V1.7-1	Madison	    SET SITE.
+!   04-NOV-1991	V1.7-2	Madison	    Fix SHOW SITE.
+!   11-NOV-1991	V1.7-3	Madision    Wasn't initing SITE_INFO; SET JNET/LENIENT.
+!   11-NOV-1991	V1.8	Madison	    Make /FILE=MX_DIR:MX_CONFIG the default.
+!   14-NOV-1991	V1.8-1	Madison	    Wasn't quite right about /FILE.
+!   05-DEC-1991	V1.8-2	Madison	    Add SHOW VERSION.
+!   03-JAN-1992	V1.8-3	Madison	    Fix MODIFY PATH.
+!   10-FEB-1992	V1.8-4	Madison	    Fix SHOW PATHS.
+!   14-FEB-1992	V1.9	Madison	    SET JNET update.
+!   18-FEB-1992	V2.0	Greer	    X25_SMTP support.
+!   21-FEB-1992	V2.0-1	Madison	    MX_DEVICE.
+!   08-APR-1992	V2.0-2	Madison	    Do change processing on one-shots.
+!   13-JAN-1993 V2.1	Goatley     DEFINE LIST /RETURN and DEFINE FILE /DESC.
+!   16-JAN-1993 V2.1-1	Goatley     Add /RECEIVED_REMOVE for DEFINE LIST.
+!   21-JAN-1993 V2.1-2	Goatley     Fixed some SIGNAL problems.
+!   27-JAN-1993 V2.1-3	Goatley     Renamed MCP help library to MX_MCP_HELPLIB.
+!   12-FEB-1993 V2.1-4	Goatley     Rename FLQ_ locks & logicals to MX_FLQ_.
+!   18-MAR-1993 V2.2	Goatley     Add /PRIVATE to DEFINE LIST.
+!   15-APR-1993 V2.2-1	Goatley     Add /MULTIPLE_FROM to SET LOCAL.
+!   29-AUG-1993 V2.3	Goatley     Add /MM_DELIVER to SET LOCAL.
+!   14-DEC-1993 V2.3-1	Goatley     Add /STRIP_HEADER=OTHER to DEFINE LIST.
+!   15-DEC-1993 V2.3-2	Goatley     Add call to MXCONFIG_INSERT_PATH.
+!   17-DEC-1993 V2.3-3	Goatley     Add /CC_POSTMASTER to SET LOCAL.
+!    7-JAN-1994 V2.3-4	Goatley     Modify CMD_DEFREW to verify "<>" presence.
+!				    Parse filenames to verify syntax.
+!   10-JAN-1994	V2.3-5	Goatley     Add /CASE_SENSITIVE to DEFINE LIST.
+!   20-JAN-1994 V2.3-6	Goatley     Add /OMIT_VMSMAIL_SENDER to SET ROUTER.
+!   14-MAR-1994 V2.3-7	Goatley	    Fix error setting /STRIP=OTHER.
+!   16-MAR-1994 V2.3-8	Goatley     Use default queue file name.
+!   15-JUN-1994 V2.4	Goatley     Check RFC821-compliance of rewrite rule.
+!    4-DEC-1995 V2.5	Goatley     Check for invalid chars in list name.
+!    5-DEC-1995 V2.5-1	Goatley     Check for existing FS/MLs when dfn'g either.
+!    7-OCT-1996 V2.6	Goatley     Add SPAWN, ATTACH.
+!   14-JAN-1997	V2.7	Madison	    Eliminate MDMLIB; add MLF_INFO.
+!   17-FEB-1997	V2.8	Madison	    Spam commands.
+!   02-APR-1997	V2.9	Madison	    SMTP/NORELAY, DEF LIST/RECIPIENT_MAX, DEF/REM LOCAL_DOMAIN.
+!    1-MAY-1997 V2.10	Goatley	    Add /HOSTNAME, /LIST_HEADERS, /XHEADERS to DEFINE LIST.
+!   07-MAY-1997	V2.10-1	Madison	    Fix missing INIT_DYNDESC in CMD_REMLCLDOM.
+!    9-MAY-1997 V2.10-2	Goatley	    Init dynamic string in CMD_REMSPAM.
+!    8-SEP-1997 V2.10-3	Goatley	    Allow multiple addrs for aliases.
+!    2-OCT-1997 V2.10-4	Goatley	    Add /CC_POST_ERRORS, /SUBJECT_PREFIX to
+!				    CMD_DEFLIST.
+!   05-OCT-1997	V2.11	Madison	    Add SET SMTP/VALIDATE_SENDER_DOMAIN.
+!    9-OCT-1997 V2.11-1	Goatley	    Call GET_CMD with no args to init SMG$.
+!   21-NOV-1997 V2.11-2	Goatley     Add /[NO]QP_DECODE to SET LOCAL.
+!   24-DEC-1997	V2.11-3	Madison	    Fix MODIFY LIST/PROTECTION.
+!   19-APR-1998	V2.12	Madison	    Add SET LOCAL/[NO]DISABLE_EXQUOTA.
+!   24-APR-1998	V3.0	Madison	    SET ROUTER/ACC, SET SMTP/RBL_CHECK.
+!   17-MAY-1998	V3.1	Madison	    Remove rejection stuff.
+!   09-JUN-1998	V3.2	Madison	    Add SMTP relay info.
+!   15-JUN-1998	V3.2-1	Madison	    RELAY kwd renamed to INSIDE_NETWORK_ADDRESS.
+!   26-JUN-1998	V3.2-2	Madison	    Add /RELAY_ALLOWED qualifier to DEFINE INSIDE.
+!   15-AUG-1998	V3.3	Madison	    Add MODIFY INSIDE_NETWORK_ADDRESS.
+!   27-AUG-1998	V3.4	Madison	    Add holding queues.
+!   30-JAN-2000	V3.4-1	Madison	    More holding queues.
+!   25-NOV-2000	V3.5	Madison	    Add mailing list ignore settings; remove Jnet support, etc.
+!   10-DEC-2000	V3.5-1	Madison	    Make sure RBL queue is initialized.
+!   22-DEC-2000	V3.6	Madison	    /BRIEF for mailing list display
+!   14-FEB-2002 V3.7    Madison     Add SET SMTP/NOPERCENT, DEF LIST/REQ/CONF, regex
+!   03-Feb-2008 V4.0    Madison     Remove XSMTP support.
+!   12-Mar-2012 V4.1    Sneddon	    Add SET SMTP/[NO]TLS
+!--
+
+    LIBRARY 'SYS$LIBRARY:STARLET';
+    LIBRARY 'MX_SRC_COMMON:MX';
+    LIBRARY 'MX_SRC_COMMON:MX_LCLDEFS';
+    LIBRARY 'MX_SRC_COMMON:REGEX';
+    LIBRARY 'MCP';
+
+    FORWARD ROUTINE
+    	MCP,
+    	MCP_HANDLER,
+    	CMD_EXIT,
+    	CMD_QUIT,
+    	CMD_HELP,
+    	CMD_DEFREW,
+    	CMD_DEFALIAS,
+    	CMD_DEFPATH,
+    	CMD_DEFLIST,
+    	CMD_DEFSYSU,
+    	CMD_DEFFSU,
+    	CMD_DEFLCLDOM,
+    	CMD_DEFRELAY,
+    	CMD_REMREW,
+    	CMD_REMALIAS,
+    	CMD_REMPATH,
+    	CMD_REMLIST,
+    	CMD_REMFSU,
+    	CMD_REMLCLDOM,
+    	CMD_REMRELAY,
+    	CMD_SET,
+    	CMD_SHOW,
+    	ALT_SHOW_OUTPUT,
+    	CMD_SAVE,
+	parse_filename,
+	parse_rewrite_rule,
+    	ipaddr_strtonum;
+
+    EXTERNAL ROUTINE
+    	GET_CMD,
+    	STRIP,
+    	LOAD_MXCONFIG,
+    	SAVE_MXCONFIG,
+	MXCONFIG_INSERT_PATH : NOVALUE,
+    	G_HAT (PARSE_MBOX, PARSE821, MEM_GETTXT),
+    	G_HAT (LIB$GET_FOREIGN, STR$CASE_BLIND_COMPARE, STR$TRIM, STR$LEFT,
+    	    STR$FIND_FIRST_NOT_IN_SET, STR$CONCAT, STR$UPCASE, STR$RIGHT,
+    	    LIB$SUB_TIMES, LIB$CONVERT_DATE_STRING, LIB$CVT_DTB,
+	    LIB$SPAWN, LIB$ATTACH, OTS$CVT_TZ_L, LIB$ANALYZE_SDESC);
+
+    EXTERNAL
+    	MCP_CMD_CLD, MCP_CLD;
+
+    EXTERNAL LITERAL
+    	MCP__NOMATCH, MCP__ALREADY, MCP__PRSPECERR, MCP__NORDCFG,
+    	MCP__READCFG, MCP__NOWRTCFG, MCP__WROTECFG, CLI$_NOCOMD,
+    	MCP__NOOPNOUT, MCP__NOOWNER, MCP__INVADDR, MCP__INVROOT,
+	MCP__INVREWRULE, MCP__INVFILNAM, MCP__INV821ADDR, MCP__INVLSTNAM,
+    	MCP__INVRCPMAX, MCP__ADTOOLONG, MCP__INVHOLDQ, MCP__INVMAXMSGSZ,
+        MCP__INVREGEX;
+
+    GLOBAL
+    	RWRULES	    	: QUEDEF,
+    	PATHLIST    	: QUEDEF,
+    	ALIASES	    	: QUEDEF,
+    	MLISTS	    	: QUEDEF,
+    	SYSUSERS    	: QUEDEF,
+    	FSRVQUE   	: QUEDEF,
+    	LCLDOMS	    	: QUEDEF,
+    	SMTP_INFO   	: SMTPDEF,
+    	ROUTER_INFO 	: ROUTERDEF,
+    	LOCAL_INFO  	: LOCALDEF,
+    	DNSMTP_INFO 	: DNSMTPDEF,
+    	SITE_INFO   	: SITEDEF,
+    	MLF_INFO    	: MLFDEF,
+    	RELAYQUE    	: QUEDEF,
+    	CFG_CHANGED 	: INITIAL (0),
+    	CFGFILE	    	: BLOCK [DSC$K_S_BLN,BYTE],
+    	QUE_FILE    	: BLOCK [DSC$K_S_BLN,BYTE];
+
+    OWN
+    	SHOW_FAB    : $FAB_DECL,
+    	SHOW_RAB    : $RAB_DECL,
+	jpi_curpriv	: VECTOR [2,LONG],
+	jpi_procpriv	: VECTOR [2,LONG];
+
+    BIND
+	verb_d			= %ASCID'$VERB',
+	null_d			= %ASCID'<>',
+	atsign_d		= %ASCID'@',
+	address_d		= %ASCID'ADDRESS',
+	aliasadr_d		= %ASCID'ALIASADR',
+	begin_send_period_d	= %ASCID'BEGIN_SEND_PERIOD',
+	case_sensitive_d	= %ASCID'CASE_SENSITIVE',
+	cmd_d			= %ASCID'CMD',
+	command_d		= %ASCID'COMMAND',
+	default_d		= %ASCID'DEFAULT',
+	delay_threshold_d	= %ASCID'DELAY_THRESHOLD',
+	description_d		= %ASCID'DESCRIPTION',
+	digest_d		= %ASCID'DIGEST',
+	domain_d		= %ASCID'DOMAIN',
+	dompart_d		= %ASCID'DOMPART',
+	end_send_period_d	= %ASCID'END_SEND_PERIOD',
+	errors_to_d		= %ASCID'ERRORS_TO',
+	file_d			= %ASCID'FILE',
+	filespec_d		= %ASCID'FILESPEC',
+	fsname_d		= %ASCID'FSNAME',
+	hostname_d		= %ASCID'HOSTNAME',
+	host_limit_d		= %ASCID'HOST_LIMIT',
+	id_d			= %ASCID'IDENTIFICATION',
+    	inside_address_d    	= %ASCID'inside address',
+	lclname_d		= %ASCID'LCLNAME',
+	lclpart_d		= %ASCID'LCLPART',
+	lhs_d			= %ASCID'LHS',
+	list_headers_sub_d	= %ASCID'LIST_HEADERS.SUBSCRIBE',
+	list_headers_unsub_d	= %ASCID'LIST_HEADERS.UNSUBSCRIBE',
+	list_headers_help_d	= %ASCID'LIST_HEADERS.HELP',
+	listname_d		= %ASCID'LISTNAME',
+	log_d			= %ASCID'LOG',
+	mailing_list_d		= %ASCID'MAILING_LIST',
+	manager_d		= %ASCID'MANAGER',
+	mcp_prompt_d		= %ASCID'MCP> ',
+	moderator_d		= %ASCID'MODERATOR',
+	mx_config_d		= %ASCID'MX_DIR:MX_CONFIG',
+	no_d			= %ASCID'NO',
+	output_d		= %ASCID'OUTPUT',
+	owner_d			= %ASCID'OWNER',
+	p1_d			= %ASCID'P1',
+	parent_d		= %ASCID'PARENT',
+	pathname_d		= %ASCID'PATHNAME',
+	pattern_d		= %ASCID'PATTERN',
+	private_d		= %ASCID'PRIVATE',
+	protection_d		= %ASCID'PROTECTION',
+	recipient_maximum_d	= %ASCID'RECIPIENT_MAXIMUM',
+    	reject_d    	    	= %ASCID'REJECT',
+    	relay_allowed_d	    	= %ASCID'RELAY_ALLOWED',
+	reply_to_d		= %ASCID'REPLY_TO',
+	return_address_d	= %ASCID'RETURN_ADDRESS',
+	rhs_d			= %ASCID'RHS',
+	root_d			= %ASCID'ROOT',
+	route_d			= %ASCID'ROUTE',
+	rwedlp_d		= %ASCID'RWEDLP',
+	server_limit_d		= %ASCID'SERVER_LIMIT',
+	setopt_d		= %ASCID'SETOPT',
+	settings_d		= %ASCID'SETTINGS',
+	showopt_d		= %ASCID'SHOWOPT',
+	strip_header_d		= %ASCID'STRIP_HEADER',
+	subject_prefix_d	= %ASCID'SUBJECT_PREFIX',
+	mxcfg_d			= %ASCID'SYS$DISK:[].MXCFG' : BLOCK [,BYTE],
+	userlist_d		= %ASCID'USERLIST',
+	user_limit_d		= %ASCID'USER_LIMIT',
+	xheaders_d		= %ASCID'XHEADERS',
+	file_prompt		= %ASCID'_File: ',
+	domain_str_d		= %ASCID'domain',
+	file_server_str_d	= %ASCID'file server',
+	local_name_str_d	= %ASCID'local name',
+	mailing_list_str_d	= %ASCID'mailing list',
+	rewrite_rule_str_d	= %ASCID'rewrite rule',
+    	rejection_rule_str_d	= %ASCID'rejection rule',
+    	local_domain_str_d  	= %ASCID'local domain',
+	message_center_d	= %ASCID'message center',
+	archive_d		= %ASCID'ARCHIVE',
+	add_message_d		= %ASCID'ADD_MESSAGE',
+	forward_message_d	= %ASCID'FORWARD_MESSAGE',
+	remove_message_d	= %ASCID'REMOVE_MESSAGE',
+        confirm_message_d       = %ASCID'CONFIRMATION_MESSAGE',
+        request_confirm_d       = %ASCID'REQUEST_CONFIRMATION',
+        rqc_intvl_d             = %ASCID'REQUEST_CONFIRMATION.INTERVAL',
+        text_only_d             = %ASCID'TEXT_ONLY',
+        notify_d                = %ASCID'NOTIFY',
+	valid_listname_chars	= %ASCID'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789$-_';
+
+
+%SBTTL 'MCP'
+GLOBAL ROUTINE MCP =
+BEGIN
+!++
+! FUNCTIONAL DESCRIPTION:
+!
+!   MCP main routine
+!
+! RETURNS:  	cond_value, longword (unsigned), write only, by value
+!
+! PROTOTYPE:
+!
+!   MCP
+!
+! IMPLICIT INPUTS:  None.
+!
+! IMPLICIT OUTPUTS: None.
+!
+! COMPLETION CODES:
+!
+!   SS$_NORMAL:	    	normal successful completion.
+!
+! SIDE EFFECTS:
+!
+!   None.
+!--
+    LOCAL
+    	CMD 	: BLOCK [DSC$K_S_BLN,BYTE],
+    	STR 	: BLOCK [DSC$K_S_BLN,BYTE],
+    	INPFIL	: BLOCK [DSC$K_S_BLN,BYTE],
+	jpi_items	: $ITMLST_DECL (ITEMS=2),
+    	LOG,
+    	STATUS;
+    ENABLE
+    	MCP_HANDLER;
+
+    INIT_DYNDESC (CMD, INPFIL, CFGFILE, QUE_FILE);
+
+    STR$COPY_DX (QUE_FILE, %ASCID'');		!Let FLQ use default name
+
+    INIT_QUEUE (RWRULES, PATHLIST, ALIASES, MLISTS, SYSUSERS, FSRVQUE, LCLDOMS, RELAYQUE);
+
+    CH$FILL (%CHAR (0), SMTP_S_SMTPDEF, SMTP_INFO);
+    INIT_QUEUE (SMTP_INFO [SMTP_Q_RBLQUE]);
+    CH$FILL (%CHAR (0), LOCAL_S_LOCALDEF, LOCAL_INFO);
+    LOCAL_INFO [LOCAL_L_HDRTOP] = -1;
+    LOCAL_INFO [LOCAL_L_HDREND] = 0;
+    CH$FILL (%CHAR (0), ROUTER_S_ROUTERDEF, ROUTER_INFO);
+    CH$FILL (%CHAR (0), DNSMTP_S_DNSMTPDEF, DNSMTP_INFO);
+    CH$FILL (%CHAR (0), SITE_S_SITEDEF, SITE_INFO);
+    CH$FILL (%CHAR (0), MLF_S_MLFDEF, MLF_INFO);
+
+    $BINTIM (TIMBUF=%ASCID'0 00:30:00', TIMADR=SMTP_INFO [SMTP_Q_RETRY]);
+    CH$MOVE (8, SMTP_INFO [SMTP_Q_RETRY], LOCAL_INFO [LOCAL_Q_RETRY]);
+    CH$MOVE (8, SMTP_INFO [SMTP_Q_RETRY], DNSMTP_INFO [DNSMTP_Q_RETRY]);
+    CH$MOVE (8, SMTP_INFO [SMTP_Q_RETRY], SITE_INFO [SITE_Q_RETRY]);
+    SMTP_INFO [SMTP_L_MAXTRIES] = LOCAL_INFO [LOCAL_L_MAXTRIES] =
+    	DNSMTP_INFO [DNSMTP_L_MAXTRIES] = SITE_INFO [SITE_L_MAXTRIES] = 96;
+    SMTP_INFO [SMTP_L_MAXDNS] = 12;
+    ROUTER_INFO [ROUTER_V_PERCENT_HACK] = 0;
+
+    !
+    !  Get our privileges just in case MCP is installed with privileges
+    !  that we need to disable before any SPAWN.
+    !
+    $ITMLST_INIT (ITMLST = jpi_items,			!Initialize the item
+		(ITMCOD	= JPI$_PROCPRIV,
+		 BUFSIZ	= %ALLOCATION(jpi_procpriv),
+		 BUFADR	= jpi_procpriv),
+		(ITMCOD	= JPI$_CURPRIV,
+		 BUFSIZ	= %ALLOCATION(jpi_curpriv),
+		 BUFADR	= jpi_curpriv));
+    jpi_curpriv [0] = jpi_curpriv [1] = jpi_procpriv [0] =
+		jpi_procpriv [1] = 0;
+    $GETJPIW (ITMLST = jpi_items);
+
+    !
+    !  In case the user wants to SPAWN, we need to be able to disable any
+    !  privileges we weren't installed with.
+    !
+    ! PROCPRIV  points to the process-permanent privileges.  CURPRIV points to
+    ! the privileges currently enabled (including privileges belonging to  the
+    ! installed program).
+    !
+    ! We  want  to  disable  all  image privileges that are currently enabled.
+    ! This is accomplished by performing a complemented AND of the two  masks.
+    ! The  resulting  mask  in  CURPRIV is the mask of all privileges that the
+    ! program is installed with that do not really belong to us.
+    !
+    jpi_curpriv[0] = .jpi_curpriv[0] AND NOT(.jpi_procpriv[0]);
+    jpi_curpriv[1] = .jpi_curpriv[1] AND NOT(.jpi_procpriv[1]);
+
+    LOG = 0;
+    STATUS = LIB$GET_FOREIGN (CMD);
+    IF .STATUS AND .CMD [DSC$W_LENGTH] GTR 0 THEN
+    BEGIN
+    	STR$PREFIX (CMD, %ASCID'MCP ');
+    	CLI$DCL_PARSE (CMD, MCP_CMD_CLD, LIB$GET_FOREIGN, LIB$GET_FOREIGN);
+    	STATUS = CLI$PRESENT (file_d);
+    	IF .STATUS EQL CLI$_PRESENT THEN
+    	    CLI$GET_VALUE (file_d, INPFIL)
+    	ELSE IF .STATUS NEQ CLI$_NEGATED THEN
+    	    STR$COPY_DX (INPFIL, mx_config_d);
+    	IF CLI$PRESENT (cmd_d) EQL CLI$_PRESENT THEN
+    	    CLI$GET_VALUE (cmd_d, CMD)
+    	ELSE
+    	    FREE_STRINGS (CMD);
+    	LOG = CLI$PRESENT (log_d) EQL CLI$_PRESENT;
+    END
+    ELSE STR$COPY_DX (INPFIL, mx_config_d);
+
+    IF .INPFIL [DSC$W_LENGTH] GTR 0 THEN
+    BEGIN
+    	STATUS = LOAD_MXCONFIG (INPFIL, mxcfg_d, CFGFILE);
+    	IF NOT .STATUS THEN
+    	    SIGNAL (MCP__NORDCFG, 1, INPFIL, .STATUS)
+    	ELSE IF .LOG THEN
+    	    SIGNAL (MCP__READCFG, 1, CFGFILE);
+    	FREE_STRINGS (INPFIL);
+    END;
+
+    !Call to init SMG$ stuff only (to prevent accvio in CLI$DCL_PARSE)
+    status = GET_CMD();
+
+    IF .CMD [DSC$W_LENGTH] GTR 0 THEN
+    BEGIN
+    	STATUS = CLI$DCL_PARSE (CMD, MCP_CLD, GET_CMD, GET_CMD, mcp_prompt_d);
+    	IF .STATUS EQL RMS$_EOF THEN RETURN SS$_NORMAL;
+    	IF NOT .STATUS THEN RETURN (.STATUS OR STS$M_INHIB_MSG);
+    	STATUS = CLI$DISPATCH ();
+    	CMD_EXIT ();
+    	RETURN .STATUS;
+    END;
+
+    INIT_DYNDESC (STR);
+
+    WHILE 1 DO
+    BEGIN
+    	STATUS = GET_CMD (STR, mcp_prompt_d);
+    	IF .STATUS EQL RMS$_EOF THEN
+    	BEGIN
+    	    STATUS = CMD_EXIT ();
+    	    EXITLOOP;
+    	END;
+    	STRIP (CMD, STR);
+    	IF .CMD [DSC$W_LENGTH] GTR 0 THEN
+    	BEGIN
+    	    STATUS = CLI$DCL_PARSE (CMD, MCP_CLD, GET_CMD, GET_CMD,
+    	    	    	    	mcp_prompt_d);
+    	    IF .STATUS EQL RMS$_EOF THEN
+    	    	STATUS = CMD_EXIT ()
+    	    ELSE IF .STATUS THEN
+    	    	STATUS = CLI$DISPATCH ()
+	    ;
+!    	    ELSE SIGNAL (.STATUS);
+    	    IF .STATUS EQL RMS$_EOF THEN EXITLOOP;
+    	END;
+    END;
+
+    FREE_STRINGS (CMD, STR, CFGFILE, QUE_FILE);
+
+    SS$_NORMAL
+
+END; ! MCP
+
+%SBTTL 'MCP_HANDLER'
+GLOBAL ROUTINE MCP_HANDLER (SIG : REF VECTOR [,LONG],
+    	    	    MECH : REF VECTOR [,LONG], ENBL : REF VECTOR [,LONG]) =
+BEGIN
+!++
+! FUNCTIONAL DESCRIPTION:
+!
+!   Condition handler for MCP.
+!
+! RETURNS:  	cond_value, longword (unsigned), write only, by value
+!
+! PROTOTYPE:
+!
+!   MCP_HANDLER
+!
+! IMPLICIT INPUTS:  None.
+!
+! IMPLICIT OUTPUTS: None.
+!
+! COMPLETION CODES:
+!
+!   SS$_NORMAL:	    	normal successful completion.
+!
+! SIDE EFFECTS:
+!
+!   None.
+!--
+    BIND
+    	COND = SIG [1] : BLOCK [,BYTE];
+
+    EXTERNAL LITERAL
+    	CLI$_ABSENT;
+
+    SELECTONE .COND OF
+    SET
+    	[SS$_UNWIND, CLI$_ABSENT] : SS$_NORMAL;
+    	[OTHERWISE] : SS$_RESIGNAL;
+    TES
+
+END;
+
+%SBTTL 'CMD_EXIT'
+GLOBAL ROUTINE CMD_EXIT =
+BEGIN
+!++
+! FUNCTIONAL DESCRIPTION:
+!
+!   MCP EXIT command.  Saves current configuration and returns RMS$_EOF
+!   (as if user pressed CTRL/Z).
+!
+! RETURNS:  	cond_value, longword (unsigned), write only, by value
+!
+! PROTOTYPE:
+!
+!   CMD_EXIT
+!
+! IMPLICIT INPUTS:  None.
+!
+! IMPLICIT OUTPUTS: None.
+!
+! COMPLETION CODES:
+!
+!   SS$_NORMAL:	    	normal successful completion.
+!
+! SIDE EFFECTS:
+!
+!   None.
+!--
+    LOCAL
+    	RSPEC	: BLOCK [DSC$K_S_BLN,BYTE],
+    	FSPEC	: BLOCK [DSC$K_S_BLN,BYTE],
+    	FAB 	: $FAB_DECL,
+    	NAM 	: $NAM_DECL,
+    	EBUF	: VECTOR [255,BYTE],
+    	STATUS;
+
+    IF NOT .CFG_CHANGED THEN RETURN RMS$_EOF;
+
+    IF .CFGFILE [DSC$W_LENGTH] EQL 0 THEN
+    BEGIN
+    	LIB$PUT_OUTPUT (%ASCID %STRING ('Enter file name to save to,',
+    	    ' or press RETURN to quit without saving:'));
+    	STATUS = GET_CMD (CFGFILE, file_prompt);
+    	IF .CFGFILE [DSC$W_LENGTH] EQL 0 THEN RETURN RMS$_EOF;
+    END;
+
+    INIT_DYNDESC (RSPEC, FSPEC);
+    $FAB_INIT (FAB=FAB, NAM=NAM, FNA=.CFGFILE [DSC$A_POINTER],
+    	    	FNS=.CFGFILE [DSC$W_LENGTH], DNA=.mxcfg_d [DSC$A_POINTER],
+    	        DNS=.mxcfg_d [DSC$W_LENGTH]);
+    $NAM_INIT (NAM=NAM, ESA=EBUF, ESS=%ALLOCATION (EBUF), NOP=SYNCHK);
+    IF $PARSE (FAB=FAB) THEN
+    	STR$COPY_R (FSPEC, %REF (.NAM [NAM$B_ESL]-.NAM [NAM$B_VER]), EBUF)
+    ELSE
+    	STR$COPY_DX (FSPEC, CFGFILE);
+
+    STATUS = SAVE_MXCONFIG (FSPEC, RSPEC);
+    IF NOT .STATUS THEN
+    BEGIN
+    	SIGNAL (MCP__NOWRTCFG, 1, FSPEC);
+    	FREE_STRINGS (FSPEC);
+    	RETURN SS$_NORMAL
+    END
+    ELSE
+    	SIGNAL (MCP__WROTECFG, 1, RSPEC);
+
+    FREE_STRINGS (FSPEC, RSPEC);
+
+    RMS$_EOF
+
+END; ! CMD_EXIT
+
+%SBTTL 'CMD_QUIT'
+GLOBAL ROUTINE CMD_QUIT =
+BEGIN
+!++
+! FUNCTIONAL DESCRIPTION:
+!
+!   MCP QUIT command, for leaving MCP without saving new configuration.
+!   If configuration has changed
+!
+! RETURNS:  	cond_value, longword (unsigned), write only, by value
+!
+! PROTOTYPE:
+!
+!   CMD_QUIT
+!
+! IMPLICIT INPUTS:  None.
+!
+! IMPLICIT OUTPUTS: None.
+!
+! COMPLETION CODES:
+!
+!   SS$_NORMAL:	    	normal successful completion.
+!
+! SIDE EFFECTS:
+!
+!   None.
+!--
+    LOCAL
+    	STR : BLOCK [DSC$K_S_BLN,BYTE],
+    	STATUS;
+
+    INIT_DYNDESC (STR);
+
+    IF .CFG_CHANGED THEN
+    BEGIN
+    	STATUS = GET_CMD (STR, %ASCID %STRING ('Configuration has been ',
+    	    'changed.  Quit without saving? [No]: '));
+    	IF NOT .STATUS OR .STR [DSC$W_LENGTH] EQL 0 THEN
+    	    STATUS = SS$_NORMAL
+    	ELSE
+    	BEGIN
+    	    LOCAL CH : BYTE;
+    	    CH = CH$RCHAR (.STR [DSC$A_POINTER]);
+    	    IF .CH NEQ 'Y' AND .CH NEQ 'y' THEN STATUS = SS$_NORMAL
+    	    ELSE STATUS = RMS$_EOF
+    	END;
+    END
+    ELSE STATUS = RMS$_EOF;
+
+    FREE_STRINGS (STR);
+
+    .STATUS
+
+END; ! CMD_QUIT
+
+%SBTTL 'CMD_HELP'
+GLOBAL ROUTINE CMD_HELP =
+BEGIN
+!++
+! FUNCTIONAL DESCRIPTION:
+!
+!   MCP HELP command.
+!
+! RETURNS:  	cond_value, longword (unsigned), write only, by value
+!
+! PROTOTYPE:
+!
+!   CMD_HELP
+!
+! IMPLICIT INPUTS:  None.
+!
+! IMPLICIT OUTPUTS: None.
+!
+! COMPLETION CODES:
+!
+!   SS$_NORMAL:	    	normal successful completion.
+!
+! SIDE EFFECTS:
+!
+!   None.
+!--
+    LOCAL
+    	TOPIC	: BLOCK [DSC$K_S_BLN,BYTE],
+    	STATUS;
+
+    INIT_DYNDESC (TOPIC);
+    STATUS = CLI$GET_VALUE (%ASCID'HELP_REQUEST', TOPIC);
+    LBR$OUTPUT_HELP (LIB$PUT_OUTPUT, 0, TOPIC, %ASCID'MX_MCP_HELPLIB',
+    	%REF (HLP$M_PROMPT), GET_CMD);
+
+    SS$_NORMAL
+
+END; ! CMD_HELP
+
+%SBTTL 'CMD_DEFREW'
+GLOBAL ROUTINE CMD_DEFREW =
+BEGIN
+!++
+! FUNCTIONAL DESCRIPTION:
+!
+!   MCP DEFINE/MODIFY REWRITE_RULE command.
+!
+! RETURNS:  	cond_value, longword (unsigned), write only, by value
+!
+! PROTOTYPE:
+!
+!   CMD_DEFREW
+!
+! IMPLICIT INPUTS:  None.
+!
+! IMPLICIT OUTPUTS: None.
+!
+! COMPLETION CODES:
+!
+!   SS$_NORMAL:	    	normal successful completion.
+!
+! SIDE EFFECTS:
+!
+!   None.
+!--
+    LOCAL
+    	TEMPLATE    : RULEDEF,
+    	R   	    : REF RULEDEF,
+    	STR 	    : BLOCK [DSC$K_S_BLN,BYTE],
+        dsc1        : BLOCK [DSC$K_S_BLN,BYTE],
+    	MATCH,
+    	MODIFY;
+
+    CH$FILL (%CHAR (0), RULE_S_RULEDEF, TEMPLATE);
+    INIT_DYNDESC (STR);
+    CLI$GET_VALUE (verb_d, STR);
+    MODIFY = CH$RCHAR (.STR [DSC$A_POINTER]) EQL %C'M';
+
+    CLI$GET_VALUE (lhs_d, str);
+    TEMPLATE [RULE_A_LHS] = MEM_GETTXT (.str [DSC$W_LENGTH], .str [DSC$A_POINTER]);
+
+    CLI$GET_VALUE (rhs_d, str);
+    TEMPLATE [RULE_A_RHS] = MEM_GETTXT (.str [DSC$W_LENGTH], .str [DSC$A_POINTER]);
+
+    TEMPLATE [RULE_V_REGEX] = CLI$PRESENT (%ASCID'REGEX') EQL CLI$_PRESENT;
+    FREE_STRINGS (str);
+
+    IF NOT .template [RULE_V_REGEX] THEN
+    BEGIN
+        BIND
+            lhs = template [RULE_A_LHS] : REF TXTDEF,
+            rhs = template [RULE_A_RHS] : REF TXTDEF;
+
+        IF (.lhs [TXT_W_LEN] NEQU 0) AND (
+	    (CH$RCHAR (lhs [TXT_T_TEXT]) NEQU %C'<') OR
+	    (CH$RCHAR (CH$PLUS (lhs [TXT_T_TEXT], .lhs [TXT_W_LEN] - 1)) NEQU %C'>'))
+	THEN
+	BEGIN
+	    SIGNAL (MCP__INVREWRULE, 2, .lhs [TXT_W_LEN], lhs [TXT_T_TEXT]);
+            FREETXT (lhs, rhs);
+	    RETURN SS$_NORMAL;
+	END;
+
+        IF (.rhs [TXT_W_LEN] NEQU 0) AND (
+	    (CH$RCHAR (rhs [TXT_T_TEXT]) NEQU %C'<') OR
+	    (CH$RCHAR (CH$PLUS (rhs [TXT_T_TEXT], .rhs [TXT_W_LEN] - 1)) NEQU %C'>'))
+	THEN
+	BEGIN
+	    SIGNAL (MCP__INVREWRULE, 2, .rhs [TXT_W_LEN], rhs [TXT_T_TEXT]);
+            FREETXT (lhs, rhs);
+	    RETURN SS$_NORMAL;
+	END;
+
+        IF NOT (parse_rewrite_rule (.rhs [TXT_W_LEN], rhs [TXT_T_TEXT])) THEN
+	BEGIN
+	    SIGNAL  (MCP__INV821ADDR, 2, .rhs [TXT_W_LEN], rhs [TXT_T_TEXT]);
+            FREETXT (lhs, rhs);
+	    RETURN (SS$_NORMAL);
+	END;
+        INIT_SDESC (dsc1, .lhs [TXT_W_LEN], lhs [TXT_T_TEXT]);
+    END
+    ELSE
+    BEGIN
+        BIND
+            lhs = template [RULE_A_LHS] : REF TXTDEF;
+
+        LOCAL
+            regex   : REGEXDEF,
+            sdsc    : BLOCK [DSC$K_S_BLN,BYTE],
+            errbuf  : VECTOR [64,BYTE],
+            err,
+            errlen;
+
+        INIT_SDESC (sdsc, .lhs [TXT_W_LEN], lhs [TXT_T_TEXT]);
+        IF (err = MX_REGCOMP (regex, sdsc, REG_M_EXTENDED OR REG_M_ICASE)) NEQ 0 THEN
+        BEGIN
+            errlen = MX_REGERROR (.err, regex, errbuf, %ALLOCATION (errbuf));
+	    SIGNAL (MCP__INVREGEX, 2, .errlen, errbuf);
+            FREETXT (lhs, template [RULE_A_RHS]);
+	    RETURN SS$_NORMAL;
+        END
+        ELSE MX_REGFREE (regex);
+
+        INIT_SDESC (dsc1, .lhs [TXT_W_LEN], lhs [TXT_T_TEXT]);
+    END;
+
+    R = .RWRULES [QUE_L_HEAD];
+    WHILE .R NEQA RWRULES [QUE_L_HEAD] DO
+    BEGIN
+        BIND
+            lhs = r [RULE_A_LHS] : REF TXTDEF;
+        LOCAL
+            dsc2    : BLOCK [DSC$K_S_BLN,BYTE];
+        INIT_SDESC (dsc2, .lhs [TXT_W_LEN], lhs [TXT_T_TEXT]);
+    	IF STR$CASE_BLIND_COMPARE (DSC1, DSC2) EQL 0 THEN
+    	    EXITLOOP
+    	ELSE R = .R [RULE_L_FLINK];
+    END;
+
+    MATCH = .R NEQ RWRULES [QUE_L_HEAD];
+
+    IF .MODIFY THEN
+    	IF .MATCH THEN
+    	BEGIN
+    	    CFG_CHANGED = 1;
+            R [RULE_V_REGEX] = .template [RULE_V_REGEX];
+            FREETXT (R [RULE_A_RHS]);
+            R [RULE_A_RHS] = .template [RULE_A_RHS];
+            FREETXT (template [RULE_A_LHS]);
+    	END
+    	ELSE SIGNAL (MCP__NOMATCH, 1, rewrite_rule_str_d)
+    ELSE
+    	IF NOT .MATCH THEN
+    	BEGIN
+    	    CFG_CHANGED = 1;
+    	    LIB$GET_VM (%REF (RULE_S_RULEDEF), R);
+    	    CH$MOVE (RULE_S_RULEDEF, TEMPLATE, .R);
+    	    INSQUE (.R, .RWRULES [QUE_L_TAIL]);
+    	END
+    	ELSE
+        BEGIN
+            FREETXT (template [RULE_A_LHS], template [RULE_A_RHS]);
+            SIGNAL (MCP__ALREADY, 1, rewrite_rule_str_d);
+        END;
+
+    SS$_NORMAL
+
+END; ! CMD_DEFREW
+
+%SBTTL 'CMD_DEFALIAS'
+GLOBAL ROUTINE CMD_DEFALIAS =
+BEGIN
+!++
+! FUNCTIONAL DESCRIPTION:
+!
+!   MCP DEFINE/MODIFY ALIAS command.
+!
+! RETURNS:  	cond_value, longword (unsigned), write only, by value
+!
+! PROTOTYPE:
+!
+!   CMD_DEFALIAS
+!
+! IMPLICIT INPUTS:  None.
+!
+! IMPLICIT OUTPUTS: None.
+!
+! COMPLETION CODES:
+!
+!   SS$_NORMAL:	    	normal successful completion.
+!
+! SIDE EFFECTS:
+!
+!   None.
+!--
+    LOCAL
+    	TEMPLATE    : RULEPRE53DEF,
+    	R   	    : REF RULEPRE53DEF,
+    	DSC1	    : BLOCK [DSC$K_S_BLN,BYTE],
+    	DSC2	    : BLOCK [DSC$K_S_BLN,BYTE],
+    	STR 	    : BLOCK [DSC$K_S_BLN,BYTE],
+    	addrlist    : BLOCK [DSC$K_S_BLN,BYTE],
+    	LEN 	    : WORD,
+    	MATCH,
+    	MODIFY;
+
+    CH$FILL (%CHAR (0), RULEPRE53_S_RULEPRE53DEF, TEMPLATE);
+    INIT_DYNDESC (STR, addrlist);
+    CLI$GET_VALUE (verb_d, STR);
+    MODIFY = CH$RCHAR (.STR [DSC$A_POINTER]) EQL %C'M';
+    FREE_STRINGS (STR);
+
+    DSC1 [DSC$B_DTYPE] = DSC2 [DSC$B_DTYPE] = DSC$K_DTYPE_T;
+    DSC1 [DSC$B_CLASS] = DSC2 [DSC$B_CLASS] = DSC$K_CLASS_S;
+    DSC1 [DSC$W_LENGTH] = RULEPRE53_S_LHS;
+    DSC1 [DSC$A_POINTER] = TEMPLATE [RULEPRE53_T_LHS];
+    CLI$GET_VALUE (lclname_d, DSC1, LEN);
+    TEMPLATE [RULEPRE53_W_LHS] = DSC1 [DSC$W_LENGTH] = .LEN;
+
+    template [RULEPRE53_W_RHS] = 0;
+    WHILE (CLI$GET_VALUE (aliasadr_d, str)) DO
+	BEGIN
+	IF (.addrlist [DSC$W_LENGTH] EQLU 0)
+	THEN
+	    STR$COPY_DX (addrlist, str)
+	ELSE
+	    STR$CONCAT (addrlist, addrlist, %ASCID %CHAR(0), str);
+	END;
+
+    IF (.addrlist [DSC$W_LENGTH] GTRU RULEPRE53_S_RHS)
+    THEN
+	BEGIN
+	SIGNAL (MCP__ADTOOLONG, 1, RULEPRE53_S_RHS);
+	FREE_STRINGS (str, addrlist);
+	RETURN (SS$_NORMAL);
+	END;
+
+    template [RULEPRE53_W_RHS] = .addrlist [DSC$W_LENGTH];
+    CH$MOVE (.addrlist [DSC$W_LENGTH], .addrlist [DSC$A_POINTER],
+		template [RULEPRE53_T_RHS]);
+    FREE_STRINGS (str, addrlist);
+
+!    DSC2 [DSC$W_LENGTH] = RULEPRE53_S_RHS;
+!    DSC2 [DSC$A_POINTER] = TEMPLATE [RULEPRE53_T_RHS];
+!    CLI$GET_VALUE (aliasadr_d, DSC2, LEN);
+!    TEMPLATE [RULEPRE53_W_RHS] = .LEN;
+
+    R = .ALIASES [QUE_L_HEAD];
+    WHILE .R NEQA ALIASES [QUE_L_HEAD] DO
+    BEGIN
+    	DSC2 [DSC$A_POINTER] = R [RULEPRE53_T_LHS];
+    	DSC2 [DSC$W_LENGTH] = .R [RULEPRE53_W_LHS];
+    	IF STR$CASE_BLIND_COMPARE (DSC1, DSC2) EQL 0 THEN EXITLOOP
+    	ELSE R = .R [RULEPRE53_L_FLINK];
+    END;
+
+    MATCH = .R NEQ ALIASES [QUE_L_HEAD];
+
+    IF .MODIFY THEN
+    	IF .MATCH THEN
+    	BEGIN
+    	    CFG_CHANGED = 1;
+    	    R [RULEPRE53_W_RHS] = .TEMPLATE [RULEPRE53_W_RHS];
+    	    CH$MOVE (.R [RULEPRE53_W_RHS], TEMPLATE [RULEPRE53_T_RHS], R [RULEPRE53_T_RHS]);
+    	END
+    	ELSE SIGNAL (MCP__NOMATCH, 1, local_name_str_d)
+    ELSE
+    	IF NOT .MATCH THEN
+    	BEGIN
+    	    CFG_CHANGED = 1;
+    	    LIB$GET_VM (%REF (RULEPRE53_S_RULEPRE53DEF), R);
+    	    CH$MOVE (RULEPRE53_S_RULEPRE53DEF, TEMPLATE, .R);
+    	    INSQUE (.R, .ALIASES [QUE_L_TAIL]);
+    	END
+    	ELSE SIGNAL (MCP__ALREADY, 1, local_name_str_d);
+
+    SS$_NORMAL
+
+END; ! CMD_DEFALIAS
+
+%SBTTL 'CMD_DEFPATH'
+GLOBAL ROUTINE CMD_DEFPATH =
+BEGIN
+!++
+! FUNCTIONAL DESCRIPTION:
+!
+!   MCP DEFINE/MODIFY PATH command.
+!
+! RETURNS:  	cond_value, longword (unsigned), write only, by value
+!
+! PROTOTYPE:
+!
+!   CMD_DEFPATH
+!
+! IMPLICIT INPUTS:  None.
+!
+! IMPLICIT OUTPUTS: None.
+!
+! COMPLETION CODES:
+!
+!   SS$_NORMAL:	    	normal successful completion.
+!
+! SIDE EFFECTS:
+!
+!   None.
+!--
+
+    TABLE (PATH, 'LOCAL', 'SMTP', 'SITE', 'DECNET_SMTP',
+		 'HOLDING_QUEUE');
+
+    LOCAL
+    	TEMPLATE    : PATHDEF,
+    	R   	    : REF PATHDEF,
+    	DSC1	    : BLOCK [DSC$K_S_BLN,BYTE],
+    	DSC2	    : BLOCK [DSC$K_S_BLN,BYTE],
+    	STR 	    : BLOCK [DSC$K_S_BLN,BYTE],
+    	LEN 	    : WORD,
+    	STATUS,
+    	PATHID,
+    	MATCH,
+    	MODPATH,
+    	MODROUTE,
+    	MODIFY;
+
+    CH$FILL (%CHAR (0), PATH_S_PATHDEF, TEMPLATE);
+    INIT_DYNDESC (STR);
+    CLI$GET_VALUE (verb_d, STR);
+    MODIFY = CH$RCHAR (.STR [DSC$A_POINTER]) EQL %C'M';
+    MODROUTE = MODPATH = 0;
+
+    IF CLI$PRESENT (pathname_d) EQL CLI$_PRESENT THEN
+    BEGIN
+    	LOCAL j;
+    	CLI$GET_VALUE (pathname_d, STR);
+    	j = STR$POSITION (str, %ASCID'=');
+    	IF .j EQL 0 THEN j = STR$POSITION (str, %ASCID':');
+    	IF .j NEQ 0 THEN STR$LEFT (str, str, %REF (.j-1));
+    	PATHID = (INCR I FROM 0 TO PATH_COUNT-1 DO
+    	    	    IF STR$POSITION (.PATH [.I], STR) EQL 1 THEN EXITLOOP .I);
+
+    	TEMPLATE [PATH_W_PATH] =
+    	    (SELECTONE .PATHID OF
+    	    	SET
+    	    	[0] : MX_K_PATH_LOCAL;
+    	    	[1] : MX_K_PATH_SMTP;
+    	    	[2] : MX_K_PATH_SITE;
+    	    	[3] : MX_K_PATH_DNSMTP;
+    	    	[4] : BEGIN
+    	    	    	LOCAL which;
+    	    	    	CLI$GET_VALUE (%ASCID'HOLDING_QUEUE', str);
+    	    	    	LIB$CVT_DTB (.str [DSC$W_LENGTH], .str [DSC$A_POINTER], which);
+    	    	    	IF .which LSSU 1 OR .which GTRU MX_K_HOLDQ_MAX THEN
+    	    	    	BEGIN
+    	    	    	    SIGNAL (MCP__INVHOLDQ, 1, .which);
+    	    	    	    FREE_STRINGS (str);
+    	    	    	    RETURN SS$_NORMAL;
+    	    	    	END;
+    	    	    	MX_K_PATH_HOLDQ_BASE+(.which-1)
+    	    	      END;
+    	    	TES);
+    	FREE_STRINGS (STR);
+    	MODPATH = 1;
+    END;
+
+    DSC1 [DSC$B_DTYPE] = DSC2 [DSC$B_DTYPE] = DSC$K_DTYPE_T;
+    DSC1 [DSC$B_CLASS] = DSC2 [DSC$B_CLASS] = DSC$K_CLASS_S;
+
+    STATUS = CLI$PRESENT (route_d);
+    IF .STATUS EQL CLI$_PRESENT THEN
+    BEGIN
+    	DSC1 [DSC$W_LENGTH] = PATH_S_PARAM;
+    	DSC1 [DSC$A_POINTER] = TEMPLATE [PATH_T_PARAM];
+    	CLI$GET_VALUE (route_d, DSC1, LEN);
+    	TEMPLATE [PATH_W_PARAM] = .LEN;
+    	MODROUTE = 1;
+    END
+    ELSE IF .STATUS EQL CLI$_NEGATED THEN MODROUTE = 1;
+
+    DSC1 [DSC$W_LENGTH] = PATH_S_DOMAIN;
+    DSC1 [DSC$A_POINTER] = TEMPLATE [PATH_T_DOMAIN];
+    CLI$GET_VALUE (domain_d, DSC1, LEN);
+    TEMPLATE [PATH_W_DOMAIN] = DSC1 [DSC$W_LENGTH] = .LEN;
+
+    R = .PATHLIST [QUE_L_HEAD];
+    WHILE .R NEQA PATHLIST [QUE_L_HEAD] DO
+    BEGIN
+    	DSC2 [DSC$A_POINTER] = R [PATH_T_DOMAIN];
+    	DSC2 [DSC$W_LENGTH] = .R [PATH_W_DOMAIN];
+    	IF STR$CASE_BLIND_COMPARE (DSC1, DSC2) EQL 0 THEN EXITLOOP
+    	ELSE R = .R [PATH_L_FLINK];
+    END;
+
+    MATCH = .R NEQ PATHLIST [QUE_L_HEAD];
+
+    IF .MODIFY THEN
+    	IF .MATCH THEN
+    	BEGIN
+    	    CFG_CHANGED = 1;
+            ! If changing path, assume /ROUTE change too.
+            MODROUTE = .MODROUTE OR (.MODPATH AND .R [PATH_W_PATH] NEQU .TEMPLATE [PATH_W_PATH]);
+    	    IF .MODPATH THEN R [PATH_W_PATH] = .TEMPLATE [PATH_W_PATH];
+    	    IF .MODROUTE THEN
+    	    BEGIN
+    	    	R [PATH_W_PARAM] = .TEMPLATE [PATH_W_PARAM];
+                IF .R [PATH_W_PARAM] NEQU 0 THEN
+    	    	    CH$MOVE (.R [PATH_W_PARAM], TEMPLATE [PATH_T_PARAM],
+    	    	              R [PATH_T_PARAM]);
+    	    END;
+    	END
+    	ELSE SIGNAL (MCP__NOMATCH, 1, domain_str_d)
+    ELSE
+    	IF NOT .MATCH THEN
+    	BEGIN
+    	    CFG_CHANGED = 1;
+    	    LIB$GET_VM (%REF (PATH_S_PATHDEF), R);
+    	    CH$MOVE (PATH_S_PATHDEF, TEMPLATE, .R);
+	    MXCONFIG_INSERT_PATH (r, pathlist);
+    	END
+    	ELSE SIGNAL (MCP__ALREADY, 1, domain_str_d);
+
+    SS$_NORMAL
+
+END; ! CMD_DEFPATH
+
+%SBTTL 'CMD_DEFLIST'
+GLOBAL ROUTINE CMD_DEFLIST =
+BEGIN
+!++
+! FUNCTIONAL DESCRIPTION:
+!
+!   MCP DEFINE/MODIFY LIST command.
+!
+! RETURNS:  	cond_value, longword (unsigned), write only, by value
+!
+! PROTOTYPE:
+!
+!   CMD_DEFLIST
+!
+! IMPLICIT INPUTS:  None.
+!
+! IMPLICIT OUTPUTS: None.
+!
+! COMPLETION CODES:
+!
+!   SS$_NORMAL:	    	normal successful completion.
+!
+! SIDE EFFECTS:
+!
+!   None.
+!--
+    TABLE (RTOKWD, 'SENDER', 'LIST', 'NOSENDER', 'NOLIST');
+    TABLE (CLSNAM, 'PROTECTION.SYSTEM', 'PROTECTION.OWNER',
+    	'PROTECTION.GROUP', 'PROTECTION.WORLD');
+    TABLE (STRIPKWD, 'RECEIVED', 'NORECEIVED', 'OTHER', 'NOOTHER');
+    TABLE (SETTINGKWD, 'MAIL', 'NOMAIL', 'REPRO', 'NOREPRO', 'DIGEST',
+		'NODIGEST', 'CONCEAL', 'NOCONCEAL', 'POST', 'NOPOST', 'DEFAULT');
+    TABLE (JUNKKWD, 'LOW', 'MEDIUM', 'HIGH');
+    TABLE (NTFYOPTS, 'NOTIFY.ALL', 'NOTIFY.ADD', 'NOTIFY.REMOVE',
+                     'NOTIFY.REQUEST', 'NOTIFY.SET');
+
+    LOCAL
+    	TEMPLATE    : MLSTDEF,
+    	R   	    : REF MLSTDEF,
+    	F   	    : REF FSRVDEF,
+    	OWNQUE	    : QUEDEF,
+    	MODQUE	    : QUEDEF,
+	hdrque	    : QUEDEF,
+    	DSC1	    : BLOCK [DSC$K_S_BLN,BYTE],
+    	DSC2	    : BLOCK [DSC$K_S_BLN,BYTE],
+    	STR 	    : BLOCK [DSC$K_S_BLN,BYTE],
+    	DOMP	    : BLOCK [DSC$K_S_BLN,BYTE],
+    	LCLP	    : BLOCK [DSC$K_S_BLN,BYTE],
+    	PRO 	    : BLOCK [1,BYTE],
+    	TXT 	    : REF TXTDEF,
+    	LEN 	    : WORD,
+    	PROMSK	    : BLOCK [4,BYTE],
+    	MODPROT, MODRTOSNDR, MODRTOLIST, MODREMRCVD, modremother,
+    	MODMOD, MODARCH, MODDESC, modprivate, modmaxfwd, modnotify,
+    	MODADD, MODREM, MODFWD, MODRTNADR, modcase, moddigest, modhide,
+	modhostname, modhdrq, modlsub, modlunsub, modlhelp, modlhdrflags,
+	modsmail, modsrepro, modsdigest, modsconceal, modspost, modposterr,
+	modsprefix, modignore, modmaxmsgsz, modrqc, modcmsg, modtxtonly,
+    	MLSTID,
+    	MODIFY,
+    	MATCH,
+    	KWNUM,
+    	STATUS;
+
+    CH$FILL (%CHAR (0), MLST_S_MLSTDEF, TEMPLATE);
+    INIT_QUEUE (OWNQUE, MODQUE, hdrque);
+    MODRTOSNDR = MODRTOLIST = MODPROT = 0;
+
+    INIT_DYNDESC (STR, DOMP, LCLP);
+    CLI$GET_VALUE (verb_d, STR);
+    MODIFY = CH$RCHAR (.STR [DSC$A_POINTER]) EQL %C'M';
+
+    DSC1 [DSC$B_DTYPE] = DSC2 [DSC$B_DTYPE] = DSC$K_DTYPE_T;
+    DSC1 [DSC$B_CLASS] = DSC2 [DSC$B_CLASS] = DSC$K_CLASS_S;
+    DSC1 [DSC$W_LENGTH] = MLST_S_NAME;
+    DSC1 [DSC$A_POINTER] = TEMPLATE [MLST_T_NAME];
+    CLI$GET_VALUE (listname_d, DSC1, LEN);
+    TEMPLATE [MLST_W_NAME] = DSC1 [DSC$W_LENGTH] = .LEN;
+    TEMPLATE [MLST_L_PROT] = (IF .MODIFY THEN 0 ELSE %X'1F1F0F06');
+
+    STR$UPCASE (str, dsc1);
+    IF (STR$FIND_FIRST_NOT_IN_SET (str, valid_listname_chars) NEQU 0)
+    THEN
+	BEGIN
+	SIGNAL (MCP__INVLSTNAM);
+	FREE_STRINGS (str);
+	RETURN (SS$_NORMAL);
+	END;
+
+    !
+    !  See if there's already a file server with this name!
+    !
+    f = .fsrvque [QUE_L_HEAD];
+    WHILE (.f NEQA fsrvque [QUE_L_HEAD]) DO
+	BEGIN
+	dsc2 [DSC$A_POINTER] = f [FSRV_T_NAME];
+	dsc2 [DSC$W_LENGTH] = .f [FSRV_W_NAME];
+	IF STR$CASE_BLIND_COMPARE (dsc1, dsc2) EQL 0 THEN EXITLOOP;
+	f = .f [FSRV_L_FLINK];
+	END;
+
+    match = .f NEQA fsrvque [QUE_L_HEAD];
+
+    IF (.match)
+    THEN
+	BEGIN
+	SIGNAL (MCP__ALREADY, 1, file_server_str_d);
+	FREE_STRINGS (str);
+	RETURN (SS$_NORMAL);
+	END;
+
+    IF (MODPROT = CLI$PRESENT (protection_d) EQL CLI$_PRESENT) THEN
+    BEGIN
+    	PROMSK [0,0,32,0] = -1;
+    	INCR I FROM 0 TO CLSNAM_COUNT-1 DO
+    	BEGIN
+    	    IF CLI$PRESENT (.CLSNAM [.I]) EQL CLI$_PRESENT THEN
+    	    BEGIN
+    	    	CLI$GET_VALUE (.CLSNAM [.I], STR);
+    	    	IF .STR [DSC$W_LENGTH] GTR 0 AND
+    	    	    	STR$FIND_FIRST_NOT_IN_SET (STR, rwedlp_d) NEQ 0
+    	    	THEN
+    	    	BEGIN
+    	    	    FREE_STRINGS (STR);
+    	    	    SIGNAL (MCP__PRSPECERR, 0);
+    	    	    RETURN SS$_NORMAL;
+    	    	END;
+
+    	    	PROMSK [3-.I,0,8,0] = 0;
+    	    	PRO [0,0,8,0] = 0;
+    	    	INCR J FROM 0 TO .STR [DSC$W_LENGTH]-1 DO
+    	    	    SELECTONE CH$RCHAR (CH$PLUS (.STR [DSC$A_POINTER],.J)) OF
+    	    	    SET
+    	    	    	[%C'R'] : PRO [PROT_V_READ] = 1;
+    	    	    	[%C'W'] : PRO [PROT_V_WRITE] = 1;
+    	    	    	[%C'E',%C'L'] : PRO [PROT_V_EXECUTE] = 1;
+    	    	    	[%C'D',%C'P'] : PRO [PROT_V_DELETE] = 1;
+    	    	    TES;
+
+    	    	CASE .I FROM 0 TO CLSNAM_COUNT-1 OF
+    	    	SET
+    	    	    [0] : TEMPLATE [MLST_B_SPROT] =
+    	    	    	    	.PRO [0,0,8,0] OR PROT_M_CONTROL;
+    	    	    [1] : TEMPLATE [MLST_B_OPROT] =
+    	    	    	    	.PRO [0,0,8,0] OR PROT_M_CONTROL;
+    	    	    [2] : TEMPLATE [MLST_B_GPROT] = .PRO [0,0,8,0];
+    	    	    [3] : TEMPLATE [MLST_B_WPROT] = .PRO [0,0,8,0];
+    	    	TES;
+    	    END;
+    	END;
+    END; ! if /PROTECTION specified
+
+    IF CLI$PRESENT (owner_d) EQL CLI$_PRESENT THEN
+    	WHILE CLI$GET_VALUE (owner_d, STR) DO
+    	BEGIN
+    	    IF PARSE_MBOX (STR, LCLP, DOMP) THEN
+    	    BEGIN
+    	    	STR$UPCASE (DOMP, DOMP);
+    	    	STR$CONCAT (STR, LCLP, atsign_d, DOMP);
+    	    	INSTXT (STR, .OWNQUE [QUE_L_TAIL]);
+    	    END
+    	    ELSE
+    	    BEGIN
+    	    	SIGNAL (MCP__INVADDR, 1, STR);
+    	    	FREE_STRINGS (STR, DOMP, LCLP);
+    	    	RETURN SS$_NORMAL;
+    	    END;
+    	END;
+
+    MODMOD = (STATUS = CLI$PRESENT (moderator_d)) NEQ CLI$_ABSENT;
+    IF .STATUS EQL CLI$_PRESENT THEN
+    	WHILE CLI$GET_VALUE (moderator_d, STR) DO
+    	BEGIN
+    	    IF PARSE_MBOX (STR, LCLP, DOMP) THEN
+    	    BEGIN
+    	    	STR$UPCASE (DOMP, DOMP);
+    	    	STR$CONCAT (STR, LCLP, atsign_d, DOMP);
+    	    	INSTXT (STR, .MODQUE [QUE_L_TAIL]);
+    	    END
+    	    ELSE
+    	    BEGIN
+    	    	SIGNAL (MCP__INVADDR, 1, STR);
+    	    	FREE_STRINGS (STR, DOMP, LCLP);
+    	    	RETURN SS$_NORMAL;
+    	    END;
+    	END;
+
+    modlhdrflags = (status = CLI$PRESENT (%ASCID'LIST_HEADERS')) NEQ CLI$_ABSENT;
+    IF (.status EQLU CLI$_NEGATED)
+    THEN
+	modlsub = modlunsub = modlhelp = template [MLST_L_LHDRFLAGS] = 0;
+
+    IF (.status EQLU CLI$_PRESENT)
+    THEN
+	BEGIN
+    modlsub = (status = CLI$PRESENT (list_headers_sub_d)) NEQ CLI$_ABSENT;
+    IF (.status EQL CLI$_PRESENT)
+    THEN
+	BEGIN
+    	dsc2 [DSC$A_POINTER] = template [MLST_T_LSUB];
+    	dsc2 [DSC$W_LENGTH] = MLST_S_LSUB;
+    	CLI$GET_VALUE (list_headers_sub_d, dsc2, len);
+    	template [MLST_W_LSUB] = .len;
+	template [MLST_V_LSUB] = 1;
+	END
+    ELSE
+	BEGIN
+	template [MLST_V_LSUB] = 0;
+	template [MLST_W_LSUB] = 0;
+	END;
+
+    modlunsub = (status = CLI$PRESENT (list_headers_unsub_d)) NEQ CLI$_ABSENT;
+    IF (.status EQL CLI$_PRESENT)
+    THEN
+	BEGIN
+    	dsc2 [DSC$A_POINTER] = template [MLST_T_LUNSUB];
+    	dsc2 [DSC$W_LENGTH] = MLST_S_LUNSUB;
+    	CLI$GET_VALUE (list_headers_unsub_d, dsc2, len);
+    	template [MLST_W_LUNSUB] = .len;
+	template [MLST_V_LUNSUB] = 1;
+	END
+    ELSE
+	BEGIN
+	template [MLST_V_LUNSUB] = 0;
+	template [MLST_W_LUNSUB] = 0;
+	END;
+
+    modlhelp = (status = CLI$PRESENT (list_headers_help_d)) NEQ CLI$_ABSENT;
+    IF (.status EQL CLI$_PRESENT)
+    THEN
+	BEGIN
+    	dsc2 [DSC$A_POINTER] = template [MLST_T_LHELP];
+    	dsc2 [DSC$W_LENGTH] = MLST_S_LHELP;
+    	CLI$GET_VALUE (list_headers_help_d, dsc2, len);
+    	template [MLST_W_LHELP] = .len;
+	template [MLST_V_LHELP] = 1;
+	END
+    ELSE
+	BEGIN
+	template [MLST_V_LHELP] = 0;
+	template [MLST_W_LHELP] = 0;
+	END;
+
+	END;	!IF (.status EQLU CLI$_PRESENT)
+
+    modhdrq = (status = CLI$PRESENT (xheaders_d)) NEQ CLI$_ABSENT;
+    IF (.status) EQL CLI$_PRESENT
+    THEN
+    	WHILE (CLI$GET_VALUE (xheaders_d, STR)) DO
+	    INSTXT (str, .hdrque [QUE_L_TAIL]);
+
+
+    MODARCH = (STATUS = CLI$PRESENT (archive_d)) NEQ CLI$_ABSENT;
+    IF .STATUS EQL CLI$_PRESENT THEN
+    BEGIN
+    	DSC2 [DSC$A_POINTER] = TEMPLATE [MLST_T_ARCHIVE];
+    	DSC2 [DSC$W_LENGTH] = MLST_S_ARCHIVE;
+    	CLI$GET_VALUE (archive_d, DSC2, LEN);
+    	TEMPLATE [MLST_W_ARCHIVE] = .LEN;
+	IF NOT (status = parse_filename (.len, template [MLST_T_ARCHIVE]))
+	THEN
+	    BEGIN
+	    SIGNAL (MCP__INVFILNAM, 1, archive_d);
+	    RETURN (SS$_NORMAL);
+	    END;
+    END;
+
+    MODADD = (STATUS = CLI$PRESENT (add_message_d)) NEQ CLI$_ABSENT;
+    IF .STATUS EQL CLI$_PRESENT THEN
+    BEGIN
+    	DSC2 [DSC$A_POINTER] = TEMPLATE [MLST_T_ADDMSG];
+    	DSC2 [DSC$W_LENGTH] = MLST_S_ADDMSG;
+    	CLI$GET_VALUE (add_message_d, DSC2, LEN);
+    	TEMPLATE [MLST_W_ADDMSG] = .LEN;
+	IF NOT (status = parse_filename (.len, template [MLST_T_ADDMSG]))
+	THEN
+	    BEGIN
+	    SIGNAL (MCP__INVFILNAM, 1, add_message_d);
+	    RETURN (SS$_NORMAL);
+	    END;
+    END;
+
+    MODREM = (STATUS = CLI$PRESENT (remove_message_d)) NEQ CLI$_ABSENT;
+    IF .STATUS EQL CLI$_PRESENT THEN
+    BEGIN
+    	DSC2 [DSC$A_POINTER] = TEMPLATE [MLST_T_REMMSG];
+    	DSC2 [DSC$W_LENGTH] = MLST_S_REMMSG;
+    	CLI$GET_VALUE (remove_message_d, DSC2, LEN);
+    	TEMPLATE [MLST_W_REMMSG] = .LEN;
+	IF NOT (status = parse_filename (.len, template [MLST_T_REMMSG]))
+	THEN
+	    BEGIN
+	    SIGNAL (MCP__INVFILNAM, 1, remove_message_d);
+	    RETURN (SS$_NORMAL);
+	    END;
+    END;
+
+    MODFWD = (STATUS = CLI$PRESENT (forward_message_d)) NEQ CLI$_ABSENT;
+    IF .STATUS EQL CLI$_PRESENT THEN
+    BEGIN
+    	DSC2 [DSC$A_POINTER] = TEMPLATE [MLST_T_FWDMSG];
+    	DSC2 [DSC$W_LENGTH] = MLST_S_FWDMSG;
+    	CLI$GET_VALUE (forward_message_d, DSC2, LEN);
+    	TEMPLATE [MLST_W_FWDMSG] = .LEN;
+	IF NOT (status = parse_filename (.len, template [MLST_T_FWDMSG]))
+	THEN
+	    BEGIN
+	    SIGNAL (MCP__INVFILNAM, 1, forward_message_d);
+	    RETURN (SS$_NORMAL);
+	    END;
+    END;
+
+    MODCMSG = (STATUS = CLI$PRESENT (confirm_message_d)) NEQ CLI$_ABSENT;
+    IF .status EQL CLI$_PRESENT THEN
+    BEGIN
+    	DSC2 [DSC$A_POINTER] = TEMPLATE [MLST_T_CNFMSG];
+    	DSC2 [DSC$W_LENGTH] = MLST_S_CNFMSG;
+    	CLI$GET_VALUE (confirm_message_d, DSC2, LEN);
+    	TEMPLATE [MLST_W_CNFMSG] = .LEN;
+	IF NOT (status = parse_filename (.len, template [MLST_T_CNFMSG]))
+	THEN
+	    BEGIN
+	    SIGNAL (MCP__INVFILNAM, 1, confirm_message_d);
+	    RETURN (SS$_NORMAL);
+	    END;
+    END;
+    modrqc = (status = CLI$PRESENT (request_confirm_d)) NEQ CLI$_ABSENT;
+    IF .modrqc THEN
+    BEGIN
+        template [MLST_V_SUBCNFRM] = .status EQL CLI$_PRESENT;
+        IF CLI$PRESENT (rqc_intvl_d) EQL CLI$_PRESENT THEN
+        BEGIN
+            CLI$GET_VALUE (rqc_intvl_d, str);
+            $BINTIM (TIMBUF=str, TIMADR=template [MLST_Q_CONFTIME]);
+        END
+        ELSE
+            CH$FILL (%CHAR (0), 8, template [MLST_Q_CONFTIME]);
+    END;
+
+    modtxtonly = (status = CLI$PRESENT (text_only_d)) NEQ CLI$_ABSENT;
+    IF .modtxtonly THEN
+        template [MLST_V_TEXTONLY] = .status EQL CLI$_PRESENT;
+
+    status = CLI$PRESENT (notify_d);
+    modnotify = .status NEQ CLI$_ABSENT;
+    IF .modnotify THEN
+    BEGIN
+        template [MLST_V_NOTIFY] = 0;
+        IF .status EQL CLI$_PRESENT THEN
+        BEGIN
+            IF CLI$PRESENT (.ntfyopts [0]) EQL CLI$_PRESENT THEN
+                template [MLST_V_NOTIFY] = %B'1111'
+            ELSE INCR i FROM 1 TO NTFYOPTS_COUNT-1 DO
+                IF CLI$PRESENT (.ntfyopts [.i]) EQL CLI$_PRESENT THEN
+                    CASE .i FROM 1 TO NTFYOPTS_COUNT-1 OF
+                    SET
+                        [1] : template [MLST_V_NTFYADD] = 1;
+                        [2] : template [MLST_V_NTFYREM] = 1;
+                        [3] : template [MLST_V_NTFYREQ] = 1;
+                        [4] : template [MLST_V_NTFYCHG] = 1;
+                    TES;
+        END;
+    END;
+    MODDESC = 0;
+    MODDESC = (STATUS = CLI$PRESENT (description_d)) NEQ CLI$_ABSENT;
+    IF .STATUS EQL CLI$_PRESENT THEN
+    BEGIN
+    	CLI$GET_VALUE (description_d, STR);
+    	TEMPLATE [MLST_W_DESC] = MIN (MLST_S_DESC, .STR [DSC$W_LENGTH]);
+    	CH$MOVE (.TEMPLATE [MLST_W_DESC], .STR [DSC$A_POINTER],
+    	    TEMPLATE [MLST_T_DESC]);
+    END;
+
+    IF CLI$PRESENT (errors_to_d) EQL CLI$_PRESENT THEN
+    BEGIN
+    	CLI$GET_VALUE (errors_to_d, STR);
+    	IF NOT PARSE_MBOX (STR, LCLP, DOMP) THEN
+    	BEGIN
+    	    SIGNAL (MCP__INVADDR, 1, STR);
+    	    FREE_STRINGS (STR, DOMP, LCLP);
+    	    RETURN SS$_NORMAL;
+    	END;
+    	STR$CONCAT (STR, LCLP, atsign_d, DOMP);
+    	TEMPLATE [MLST_W_ERRSTO] = MIN (MLST_S_ERRSTO, .STR [DSC$W_LENGTH]);
+    	CH$MOVE (.TEMPLATE [MLST_W_ERRSTO], .STR [DSC$A_POINTER],
+    	    TEMPLATE [MLST_T_ERRSTO]);
+    END;
+
+    MODRTNADR = 0;
+    MODRTNADR = (STATUS = CLI$PRESENT(return_address_d)) NEQ CLI$_ABSENT;
+    IF .STATUS EQLU CLI$_PRESENT THEN
+    BEGIN
+    	CLI$GET_VALUE (return_address_d, STR);
+    	IF NOT PARSE_MBOX (STR, LCLP, DOMP) THEN
+    	BEGIN
+    	    SIGNAL (MCP__INVADDR, 1, STR);
+    	    FREE_STRINGS (STR, DOMP, LCLP);
+    	    RETURN SS$_NORMAL;
+    	END;
+    	STR$CONCAT (STR, LCLP, atsign_d, DOMP);
+    	TEMPLATE [MLST_W_RTNADR] = MIN (MLST_S_RTNADR, .STR [DSC$W_LENGTH]);
+    	CH$MOVE (.TEMPLATE [MLST_W_RTNADR], .STR [DSC$A_POINTER],
+    	    TEMPLATE [MLST_T_RTNADR]);
+    END;
+
+    IF CLI$PRESENT (reply_to_d) EQL CLI$_PRESENT THEN
+    BEGIN
+    	WHILE CLI$GET_VALUE (reply_to_d, STR) DO
+    	BEGIN
+    	    KWNUM = (INCR I FROM 0 TO RTOKWD_COUNT-1 DO
+    	    	IF STR$POSITION (.RTOKWD [.I], STR) EQL 1 THEN EXITLOOP .I);
+    	    SELECT .KWNUM OF
+    	    SET
+    	    	[0] : TEMPLATE [MLST_V_RTOSNDR] = 1;
+    	    	[1] : TEMPLATE [MLST_V_RTOLIST] = 1;
+    	    	[2] : TEMPLATE [MLST_V_RTOSNDR] = 0;
+    	    	[3] : TEMPLATE [MLST_V_RTOLIST] = 0;
+    	    	[0,2] : MODRTOSNDR = 1;
+    	    	[1,3] : MODRTOLIST = 1;
+    	    TES;
+    	END;
+    END; ! if /REPLY_TO specified
+
+    modremrcvd = modremother = 0;
+    IF CLI$PRESENT (strip_header_d) EQL CLI$_PRESENT THEN
+    BEGIN
+    	WHILE CLI$GET_VALUE (strip_header_d, STR) DO
+    	BEGIN
+    	    KWNUM = (INCR I FROM 0 TO STRIPKWD_COUNT-1 DO
+    	    	IF STR$POSITION (.STRIPKWD [.I], STR) EQL 1 THEN EXITLOOP .I);
+    	    SELECT .KWNUM OF
+    	    SET
+    	    	[0] : TEMPLATE [MLST_V_REMRCVD] = 1;
+    	    	[1] : TEMPLATE [MLST_V_REMRCVD] = 0;
+    	    	[0,1] : MODREMRCVD = 1;
+		[2] : TEMPLATE [MLST_V_REMOTHER] = 1;
+		[3] : TEMPLATE [MLST_V_REMOTHER] = 0;
+		[2,3] : modremother = 1;
+    	    TES;
+    	END;
+    END; ! if /STRIP_HEADER specified
+
+    status = CLI$PRESENT (%ASCID'MAXIMUM_MESSAGE_SIZE');
+    modmaxmsgsz = .status NEQU CLI$_ABSENT;
+    IF .status EQLU CLI$_PRESENT THEN
+    BEGIN
+    	CLI$GET_VALUE (%ASCID'MAXIMUM_MESSAGE_SIZE', str);
+    	status = LIB$CVT_DTB (.str [DSC$W_LENGTH], .str [DSC$A_POINTER], template [MLST_L_MSGSZLIM]);
+    	IF NOT .status THEN
+    	BEGIN
+    	    SIGNAL (MCP__INVMAXMSGSZ, 0);
+    	    FREE_STRINGS (STR, DOMP, LCLP);
+    	    RETURN SS$_NORMAL;
+    	END;
+    END
+    ELSE IF .status EQLU CLI$_NEGATED THEN
+    	template [MLST_L_MSGSZLIM] = 0;
+
+    template [MLST_L_DEFFLAGS] = 0;
+    modsmail = modsrepro = modsdigest = modsconceal = modspost = 0;
+    IF CLI$PRESENT (settings_d) EQL CLI$_PRESENT THEN
+    BEGIN
+    	WHILE CLI$GET_VALUE (settings_d, STR) DO
+    	BEGIN
+    	    KWNUM = (INCR I FROM 0 TO SETTINGKWD_COUNT-1 DO
+    	    	IF STR$POSITION (.settingkwd [.I], STR) EQL 1 THEN EXITLOOP .I);
+    	    SELECT .KWNUM OF
+    	    SET
+    	    	[0] : TEMPLATE [MLST_V_SS_NOMAIL] = 0;
+    	    	[1] : TEMPLATE [MLST_V_SS_NOMAIL] = 1;
+		[0,1] : modsmail = 1;
+		[2] : TEMPLATE [MLST_V_SS_NOREPRO] = 0;
+		[3] : TEMPLATE [MLST_V_SS_NOREPRO] = 1;
+		[2,3] : modsrepro = 1;
+		[4] : TEMPLATE [MLST_V_SS_DIGEST] = 1;
+		[5] : TEMPLATE [MLST_V_SS_DIGEST] = 0;
+		[4,5] : modsdigest = 1;
+		[6] : TEMPLATE [MLST_V_SS_CONCEAL] = 1;
+		[7] : TEMPLATE [MLST_V_SS_CONCEAL] = 0;
+		[6,7] : modsconceal = 1;
+		[8] : TEMPLATE [MLST_V_SS_NOPOST] = 0;
+		[9] : TEMPLATE [MLST_V_SS_NOPOST] = 1;
+		[8,9] : modspost = 1;
+		[10] : template [MLST_L_DEFFLAGS] = 0;
+		[10] : modsmail = modsrepro = modsdigest = modsconceal =
+			modspost = 1;
+    	    TES;
+    	END;
+    END; ! if /SETTINGS specified
+
+    TEMPLATE [MLST_L_MAXFWD] = -1;
+    STATUS = CLI$PRESENT (recipient_maximum_d);
+    modmaxfwd = .STATUS NEQ CLI$_ABSENT;
+    IF .STATUS EQL CLI$_PRESENT THEN
+    BEGIN
+    	CLI$GET_VALUE (recipient_maximum_d, str);
+    	STR$UPCASE (str, str);
+    	IF STR$POSITION (default_d, str) NEQ 1 THEN
+    	BEGIN
+    	    STATUS = LIB$CVT_DTB (.str [DSC$W_LENGTH], .str [DSC$A_POINTER], TEMPLATE [MLST_L_MAXFWD]);
+    	    IF NOT .STATUS THEN
+    	    BEGIN
+    	    	SIGNAL (MCP__INVRCPMAX, 0);
+    	    	FREE_STRINGS (STR, DOMP, LCLP);
+    	    	RETURN SS$_NORMAL;
+    	    END;
+    	END
+    	ELSE TEMPLATE [MLST_L_MAXFWD] = -1;
+    END
+    ELSE IF .STATUS EQL CLI$_NEGATED THEN TEMPLATE [MLST_L_MAXFWD] = 0;
+
+    !
+    !  Check to see if list is a private list.
+    !
+    TEMPLATE [MLST_V_PRIVATE] = 0;		!By default, list not /PRIVATE
+    MODPRIVATE = 0;
+    MODPRIVATE = (STATUS = CLI$PRESENT(private_d)) NEQ CLI$_ABSENT;
+    IF .STATUS EQLU CLI$_PRESENT
+    THEN
+	TEMPLATE [MLST_V_PRIVATE] = 1;
+
+    !
+    !  Check to see if list is case-sensitive with respect to subscribers.
+    !
+    template [MLST_V_NOCASE] = 0;		!By default, list not /CASE
+    modcase = 0;
+    modcase = (status = CLI$PRESENT(case_sensitive_d)) NEQ CLI$_ABSENT;
+    IF .status EQLU CLI$_NEGATED
+    THEN
+	template [MLST_V_NOCASE] = 1;
+
+    !
+    !  Check to see if digest subscribers are allowed.
+    !
+    template [MLST_V_DIGEST] = 0;		!By default, list /NODIGEST
+    moddigest = 0;
+    moddigest = (status = CLI$PRESENT(digest_d)) NEQ CLI$_ABSENT;
+    IF .status EQLU CLI$_PRESENT
+    THEN
+	template [MLST_V_DIGEST] = 1;
+
+    template [MLST_V_NOHIDE] = 0;		!By default, list /HIDE
+    modhide = (status = CLI$PRESENT(%ASCID'HIDE_ERRORS_TO')) NEQ CLI$_ABSENT;
+    IF .status EQLU CLI$_NEGATED
+    THEN
+	template [MLST_V_NOHIDE] = 1;
+
+    template [MLST_V_CC_POSTERR] = 0;		!By default, list /NOCC_POSTERR
+    modposterr = (status = CLI$PRESENT(%ASCID'CC_POST_ERRORS')) NEQ CLI$_ABSENT;
+    IF .status EQLU CLI$_PRESENT
+    THEN
+	template [MLST_V_CC_POSTERR] = 1;
+
+    modhostname = 0;
+    modhostname = (status = CLI$PRESENT (hostname_d)) NEQ CLI$_ABSENT;
+    IF (.status EQL CLI$_PRESENT)
+    THEN
+	BEGIN
+    	CLI$GET_VALUE (hostname_d, str);
+    	template [MLST_W_HOSTNAME] = MIN (MLST_S_HOSTNAME, .str [DSC$W_LENGTH]);
+    	CH$MOVE (.template [MLST_W_HOSTNAME], .str [DSC$A_POINTER],
+    	    template [MLST_T_HOSTNAME]);
+	END
+    ELSE
+	IF (.status EQLU CLI$_NEGATED)
+	THEN
+	    BEGIN
+	    template [MLST_W_HOSTNAME] = 0;
+	    CH$FILL (%CHAR (0), MLST_S_HOSTNAME, template [MLST_T_HOSTNAME]);
+	    END;
+
+    modsprefix = 0;
+    modsprefix = (status = CLI$PRESENT (subject_prefix_d)) NEQ CLI$_ABSENT;
+    IF (.status EQL CLI$_PRESENT)
+    THEN
+	BEGIN
+    	CLI$GET_VALUE (subject_prefix_d, str);
+    	template [MLST_W_SPREFIX] = MIN (MLST_S_SPREFIX, .str [DSC$W_LENGTH]);
+    	CH$MOVE (.template [MLST_W_SPREFIX], .str [DSC$A_POINTER],
+    	    template [MLST_T_SPREFIX]);
+	END
+    ELSE
+	IF (.status EQLU CLI$_NEGATED)
+	THEN
+	    BEGIN
+	    template [MLST_W_SPREFIX] = 0;
+	    CH$FILL (%CHAR (0), MLST_S_SPREFIX, template [MLST_T_SPREFIX]);
+	    END;
+
+    modignore = (status = CLI$PRESENT (%ASCID'IGNORE')) NEQ CLI$_ABSENT;
+    IF .status EQL CLI$_PRESENT THEN
+    BEGIN
+    	status = CLI$PRESENT (%ASCID'IGNORE.MISSING_LIST_ADDRESS');
+    	template [MLST_V_RQLSTADR] = .status EQLU CLI$_PRESENT;
+    	status = CLI$PRESENT (%ASCID'IGNORE.JUNK_MAIL');
+    	IF .status EQLU CLI$_PRESENT THEN
+    	BEGIN
+    	    template [MLST_V_NOSPAMLO] = template [MLST_V_NOSPAMMD] = template [MLST_V_NOSPAMHI] = 0;
+    	    CLI$GET_VALUE (%ASCID'IGNORE.JUNK_MAIL', str);
+    	    INCR i FROM 0 TO JUNKKWD_COUNT-1 DO
+    	    	IF STR$POSITION (.junkkwd [.i], str) EQL 1 THEN
+    	    	BEGIN
+    	    	    SELECT .i OF
+    	    	    SET
+    	    	    	[0]     : template [MLST_V_NOSPAMLO] = 1;
+    	    	    	[0,1]   : template [MLST_V_NOSPAMMD] = 1;
+    	    	    	[0,1,2]	: template [MLST_V_NOSPAMHI] = 1;
+    	    	    TES;
+    	    	    EXITLOOP;
+    	    	END;
+    	END
+    	ELSE template [MLST_V_NOSPAMLO] = template [MLST_V_NOSPAMMD] = template [MLST_V_NOSPAMHI] = 0;
+    END
+    ELSE IF .status EQLU CLI$_NEGATED THEN
+    	template [MLST_V_NOSPAMLO] = template [MLST_V_NOSPAMMD] = template [MLST_V_NOSPAMHI] = template [MLST_V_RQLSTADR] = 0;
+
+    R = .MLISTS [QUE_L_HEAD];
+    WHILE .R NEQA MLISTS [QUE_L_HEAD] DO
+    BEGIN
+    	DSC2 [DSC$A_POINTER] = R [MLST_T_NAME];
+    	DSC2 [DSC$W_LENGTH] = .R [MLST_W_NAME];
+    	IF STR$CASE_BLIND_COMPARE (DSC1, DSC2) EQL 0 THEN EXITLOOP
+    	ELSE R = .R [MLST_L_FLINK];
+    END;
+
+    MATCH = .R NEQ MLISTS [QUE_L_HEAD];
+
+    IF .MODIFY THEN
+    	IF .MATCH THEN
+    	BEGIN
+    	    BIND
+    	    	OWNQ	= R [MLST_Q_OWNQ]   : QUEDEF,
+    	    	MODQ	= R [MLST_Q_MODQ]   : QUEDEF,
+		hdrq	= r [MLST_Q_HDRQ]   : QUEDEF;
+
+    	    CFG_CHANGED = 1;
+
+    	    IF .OWNQUE [QUE_L_HEAD] NEQA OWNQUE [QUE_L_HEAD] THEN
+    	    BEGIN
+    	    	WHILE NOT REMQUE (.OWNQ [QUE_L_HEAD], TXT) DO
+    	    	    FREETXT (TXT);
+    	    	WHILE NOT REMQUE (.OWNQUE [QUE_L_HEAD], TXT) DO
+    	    	    INSQUE (.TXT, .OWNQ [QUE_L_TAIL]);
+    	    END;
+
+    	    IF .MODMOD THEN
+    	    BEGIN
+    	    	WHILE NOT REMQUE (.MODQ [QUE_L_HEAD], TXT) DO
+    	    	    FREETXT (TXT);
+    	    	WHILE NOT REMQUE (.MODQUE [QUE_L_HEAD], TXT) DO
+    	    	    INSQUE (.TXT, .MODQ [QUE_L_TAIL]);
+    	    END;
+
+    	    IF .MODDESC THEN
+    	    	CH$MOVE (MLST_S_DESC+2, TEMPLATE [MLST_W_DESC],
+    	    	    R [MLST_W_DESC]);
+
+    	    IF .MODARCH THEN
+    	    	CH$MOVE (MLST_S_ARCHIVE+2, TEMPLATE [MLST_W_ARCHIVE],
+    	    	    R [MLST_W_ARCHIVE]);
+
+    	    IF .MODADD THEN
+    	    	CH$MOVE (MLST_S_ADDMSG+2, TEMPLATE [MLST_W_ADDMSG],
+    	    	    R [MLST_W_ADDMSG]);
+
+    	    IF .MODREM THEN
+    	    	CH$MOVE (MLST_S_REMMSG+2, TEMPLATE [MLST_W_REMMSG],
+    	    	    R [MLST_W_REMMSG]);
+
+    	    IF .MODFWD THEN
+    	    	CH$MOVE (MLST_S_FWDMSG+2, TEMPLATE [MLST_W_FWDMSG],
+    	    	    R [MLST_W_FWDMSG]);
+
+    	    IF .modhostname THEN
+    	    	CH$MOVE (MLST_S_HOSTNAME+2, template [MLST_W_HOSTNAME],
+    	    	    R [MLST_W_HOSTNAME]);
+
+    	    IF .modsprefix THEN
+    	    	CH$MOVE (MLST_S_SPREFIX+2, template [MLST_W_SPREFIX],
+    	    	    R [MLST_W_SPREFIX]);
+
+    	    IF .MODPROT THEN
+    	    	R [MLST_L_PROT] = (.R [MLST_L_PROT] AND .PROMSK [0,0,32,0]) OR
+    	    	    .TEMPLATE [MLST_L_PROT];
+
+    	    IF .modmaxmsgsz THEN
+    	    	r [MLST_L_MSGSZLIM] = .template [MLST_L_MSGSZLIM];
+
+    	    IF .MODRTOSNDR THEN
+    	    	R [MLST_V_RTOSNDR] = .TEMPLATE [MLST_V_RTOSNDR];
+
+    	    IF .MODRTOLIST THEN
+    	    	R [MLST_V_RTOLIST] = .TEMPLATE [MLST_V_RTOLIST];
+
+    	    IF .MODREMRCVD THEN
+    	    	R [MLST_V_REMRCVD] = .TEMPLATE [MLST_V_REMRCVD];
+
+    	    IF .modremother THEN
+    	    	R [MLST_V_REMOTHER] = .TEMPLATE [MLST_V_REMOTHER];
+
+    	    IF .MODPRIVATE THEN
+    	    	R [MLST_V_PRIVATE] = .TEMPLATE [MLST_V_PRIVATE];
+
+    	    IF .modcase THEN
+    	    	R [MLST_V_NOCASE] = .TEMPLATE [MLST_V_NOCASE];
+
+    	    IF .moddigest THEN
+    	    	R [MLST_V_DIGEST] = .TEMPLATE [MLST_V_DIGEST];
+
+    	    IF .modhide THEN
+    	    	R [MLST_V_NOHIDE] = .TEMPLATE [MLST_V_NOHIDE];
+
+    	    IF .modposterr THEN
+    	    	R [MLST_V_CC_POSTERR] = .TEMPLATE [MLST_V_CC_POSTERR];
+
+    	    IF .modmaxfwd THEN
+    	    	R [MLST_L_MAXFWD] = .TEMPLATE [MLST_L_MAXFWD];
+
+	    IF .modsmail THEN
+		r [MLST_V_SS_NOMAIL] = .template [MLST_V_SS_NOMAIL];
+
+	    IF .modsrepro THEN
+		r [MLST_V_SS_NOREPRO] = .template [MLST_V_SS_NOREPRO];
+
+	    IF .modsdigest THEN
+		r [MLST_V_SS_DIGEST] = .template [MLST_V_SS_DIGEST];
+
+	    IF .modsconceal THEN
+		r [MLST_V_SS_CONCEAL] = .template [MLST_V_SS_CONCEAL];
+
+	    IF .modspost THEN
+		r [MLST_V_SS_NOPOST] = .template [MLST_V_SS_NOPOST];
+
+	    IF .modlhdrflags THEN
+		BEGIN
+		IF .modlsub THEN
+		    BEGIN
+		    r [MLST_V_LSUB] = .template [MLST_V_LSUB];
+		    r [MLST_W_LSUB] = .template [MLST_W_LSUB];
+		    CH$MOVE (.r [MLST_W_LSUB], template [MLST_T_LSUB],
+				r [MLST_T_LSUB]);
+		    END;
+		IF .modlunsub THEN
+		    BEGIN
+		    r [MLST_V_LUNSUB] = .template [MLST_V_LUNSUB];
+		    r [MLST_W_LUNSUB] = .template [MLST_W_LUNSUB];
+		    CH$MOVE (.r [MLST_W_LUNSUB], template [MLST_T_LUNSUB],
+				r [MLST_T_LUNSUB]);
+		    END;
+		IF .modlhelp THEN
+		    BEGIN
+		    r [MLST_V_LHELP] = .template [MLST_V_LHELP];
+		    r [MLST_W_LHELP] = .template [MLST_W_LHELP];
+		    CH$MOVE (.r [MLST_W_LHELP], template [MLST_T_LHELP],
+				r [MLST_T_LHELP]);
+		    END;
+		END;
+
+    	    IF (.modhdrq)
+	    THEN
+		BEGIN
+    	    	WHILE NOT REMQUE (.hdrq [QUE_L_HEAD], txt) DO
+    	    	    FREETXT (txt);
+    	    	WHILE NOT REMQUE (.hdrque [QUE_L_HEAD], txt) DO
+    	    	    INSQUE (.txt, .hdrq [QUE_L_TAIL]);
+    	    END;
+
+    	    IF .TEMPLATE [MLST_W_ERRSTO] GTR 0 THEN
+    	    	CH$MOVE (MLST_S_ERRSTO+2, TEMPLATE [MLST_W_ERRSTO],
+    	    	    R [MLST_W_ERRSTO]);
+
+    	    IF .MODRTNADR THEN
+    	    	CH$MOVE (MLST_S_RTNADR+2, TEMPLATE [MLST_W_RTNADR],
+    	    	    R [MLST_W_RTNADR]);
+
+    	    IF .modignore THEN
+    	    BEGIN
+    	    	r [MLST_V_RQLSTADR] = .template [MLST_V_RQLSTADR];
+    	    	r [MLST_V_NOSPAMHI] = .template [MLST_V_NOSPAMHI];
+    	    	r [MLST_V_NOSPAMMD] = .template [MLST_V_NOSPAMMD];
+    	    	r [MLST_V_NOSPAMLO] = .template [MLST_V_NOSPAMLO];
+    	    END;
+
+            IF .modrqc THEN
+            BEGIN
+                r [MLST_V_SUBCNFRM] = .template [MLST_V_SUBCNFRM];
+                IF .r [MLST_V_SUBCNFRM] THEN
+                    CH$MOVE (8, template [MLST_Q_CONFTIME], r [MLST_Q_CONFTIME])
+                ELSE
+                    CH$FILL (%CHAR (0), 8, r [MLST_Q_CONFTIME]);
+            END;
+
+            IF .modtxtonly THEN
+                r [MLST_V_TEXTONLY] = .template [MLST_V_TEXTONLY];
+
+            IF .modnotify THEN
+                r [MLST_V_NOTIFY] = .template [MLST_V_NOTIFY];
+
+            IF .modcmsg THEN
+                CH$MOVE (.template [MLST_W_CNFMSG]+2,
+                         template [MLST_W_CNFMSG], r [MLST_W_CNFMSG]);
+
+    	END
+    	ELSE SIGNAL (MCP__NOMATCH, 1, mailing_list_str_d)
+    ELSE
+    	IF NOT .MATCH THEN
+    	BEGIN
+    	    IF .OWNQUE [QUE_L_HEAD] NEQA OWNQUE [QUE_L_HEAD] THEN
+    	    BEGIN
+    	    	CFG_CHANGED = 1;
+    	    	LIB$GET_VM (%REF (MLST_S_MLSTDEF), R);
+    	    	CH$MOVE (MLST_S_MLSTDEF, TEMPLATE, .R);
+    	    	INIT_QUEUE (R [MLST_Q_OWNQ], R [MLST_Q_MODQ],
+				r [MLST_Q_HDRQ]);
+
+    	    	BEGIN
+    	    	    BIND
+    	    	    	OWNQ	= R [MLST_Q_OWNQ]   : QUEDEF,
+    	    	    	MODQ	= R [MLST_Q_MODQ]   : QUEDEF,
+			hdrq	= r [MLST_Q_HDRQ]   : QUEDEF;
+
+    	    	    WHILE NOT REMQUE (.OWNQUE [QUE_L_HEAD], TXT) DO
+    	    	    	INSQUE (.TXT, .OWNQ [QUE_L_TAIL]);
+    	    	    WHILE NOT REMQUE (.MODQUE [QUE_L_HEAD], TXT) DO
+    	    	    	INSQUE (.TXT, .MODQ [QUE_L_TAIL]);
+    	    	    WHILE NOT REMQUE (.hdrque [QUE_L_HEAD], txt) DO
+    	    	    	INSQUE (.txt, .hdrq [QUE_L_TAIL]);
+    	    	    IF .R [MLST_W_ERRSTO] EQL 0 THEN
+    	    	    BEGIN
+    	    	    	TXT = .OWNQ [QUE_L_HEAD];
+    	    	    	R [MLST_W_ERRSTO] =
+    	    	    	    MIN (.TXT [TXT_W_LEN], MLST_S_ERRSTO);
+    	    	    	CH$MOVE (.R [MLST_W_ERRSTO], TXT [TXT_T_TEXT],
+    	    	    	    R [MLST_T_ERRSTO]);
+    	    	    END;
+    	    	END;
+
+    	    	IF NOT .MODRTOSNDR AND NOT .MODRTOLIST THEN
+    	    	    R [MLST_V_RTOSNDR] = 1;
+    	    	INSQUE (.R, .MLISTS [QUE_L_TAIL]);
+    	    END
+    	    ELSE SIGNAL (MCP__NOOWNER, 0)
+    	END
+    	ELSE SIGNAL (MCP__ALREADY, 1, mailing_list_str_d);
+
+    	FREE_STRINGS (STR, LCLP, DOMP);
+    	WHILE NOT REMQUE (.OWNQUE [QUE_L_HEAD], TXT) DO FREETXT (TXT);
+    	WHILE NOT REMQUE (.MODQUE [QUE_L_HEAD], TXT) DO FREETXT (TXT);
+
+    SS$_NORMAL
+
+END; ! CMD_DEFLIST
+
+%SBTTL 'CMD_DEFSYSU'
+GLOBAL ROUTINE CMD_DEFSYSU =
+BEGIN
+!++
+! FUNCTIONAL DESCRIPTION:
+!
+!   MCP DEFINE SYSTEM_USERS command.
+!
+! RETURNS:  	cond_value, longword (unsigned), write only, by value
+!
+! PROTOTYPE:
+!
+!   CMD_DEFSYSU
+!
+! IMPLICIT INPUTS:  None.
+!
+! IMPLICIT OUTPUTS: None.
+!
+! COMPLETION CODES:
+!
+!   SS$_NORMAL:	    	normal successful completion.
+!
+! SIDE EFFECTS:
+!
+!   None.
+!--
+    LOCAL
+    	STR 	: BLOCK [DSC$K_S_BLN,BYTE],
+    	LCLP	: BLOCK [DSC$K_S_BLN,BYTE],
+    	DOMP	: BLOCK [DSC$K_S_BLN,BYTE],
+    	TMPQ	: QUEDEF,
+    	TXT 	: REF TXTDEF;
+
+    INIT_QUEUE (TMPQ);
+    INIT_DYNDESC (STR, LCLP, DOMP);
+    WHILE CLI$GET_VALUE (userlist_d, STR) DO
+    BEGIN
+    	IF PARSE_MBOX (STR, LCLP, DOMP) THEN
+    	BEGIN
+    	    STR$UPCASE (DOMP, DOMP);
+    	    STR$CONCAT (STR, LCLP, atsign_d, DOMP);
+    	    INSTXT (STR, .TMPQ [QUE_L_TAIL]);
+    	END
+    	ELSE
+    	BEGIN
+    	    SIGNAL (MCP__INVADDR, 1, STR);
+    	    WHILE NOT REMQUE (.TMPQ [QUE_L_HEAD], TXT) DO FREETXT (TXT);
+    	    FREE_STRINGS (STR, DOMP, LCLP);
+    	    RETURN SS$_NORMAL;
+    	END;
+    END;
+    WHILE NOT REMQUE (.SYSUSERS [QUE_L_HEAD], TXT) DO
+    	FREETXT (TXT);
+    WHILE NOT REMQUE (.TMPQ [QUE_L_HEAD], TXT) DO
+    	INSQUE (.TXT, .SYSUSERS [QUE_L_TAIL]);
+
+    CFG_CHANGED = 1;
+
+    FREE_STRINGS (STR, DOMP, LCLP);
+
+    SS$_NORMAL
+
+END; ! CMD_DEFSYSU
+
+%SBTTL 'CMD_DEFFSU'
+GLOBAL ROUTINE CMD_DEFFSU =
+BEGIN
+!++
+! FUNCTIONAL DESCRIPTION:
+!
+!   MCP DEFINE/MODIFY FILE_SERVER command.
+!
+! RETURNS:  	cond_value, longword (unsigned), write only, by value
+!
+! PROTOTYPE:
+!
+!   CMD_DEFFSU
+!
+! IMPLICIT INPUTS:  None.
+!
+! IMPLICIT OUTPUTS: None.
+!
+! COMPLETION CODES:
+!
+!   SS$_NORMAL:	    	normal successful completion.
+!
+! SIDE EFFECTS:
+!
+!   None.
+!--
+    LOCAL
+    	TEMPLATE    : FSRVDEF,
+    	F   	    : REF FSRVDEF,
+	R	    : REF MLSTDEF,
+    	STR 	    : BLOCK [DSC$K_S_BLN,BYTE],
+    	DSC1	    : BLOCK [DSC$K_S_BLN,BYTE],
+    	DSC2	    : BLOCK [DSC$K_S_BLN,BYTE],
+    	LCLP	    : BLOCK [DSC$K_S_BLN,BYTE],
+    	DOMP	    : BLOCK [DSC$K_S_BLN,BYTE],
+    	TODAY	    : BLOCK [8,BYTE],
+    	DT  	    : BLOCK [8,BYTE],
+    	LEN 	    : WORD,
+    	MODIFY, MATCH,
+    	MODMGR, MODROOT, MODTHR, MODBEG, MODEND, MODML,
+    	MODHLIM, MODSLIM, MODULIM, MODDESC,
+    	STATUS;
+
+    INIT_DYNDESC (STR, LCLP, DOMP);
+    DSC1 [DSC$B_DTYPE] = DSC2 [DSC$B_DTYPE] = DSC$K_DTYPE_T;
+    DSC1 [DSC$B_CLASS] = DSC2 [DSC$B_CLASS] = DSC$K_CLASS_S;
+    DSC1 [DSC$W_LENGTH] = FSRV_S_NAME;
+    DSC1 [DSC$A_POINTER] = TEMPLATE [FSRV_T_NAME];
+    $BINTIM (TIMADR=TODAY, TIMBUF=%ASCID'-- 00:00:00.00');
+    CH$FILL (%CHAR (0), FSRV_S_FSRVDEF, TEMPLATE);
+    MODMGR = MODROOT = MODTHR = MODBEG = MODEND = MODML = 0;
+
+    CLI$GET_VALUE (verb_d, STR);
+    MODIFY = CH$RCHAR (.STR [DSC$A_POINTER]) EQL %C'M';
+
+    CLI$GET_VALUE (fsname_d, DSC1, LEN);
+    TEMPLATE [FSRV_W_NAME] = DSC1 [DSC$W_LENGTH] = .LEN;
+
+    !
+    !  See if there's already a mailing list with this name!
+    !
+    r = .mlists [QUE_L_HEAD];
+    WHILE (.r NEQA mlists [QUE_L_HEAD]) DO
+	BEGIN
+	dsc2 [DSC$A_POINTER] = r [MLST_T_NAME];
+	dsc2 [DSC$W_LENGTH] = .r [MLST_W_NAME];
+	IF STR$CASE_BLIND_COMPARE (dsc1, dsc2) EQL 0 THEN EXITLOOP;
+	r = .r [MLST_L_FLINK];
+	END;
+
+    match = .r NEQA mlists [QUE_L_HEAD];
+
+    IF (.match)
+    THEN
+	BEGIN
+	SIGNAL (MCP__ALREADY, 1, mailing_list_str_d);
+	FREE_STRINGS (str);
+	RETURN (SS$_NORMAL);
+	END;
+
+    IF CLI$PRESENT (manager_d) EQL CLI$_PRESENT THEN
+    BEGIN
+    	CLI$GET_VALUE (manager_d, STR);
+    	IF NOT PARSE_MBOX (STR, LCLP, DOMP) THEN
+    	BEGIN
+    	    SIGNAL (MCP__INVADDR, 1, STR);
+    	    FREE_STRINGS (STR, LCLP, DOMP);
+    	    RETURN SS$_NORMAL;
+    	END;
+    	MODMGR = 1;
+    END
+    ELSE
+    	STR$COPY_DX (STR, null_d);
+    TEMPLATE [FSRV_W_MGR] = MIN (FSRV_S_MGR, .STR [DSC$W_LENGTH]);
+    CH$MOVE (.TEMPLATE [FSRV_W_MGR], .STR [DSC$A_POINTER],
+    	TEMPLATE [FSRV_T_MGR]);
+
+    STATUS = CLI$PRESENT (mailing_list_d);
+    IF .STATUS EQL CLI$_PRESENT THEN
+    BEGIN
+    	CLI$GET_VALUE (mailing_list_d, STR);
+    	TEMPLATE [FSRV_W_MLIST] = MIN (.STR [DSC$W_LENGTH], FSRV_S_MLIST);
+    	CH$MOVE (.TEMPLATE [FSRV_W_MLIST], .STR [DSC$A_POINTER],
+    	    TEMPLATE [FSRV_T_MLIST]);
+    	MODML = 1;
+    END
+    ELSE IF .MODIFY AND .STATUS EQL CLI$_NEGATED THEN MODML = 1;
+
+    IF CLI$PRESENT (root_d) EQL CLI$_PRESENT THEN
+    BEGIN
+    	LOCAL FSFLG : BLOCK [4,BYTE];
+    	CLI$GET_VALUE (root_d, STR);
+    	$FILESCAN (SRCSTR=STR, VALUELST=%REF (0), FLDFLAGS=FSFLG);
+    	IF .FSFLG [FSCN$V_DIRECTORY] OR .FSFLG [FSCN$V_NAME] OR
+    	    	.FSFLG [FSCN$V_TYPE] OR .FSFLG [FSCN$V_VERSION] THEN
+    	BEGIN
+    	    SIGNAL (MCP__INVROOT, 1, STR);
+    	    FREE_STRINGS (STR, DOMP, LCLP);
+    	    RETURN SS$_NORMAL;
+    	END;
+    	MODROOT = 1;
+    END
+    ELSE
+    	STR$CONCAT (STR, %ASCID'MX_DEVICE:[MX.FILESERV.', DSC1, %ASCID'.]');
+
+    TEMPLATE [FSRV_W_ROOT] = MIN (FSRV_S_ROOT, .STR [DSC$W_LENGTH]);
+    CH$MOVE (.TEMPLATE [FSRV_W_ROOT], .STR [DSC$A_POINTER],
+    	TEMPLATE [FSRV_T_ROOT]);
+
+    STATUS = CLI$PRESENT (delay_threshold_d);
+    IF .STATUS EQL CLI$_PRESENT THEN
+    BEGIN
+    	CLI$GET_VALUE (delay_threshold_d, STR);
+    	LIB$CVT_DTB (.STR [DSC$W_LENGTH], .STR [DSC$A_POINTER],
+    	    TEMPLATE [FSRV_L_THRESH]);
+    	MODTHR = 1;
+    END
+    ELSE IF .STATUS EQL CLI$_NEGATED THEN
+    BEGIN
+    	MODTHR = 1;
+    	TEMPLATE [FSRV_L_THRESH] = -1;
+    END;
+
+    IF CLI$PRESENT (begin_send_period_d) EQL CLI$_PRESENT THEN
+    BEGIN
+    	CLI$GET_VALUE (begin_send_period_d, STR);
+    	LIB$CONVERT_DATE_STRING (STR, DT, 0, %REF (7+96));
+    	MODBEG = 1;
+    END
+    ELSE $BINTIM (TIMBUF=%ASCID'-- 17:00:00', TIMADR=DT);
+    LIB$SUB_TIMES (DT, TODAY, TEMPLATE [FSRV_Q_BEGIN]);
+
+    IF CLI$PRESENT (end_send_period_d) EQL CLI$_PRESENT THEN
+    BEGIN
+    	CLI$GET_VALUE (end_send_period_d, STR);
+    	LIB$CONVERT_DATE_STRING (STR, DT, 0, %REF (7+96));
+    	MODEND = 1;
+    END
+    ELSE $BINTIM (TIMBUF=%ASCID'-- 09:00:00', TIMADR=DT);
+    LIB$SUB_TIMES (DT, TODAY, TEMPLATE [FSRV_Q_END]);
+
+    STATUS = CLI$PRESENT (server_limit_d);
+    IF .STATUS EQL CLI$_PRESENT THEN
+    BEGIN
+    	MODSLIM = 1;
+    	CLI$GET_VALUE (server_limit_d, STR);
+    	LIB$CVT_DTB (.STR [DSC$W_LENGTH], .STR [DSC$A_POINTER],
+    	    TEMPLATE [FSRV_L_SERVLIM]);
+    END
+    ELSE IF .MODIFY AND .STATUS EQL CLI$_NEGATED THEN MODSLIM = 1;
+    	    
+    STATUS = CLI$PRESENT (host_limit_d);
+    IF .STATUS EQL CLI$_PRESENT THEN
+    BEGIN
+    	MODHLIM = 1;
+    	CLI$GET_VALUE (host_limit_d, STR);
+    	LIB$CVT_DTB (.STR [DSC$W_LENGTH], .STR [DSC$A_POINTER],
+    	    TEMPLATE [FSRV_L_HOSTLIM]);
+    END
+    ELSE IF .MODIFY AND .STATUS EQL CLI$_NEGATED THEN MODHLIM = 1;
+
+    STATUS = CLI$PRESENT (user_limit_d);
+    IF .STATUS EQL CLI$_PRESENT THEN
+    BEGIN
+    	MODULIM = 1;
+    	CLI$GET_VALUE (user_limit_d, STR);
+    	LIB$CVT_DTB (.STR [DSC$W_LENGTH], .STR [DSC$A_POINTER],
+    	    TEMPLATE [FSRV_L_USERLIM]);
+    END
+    ELSE IF .MODIFY AND .STATUS EQL CLI$_NEGATED THEN MODULIM = 1;
+
+    MODDESC = 0;
+    MODDESC = (STATUS = CLI$PRESENT (description_d)) NEQ CLI$_ABSENT;
+    IF .STATUS EQL CLI$_PRESENT THEN
+    BEGIN
+    	CLI$GET_VALUE (description_d, STR);
+    	TEMPLATE [FSRV_W_DESC] = MIN (FSRV_S_DESC, .STR [DSC$W_LENGTH]);
+    	CH$MOVE (.TEMPLATE [FSRV_W_DESC], .STR [DSC$A_POINTER],
+    	    TEMPLATE [FSRV_T_DESC]);
+    END;
+
+    F = .FSRVQUE [QUE_L_HEAD];
+    WHILE .F NEQA FSRVQUE [QUE_L_HEAD] DO
+    BEGIN
+    	DSC2 [DSC$A_POINTER] = F [FSRV_T_NAME];
+    	DSC2 [DSC$W_LENGTH] = .F [FSRV_W_NAME];
+    	IF STR$CASE_BLIND_COMPARE (DSC1, DSC2) EQL 0 THEN EXITLOOP;
+    	F = .F [FSRV_L_FLINK];
+    END;
+
+    MATCH = .F NEQA FSRVQUE [QUE_L_HEAD];
+
+    IF .MODIFY THEN
+    	IF .MATCH THEN
+    	BEGIN
+    	    CFG_CHANGED = (.MODMGR OR .MODROOT OR .MODTHR
+    	    	    	    	OR .MODBEG OR .MODEND OR .MODML);
+    	    IF .MODMGR THEN
+    	    BEGIN
+    	    	F [FSRV_W_MGR] = .TEMPLATE [FSRV_W_MGR];
+    	    	CH$MOVE (.F [FSRV_W_MGR], TEMPLATE [FSRV_T_MGR],
+    	    	    F [FSRV_T_MGR]);
+    	    END;
+    	    IF .MODROOT THEN
+    	    BEGIN
+    	    	F [FSRV_W_ROOT] = .TEMPLATE [FSRV_W_ROOT];
+    	    	CH$MOVE (.F [FSRV_W_ROOT], TEMPLATE [FSRV_T_ROOT],
+    	    	    F [FSRV_T_ROOT]);
+    	    END;
+    	    IF .MODDESC THEN
+    	    BEGIN
+    	    	F [FSRV_W_DESC] = .TEMPLATE [FSRV_W_DESC];
+    	    	CH$MOVE (.F [FSRV_W_DESC], TEMPLATE [FSRV_T_DESC],
+    	    	    F [FSRV_T_DESC]);
+    	    END;
+    	    IF .MODML THEN
+    	    BEGIN
+    	    	F [FSRV_W_MLIST] = .TEMPLATE [FSRV_W_MLIST];
+    	    	CH$MOVE (.F [FSRV_W_MLIST], TEMPLATE [FSRV_T_MLIST],
+    	    	    F [FSRV_T_MLIST]);
+    	    END;
+    	    IF .MODTHR THEN F [FSRV_L_THRESH] = .TEMPLATE [FSRV_L_THRESH];
+    	    IF .MODSLIM THEN F [FSRV_L_SERVLIM] = .TEMPLATE [FSRV_L_SERVLIM];
+    	    IF .MODHLIM THEN F [FSRV_L_HOSTLIM] = .TEMPLATE [FSRV_L_HOSTLIM];
+    	    IF .MODULIM THEN F [FSRV_L_USERLIM] = .TEMPLATE [FSRV_L_USERLIM];
+    	    IF .MODBEG THEN
+    	    	CH$MOVE (8, TEMPLATE [FSRV_Q_BEGIN], F [FSRV_Q_BEGIN]);
+    	    IF .MODEND THEN
+    	    	CH$MOVE (8, TEMPLATE [FSRV_Q_END], F [FSRV_Q_END]);
+    	END
+    	ELSE SIGNAL (MCP__NOMATCH, 1, file_server_str_d)
+    ELSE
+    	IF NOT .MATCH THEN
+    	BEGIN
+    	    CFG_CHANGED = 1;
+    	    LIB$GET_VM (%REF (FSRV_S_FSRVDEF), F);
+    	    CH$MOVE (FSRV_S_FSRVDEF, TEMPLATE, .F);
+    	    INSQUE (.F, .FSRVQUE [QUE_L_TAIL]);
+    	END
+    	ELSE SIGNAL (MCP__ALREADY, 1, file_server_str_d);
+
+    FREE_STRINGS (STR, LCLP, DOMP);
+
+    SS$_NORMAL
+
+END; ! CMD_DEFFSU
+
+%SBTTL 'CMD_DEFLCLDOM'
+GLOBAL ROUTINE CMD_DEFLCLDOM =
+BEGIN
+!++
+! FUNCTIONAL DESCRIPTION:
+!
+!   MCP DEFINE LOCAL_DOMAIN command.
+!
+! RETURNS:  	cond_value, longword (unsigned), write only, by value
+!
+! PROTOTYPE:
+!
+!   CMD_DEFLCLDOM
+!
+! IMPLICIT INPUTS:  None.
+!
+! IMPLICIT OUTPUTS: None.
+!
+! COMPLETION CODES:
+!
+!   SS$_NORMAL:	    	normal successful completion.
+!
+! SIDE EFFECTS:
+!
+!   None.
+!--
+    LOCAL
+    	STR 	: BLOCK [DSC$K_S_BLN,BYTE],
+    	HOST	: BLOCK [DSC$K_S_BLN,BYTE],
+    	LCLDOM	: REF LCLDOMDEF,
+    	STATUS;
+
+    INIT_DYNDESC (STR, HOST);
+
+    CLI$GET_VALUE (%ASCID'HOSTNM', STR);
+    STR$UPCASE (HOST, STR);
+
+    LCLDOM = .LCLDOMS [QUE_L_HEAD];
+    WHILE .LCLDOM NEQA LCLDOMS DO
+    BEGIN
+    	IF CH$EQL (.LCLDOM [LCLDOM_W_HOSTLEN], LCLDOM [LCLDOM_T_HOST],
+    	    	   .HOST [DSC$W_LENGTH], .HOST [DSC$A_POINTER], %C' ') THEN EXITLOOP;
+    	LCLDOM = .LCLDOM [LCLDOM_L_FLINK];
+    END;
+
+    IF .LCLDOM NEQA LCLDOMS THEN
+    BEGIN
+    	SIGNAL (MCP__ALREADY, 1, local_domain_str_d);
+    	FREE_STRINGS (STR, HOST);
+    	RETURN SS$_NORMAL;
+    END;
+    STATUS = LIB$GET_VM (%REF (LCLDOM_S_LCLDOMDEF), LCLDOM);
+    IF NOT .STATUS THEN SIGNAL_STOP (.STATUS);
+    CH$FILL (%CHAR (0), LCLDOM_S_LCLDOMDEF, .LCLDOM);
+    INSQUE (.LCLDOM, .LCLDOMS [QUE_L_TAIL]);
+
+    LCLDOM [LCLDOM_W_HOSTLEN] = MIN (.HOST [DSC$W_LENGTH], LCLDOM_S_HOST);
+    CH$MOVE (.LCLDOM [LCLDOM_W_HOSTLEN], .HOST [DSC$A_POINTER], LCLDOM [LCLDOM_T_HOST]);
+
+    CFG_CHANGED = 1;
+
+    FREE_STRINGS (STR, HOST);
+
+    SS$_NORMAL
+
+END; ! CMD_DEFLCLDOM
+
+%SBTTL 'CMD_DEFRELAY'
+GLOBAL ROUTINE CMD_DEFRELAY =
+BEGIN
+!++
+! FUNCTIONAL DESCRIPTION:
+!
+!   MCP DEFINE RELAY command.
+!
+! RETURNS:  	cond_value, longword (unsigned), write only, by value
+!
+! PROTOTYPE:
+!
+!   CMD_DEFRELAY
+!
+! IMPLICIT INPUTS:  None.
+!
+! IMPLICIT OUTPUTS: None.
+!
+! COMPLETION CODES:
+!
+!   SS$_NORMAL:	    	normal successful completion.
+!
+! SIDE EFFECTS:
+!
+!   None.
+!--
+    BUILTIN
+    	FFC;
+
+    LOCAL
+    	STR 	: BLOCK [DSC$K_S_BLN,BYTE],
+    	HOST	: BLOCK [DSC$K_S_BLN,BYTE],
+    	RELAY	: REF RELAYDEF,
+    	ADDR,
+    	NETMASK,
+    	MATCH,
+    	NETBITS,
+    	MODIFY,
+    	STATUS;
+
+    INIT_DYNDESC (STR);
+
+    CLI$GET_VALUE (verb_d, STR);
+    MODIFY = CH$RCHAR (.STR [DSC$A_POINTER]) EQL %C'M';
+
+    CLI$GET_VALUE (%ASCID'NETADDR', STR);
+    STATUS = ipaddr_strtonum (STR, ADDR);
+    IF NOT .STATUS THEN
+    BEGIN
+    	SIGNAL (MCP__INVADDR, 1, str);
+    	FREE_STRINGS (str);
+    	RETURN SS$_NORMAL;
+    END;
+
+    IF CLI$PRESENT (%ASCID'NETMASK') EQL CLI$_PRESENT THEN
+    BEGIN
+    	CLI$GET_VALUE (%ASCID'NETMASK', STR);
+    	STATUS = ipaddr_strtonum (STR, NETMASK);
+    	IF NOT .STATUS THEN
+    	BEGIN
+    	    SIGNAL (MCP__INVADDR, 1, str);
+    	    FREE_STRINGS (str);
+    	    RETURN SS$_NORMAL;
+    	END;
+    END
+    ELSE NETMASK = -1;
+
+    IF FFC (UPLIT (0), UPLIT (32), NETMASK, NETBITS) THEN NETBITS = 32;
+
+    FREE_STRINGS (str);
+
+    RELAY = .RELAYQUE [QUE_L_HEAD];
+    MATCH = 0;
+    WHILE .RELAY NEQA RELAYQUE DO
+    BEGIN
+    	LOCAL rnetbits;
+    	IF .relay [RELAY_L_ADDRESS] EQLU .ADDR AND .relay [RELAY_L_NETMASK] EQLU .NETMASK THEN
+    	BEGIN
+    	    MATCH = 1;
+    	    EXITLOOP;
+    	END;
+    	IF FFC (UPLIT (0), UPLIT (32), relay [RELAY_L_NETMASK], rnetbits) THEN rnetbits = 32;
+    	IF .rnetbits LSS .netbits THEN EXITLOOP;
+    	RELAY = .RELAY [RELAY_L_FLINK];
+    END;
+
+    IF .MODIFY THEN
+    BEGIN
+    	IF .MATCH THEN
+    	BEGIN
+    	    status = CLI$PRESENT (reject_d);
+    	    IF .status NEQU CLI$_ABSENT THEN
+    	    BEGIN
+    	    	CFG_CHANGED = 1;
+    	    	relay [RELAY_V_REJECT] = .status EQL CLI$_PRESENT;
+    	    END;
+    	    status = CLI$PRESENT (relay_allowed_d);
+    	    IF .status NEQU CLI$_ABSENT THEN
+    	    BEGIN
+    	    	CFG_CHANGED = 1;
+    	    	relay [RELAY_V_RELAY] = .status EQL CLI$_PRESENT;
+    	    END;
+    	END
+    	ELSE
+    	    SIGNAL (MCP__NOMATCH, 1, inside_address_d)
+    END
+    ELSE
+    BEGIN
+    	IF .MATCH THEN
+    	    SIGNAL (MCP__ALREADY, 1, inside_address_d)
+    	ELSE
+    	BEGIN
+    	    LOCAL newrelay : REF RELAYDEF;
+    	    STATUS = LIB$GET_VM (%REF (RELAY_S_RELAYDEF), newrelay);
+    	    IF NOT .STATUS THEN SIGNAL_STOP (.STATUS);
+    	    CH$FILL (%CHAR (0), RELAY_S_RELAYDEF, .newrelay);
+    	    newrelay [RELAY_L_ADDRESS] = .addr;
+    	    newrelay [RELAY_L_NETMASK] = .netmask;
+    	    newrelay [RELAY_V_REJECT] = CLI$PRESENT (reject_d) EQL CLI$_PRESENT;
+    	    newrelay [RELAY_V_RELAY] = CLI$PRESENT (relay_allowed_d) EQL CLI$_PRESENT;
+    	    IF .relay EQLA relayque [QUE_L_HEAD] THEN
+    	    	INSQUE (.newrelay, .RELAYQUE [QUE_L_TAIL])
+    	    ELSE
+    	    	INSQUE (.newrelay, .relay [RELAY_L_BLINK]);
+    	    CFG_CHANGED = 1;
+    	END;
+    END;
+
+    SS$_NORMAL
+
+END; ! CMD_DEFRELAY
+
+%SBTTL 'CMD_REMREW'
+GLOBAL ROUTINE CMD_REMREW =
+BEGIN
+!++
+! FUNCTIONAL DESCRIPTION:
+!
+!   MCP REMOVE REWRITE_RULE command.
+!
+! RETURNS:  	cond_value, longword (unsigned), write only, by value
+!
+! PROTOTYPE:
+!
+!   CMD_REMREW
+!
+! IMPLICIT INPUTS:  None.
+!
+! IMPLICIT OUTPUTS: None.
+!
+! COMPLETION CODES:
+!
+!   SS$_NORMAL:	    	normal successful completion.
+!
+! SIDE EFFECTS:
+!
+!   None.
+!--
+    LOCAL
+    	R   	    : REF RULEDEF,
+    	DSC1	    : BLOCK [DSC$K_S_BLN,BYTE],
+    	STR 	    : BLOCK [DSC$K_S_BLN,BYTE],
+    	MATCH;
+
+    INIT_DYNDESC (STR);
+
+    DSC1 [DSC$B_DTYPE] = DSC$K_DTYPE_T;
+    DSC1 [DSC$B_CLASS] = DSC$K_CLASS_S;
+    CLI$GET_VALUE (lhs_d, STR);
+
+    R = .RWRULES [QUE_L_HEAD];
+    WHILE .R NEQA RWRULES [QUE_L_HEAD] DO
+    BEGIN
+        BIND
+            lhs = r [RULE_A_LHS] : REF TXTDEF;
+    	DSC1 [DSC$A_POINTER] = lhs [TXT_T_TEXT];
+    	DSC1 [DSC$W_LENGTH] = .lhs [TXT_W_LEN];
+    	IF STR$CASE_BLIND_COMPARE (DSC1, STR) EQL 0 THEN EXITLOOP
+    	ELSE R = .R [RULE_L_FLINK];
+    END;
+
+    MATCH = .R NEQ RWRULES [QUE_L_HEAD];
+
+    IF .MATCH THEN
+    BEGIN
+    	CFG_CHANGED = 1;
+    	REMQUE (.R, R);
+        FREETXT (r [RULE_A_LHS], r [RULE_A_RHS]);
+    	LIB$FREE_VM (%REF (RULE_S_RULEDEF), R);
+    END
+    ELSE SIGNAL (MCP__NOMATCH, 1, rewrite_rule_str_d);
+
+    FREE_STRINGS (STR);
+
+    SS$_NORMAL
+
+END; ! CMD_REMREW
+
+%SBTTL 'CMD_REMALIAS'
+GLOBAL ROUTINE CMD_REMALIAS =
+BEGIN
+!++
+! FUNCTIONAL DESCRIPTION:
+!
+!   MCP REMOVE ALIAS command.
+!
+! RETURNS:  	cond_value, longword (unsigned), write only, by value
+!
+! PROTOTYPE:
+!
+!   CMD_REMALIAS
+!
+! IMPLICIT INPUTS:  None.
+!
+! IMPLICIT OUTPUTS: None.
+!
+! COMPLETION CODES:
+!
+!   SS$_NORMAL:	    	normal successful completion.
+!
+! SIDE EFFECTS:
+!
+!   None.
+!--
+    LOCAL
+    	R   	    : REF RULEPRE53DEF,
+    	DSC1	    : BLOCK [DSC$K_S_BLN,BYTE],
+    	STR 	    : BLOCK [DSC$K_S_BLN,BYTE],
+    	MATCH;
+
+    INIT_DYNDESC (STR);
+
+    DSC1 [DSC$B_DTYPE] = DSC$K_DTYPE_T;
+    DSC1 [DSC$B_CLASS] = DSC$K_CLASS_S;
+    CLI$GET_VALUE (lclname_d, STR);
+
+    R = .ALIASES [QUE_L_HEAD];
+    WHILE .R NEQA ALIASES [QUE_L_HEAD] DO
+    BEGIN
+    	DSC1 [DSC$A_POINTER] = R [RULEPRE53_T_LHS];
+    	DSC1 [DSC$W_LENGTH] = .R [RULEPRE53_W_LHS];
+    	IF STR$CASE_BLIND_COMPARE (DSC1, STR) EQL 0 THEN EXITLOOP
+    	ELSE R = .R [RULEPRE53_L_FLINK];
+    END;
+
+    MATCH = .R NEQ ALIASES [QUE_L_HEAD];
+
+    IF .MATCH THEN
+    BEGIN
+    	CFG_CHANGED = 1;
+    	REMQUE (.R, R);
+    	LIB$FREE_VM (%REF (RULEPRE53_S_RULEPRE53DEF), R);
+    END
+    ELSE SIGNAL (MCP__NOMATCH, 1, local_name_str_d);
+
+    FREE_STRINGS (STR);
+
+    SS$_NORMAL
+
+END; ! CMD_REMALIAS
+
+%SBTTL 'CMD_REMPATH'
+GLOBAL ROUTINE CMD_REMPATH =
+BEGIN
+!++
+! FUNCTIONAL DESCRIPTION:
+!
+!   MCP REMOVE PATH command.
+!
+! RETURNS:  	cond_value, longword (unsigned), write only, by value
+!
+! PROTOTYPE:
+!
+!   CMD_REMPATH
+!
+! IMPLICIT INPUTS:  None.
+!
+! IMPLICIT OUTPUTS: None.
+!
+! COMPLETION CODES:
+!
+!   SS$_NORMAL:	    	normal successful completion.
+!
+! SIDE EFFECTS:
+!
+!   None.
+!--
+    LOCAL
+    	R   	    : REF PATHDEF,
+    	DSC1	    : BLOCK [DSC$K_S_BLN,BYTE],
+    	STR 	    : BLOCK [DSC$K_S_BLN,BYTE],
+    	MATCH;
+
+    INIT_DYNDESC (STR);
+
+    DSC1 [DSC$B_DTYPE] = DSC$K_DTYPE_T;
+    DSC1 [DSC$B_CLASS] = DSC$K_CLASS_S;
+    CLI$GET_VALUE (domain_d, STR);
+
+    R = .PATHLIST [QUE_L_HEAD];
+    WHILE .R NEQA PATHLIST [QUE_L_HEAD] DO
+    BEGIN
+    	DSC1 [DSC$A_POINTER] = R [PATH_T_DOMAIN];
+    	DSC1 [DSC$W_LENGTH] = .R [PATH_W_DOMAIN];
+    	IF STR$CASE_BLIND_COMPARE (DSC1, STR) EQL 0 THEN EXITLOOP
+    	ELSE R = .R [PATH_L_FLINK];
+    END;
+
+    MATCH = .R NEQ PATHLIST [QUE_L_HEAD];
+
+    IF .MATCH THEN
+    BEGIN
+    	CFG_CHANGED = 1;
+    	REMQUE (.R, R);
+    	LIB$FREE_VM (%REF (PATH_S_PATHDEF), R);
+    END
+    ELSE SIGNAL (MCP__NOMATCH, 1, domain_str_d);
+
+    FREE_STRINGS (STR);
+
+    SS$_NORMAL
+
+END; ! CMD_REMPATH
+
+%SBTTL 'CMD_REMLCLDOM'
+GLOBAL ROUTINE CMD_REMLCLDOM =
+BEGIN
+!++
+! FUNCTIONAL DESCRIPTION:
+!
+!   MCP REMOVE REJECTION command.
+!
+! RETURNS:  	cond_value, longword (unsigned), write only, by value
+!
+! PROTOTYPE:
+!
+!   CMD_REMLCLDOM
+!
+! IMPLICIT INPUTS:  None.
+!
+! IMPLICIT OUTPUTS: None.
+!
+! COMPLETION CODES:
+!
+!   SS$_NORMAL:	    	normal successful completion.
+!
+! SIDE EFFECTS:
+!
+!   None.
+!--
+    LOCAL
+    	STR 	: BLOCK [DSC$K_S_BLN,BYTE],
+    	DOMP	: BLOCK [DSC$K_S_BLN,BYTE],
+    	LCLDOM	: REF LCLDOMDEF,
+    	STATUS;
+
+    INIT_DYNDESC (STR, DOMP);
+    CLI$GET_VALUE (%ASCID'HOSTNM', STR);
+    STR$UPCASE (DOMP, STR);
+
+    LCLDOM = .LCLDOMS [QUE_L_HEAD];
+    WHILE .LCLDOM NEQA LCLDOMS DO
+    BEGIN
+    	IF CH$EQL (.LCLDOM [LCLDOM_W_HOSTLEN], LCLDOM [LCLDOM_T_HOST],
+    	    	   .DOMP [DSC$W_LENGTH], .DOMP [DSC$A_POINTER], %C' ')
+    	THEN EXITLOOP;
+    	LCLDOM = .LCLDOM [LCLDOM_L_FLINK];
+    END;
+
+    IF .LCLDOM EQLA LCLDOMS THEN
+    	SIGNAL (MCP__NOMATCH, 1, local_domain_str_d)
+    ELSE
+    BEGIN
+    	REMQUE (.LCLDOM, LCLDOM);
+    	LIB$FREE_VM (%REF (LCLDOM_S_LCLDOMDEF), LCLDOM);
+    	CFG_CHANGED = 1;
+    END;
+
+    FREE_STRINGS (STR, DOMP);
+
+    SS$_NORMAL
+
+END; ! CMD_REMLCLDOM
+
+%SBTTL 'CMD_REMRELAY'
+GLOBAL ROUTINE CMD_REMRELAY =
+BEGIN
+!++
+! FUNCTIONAL DESCRIPTION:
+!
+!   MCP DEFINE RELAY command.
+!
+! RETURNS:  	cond_value, longword (unsigned), write only, by value
+!
+! PROTOTYPE:
+!
+!   CMD_REMRELAY
+!
+! IMPLICIT INPUTS:  None.
+!
+! IMPLICIT OUTPUTS: None.
+!
+! COMPLETION CODES:
+!
+!   SS$_NORMAL:	    	normal successful completion.
+!
+! SIDE EFFECTS:
+!
+!   None.
+!--
+    LOCAL
+    	STR 	: BLOCK [DSC$K_S_BLN,BYTE],
+    	HOST	: BLOCK [DSC$K_S_BLN,BYTE],
+    	RELAY	: REF RELAYDEF,
+    	ADDR,
+    	NETMASK,
+    	STATUS;
+
+    INIT_DYNDESC (STR);
+
+    CLI$GET_VALUE (%ASCID'NETADDR', STR);
+    STATUS = ipaddr_strtonum (STR, ADDR);
+    IF NOT .STATUS THEN
+    BEGIN
+    	SIGNAL (MCP__INVADDR, 1, str);
+    	FREE_STRINGS (str);
+    	RETURN SS$_NORMAL;
+    END;
+
+    IF CLI$PRESENT (%ASCID'NETMASK') EQL CLI$_PRESENT THEN
+    BEGIN
+    	CLI$GET_VALUE (%ASCID'NETMASK', STR);
+    	STATUS = ipaddr_strtonum (STR, NETMASK);
+    	IF NOT .STATUS THEN
+    	BEGIN
+    	    SIGNAL (MCP__INVADDR, 1, str);
+    	    FREE_STRINGS (str);
+    	    RETURN SS$_NORMAL;
+    	END;
+    END
+    ELSE NETMASK = -1;
+
+    FREE_STRINGS (str);
+
+    RELAY = .RELAYQUE [QUE_L_HEAD];
+    WHILE .RELAY NEQA RELAYQUE DO
+    BEGIN
+    	IF .relay [RELAY_L_ADDRESS] EQLU .ADDR AND .relay [RELAY_L_NETMASK] EQLU .NETMASK THEN EXITLOOP;
+    	RELAY = .RELAY [RELAY_L_FLINK];
+    END;
+
+    IF .RELAY EQLA RELAYQUE THEN
+    	SIGNAL (MCP__NOMATCH, 1, %ASCID'inside address')
+    ELSE
+    BEGIN
+    	REMQUE (.relay, relay);
+    	LIB$FREE_VM (%REF (RELAY_S_RELAYDEF), relay);
+    	CFG_CHANGED = 1;
+    END;
+
+    SS$_NORMAL
+
+END; ! CMD_REMRELAY
+
+%SBTTL 'CMD_REMLIST'
+GLOBAL ROUTINE CMD_REMLIST =
+BEGIN
+!++
+! FUNCTIONAL DESCRIPTION:
+!
+!   MCP REMOVE LIST command.
+!
+! RETURNS:  	cond_value, longword (unsigned), write only, by value
+!
+! PROTOTYPE:
+!
+!   CMD_REMLIST
+!
+! IMPLICIT INPUTS:  None.
+!
+! IMPLICIT OUTPUTS: None.
+!
+! COMPLETION CODES:
+!
+!   SS$_NORMAL:	    	normal successful completion.
+!
+! SIDE EFFECTS:
+!
+!   None.
+!--
+    LOCAL
+    	R   	    : REF MLSTDEF,
+    	T   	    : REF TXTDEF,
+    	DSC1	    : BLOCK [DSC$K_S_BLN,BYTE],
+    	STR 	    : BLOCK [DSC$K_S_BLN,BYTE],
+    	MATCH;
+
+    INIT_DYNDESC (STR);
+
+    DSC1 [DSC$B_DTYPE] = DSC$K_DTYPE_T;
+    DSC1 [DSC$B_CLASS] = DSC$K_CLASS_S;
+    CLI$GET_VALUE (listname_d, STR);
+
+    R = .MLISTS [QUE_L_HEAD];
+    WHILE .R NEQA MLISTS [QUE_L_HEAD] DO
+    BEGIN
+    	DSC1 [DSC$A_POINTER] = R [MLST_T_NAME];
+    	DSC1 [DSC$W_LENGTH] = .R [MLST_W_NAME];
+    	IF STR$CASE_BLIND_COMPARE (DSC1, STR) EQL 0 THEN EXITLOOP
+    	ELSE R = .R [MLST_L_FLINK];
+    END;
+
+    MATCH = .R NEQ MLISTS [QUE_L_HEAD];
+
+    IF .MATCH THEN
+    BEGIN
+    	BIND
+    	    OWNQ    = R [MLST_Q_OWNQ]	: QUEDEF,
+    	    MODQ    = R [MLST_Q_MODQ]	: QUEDEF;
+
+    	CFG_CHANGED = 1;
+    	WHILE NOT REMQUE (.OWNQ [QUE_L_HEAD], T) DO FREETXT (T);
+    	WHILE NOT REMQUE (.MODQ [QUE_L_HEAD], T) DO FREETXT (T);
+
+    	REMQUE (.R, R);
+    	LIB$FREE_VM (%REF (MLST_S_MLSTDEF), R);
+    END
+    ELSE SIGNAL (MCP__NOMATCH, 1, mailing_list_str_d);
+
+    FREE_STRINGS (STR);
+
+    SS$_NORMAL
+
+END; ! CMD_REMLIST
+
+%SBTTL 'CMD_REMFSU'
+GLOBAL ROUTINE CMD_REMFSU =
+BEGIN
+!++
+! FUNCTIONAL DESCRIPTION:
+!
+!   MCP REMOVE FILE_SERVER command.
+!
+! RETURNS:  	cond_value, longword (unsigned), write only, by value
+!
+! PROTOTYPE:
+!
+!   CMD_REMFSU
+!
+! IMPLICIT INPUTS:  None.
+!
+! IMPLICIT OUTPUTS: None.
+!
+! COMPLETION CODES:
+!
+!   SS$_NORMAL:	    	normal successful completion.
+!
+! SIDE EFFECTS:
+!
+!   None.
+!--
+    LOCAL
+    	STR 	    : BLOCK [DSC$K_S_BLN,BYTE],
+    	DSC	    : BLOCK [DSC$K_S_BLN,BYTE],
+    	F   	    : REF FSRVDEF,
+    	MATCH,
+    	STATUS;
+
+    INIT_DYNDESC (STR);
+    DSC [DSC$B_DTYPE] = DSC$K_DTYPE_T;
+    DSC [DSC$B_CLASS] = DSC$K_CLASS_S;
+    	    
+    CLI$GET_VALUE (fsname_d, STR);
+
+    F = .FSRVQUE [QUE_L_HEAD];
+    WHILE .F NEQA FSRVQUE [QUE_L_HEAD] DO
+    BEGIN
+    	DSC [DSC$A_POINTER] = F [FSRV_T_NAME];
+    	DSC [DSC$W_LENGTH] = .F [FSRV_W_NAME];
+    	IF STR$CASE_BLIND_COMPARE (STR, DSC) EQL 0 THEN EXITLOOP;
+    	F = .F [FSRV_L_FLINK];
+    END;
+
+    MATCH = .F NEQA FSRVQUE [QUE_L_HEAD];
+
+    IF .MATCH THEN
+    BEGIN
+    	CFG_CHANGED = 1;
+    	REMQUE (.F, F);
+    	LIB$FREE_VM (%REF (FSRV_S_FSRVDEF), F);
+    END
+    ELSE SIGNAL (MCP__NOMATCH, 1, file_server_str_d);
+
+    FREE_STRINGS (STR);
+
+    SS$_NORMAL
+
+END; ! CMD_REMFSU
+
+%SBTTL 'CMD_SET'
+GLOBAL ROUTINE CMD_SET = 
+BEGIN
+!++
+! FUNCTIONAL DESCRIPTION:
+!
+!   SET {SMTP,ROUTER,LOCAL,DECNET_SMTP,SITE} command.
+!
+! RETURNS:  	cond_value, longword (unsigned), write only, by value
+!
+! PROTOTYPE:
+!
+!   CMD_SET
+!
+! IMPLICIT INPUTS:  None.
+!
+! IMPLICIT OUTPUTS: None.
+!
+! COMPLETION CODES:
+!
+!   SS$_NORMAL:	    	normal successful completion.
+!
+! SIDE EFFECTS:
+!
+!   None.
+!--
+    TABLE (SETOPT, 'SMTP', 'ROUTER', 'LOCAL', 'DECNET_SMTP', 'SITE',
+	'MLF');
+    TABLE (QUAL, 'RETRY_INTERVAL', 'MAXIMUM_RETRIES', 'DNS_RETRIES',
+    	'PERCENT_HACK', 'LONG_LINES', 'ACCOUNTING', 'HEADERS', 'OMIT_RESENT_HEADERS',
+    	'DEFAULT_ROUTER', 'USERNAME', 'MULTIPLE_FROM', 'RBL_CHECK',
+	'CC_POSTMASTER', 'OMIT_VMSMAIL_SENDER', 'RECIPIENT_MAXIMUM',
+    	'DELAY_DAYS', 'VERIFY_ALLOWED', 'RELAY_ALLOWED',
+	'VALIDATE_SENDER_DOMAIN', 'QP_DECODE', 'DISABLE_EXQUOTA',
+    	'AUTHENTICATION', 'TLS');
+    TABLE (HDROPT, 'HEADERS.TOP', 'HEADERS.BOTTOM');
+    TABLE (DAYNAME, 'MONDAY', 'TUESDAY', 'WEDNESDAY', 'THURSDAY',
+    	    	     'FRIDAY', 'SATURDAY', 'SUNDAY');
+
+!+
+! NB: order of these names must correspond to MX_K_HDR_x codes in MX.R32!!!
+!     (Don't bother with X- tags; group those with "other".)
+!-
+    TABLE (HDRNAME, 'FROM', 'SENDER', 'TO', 'RESENT_TO', 'CC', 'RESENT_CC',
+    	'BCC', 'RESENT_BCC', 'MESSAGE_ID', 'RESENT_MESSAGE_ID',
+    	'IN_REPLY_TO', 'REFERENCES', 'KEYWORDS', 'SUBJECT', 'ENCRYPTED',
+    	'DATE', 'REPLY_TO', 'RECEIVED', 'RESENT_REPLY_TO', 'RESENT_FROM',
+    	'RESENT_SENDER', 'RESENT_DATE', 'RETURN_PATH', 'OTHER', 'ALL');
+
+    BIND
+    	TOPVEC	= LOCAL_INFO [LOCAL_L_HDRTOP] : BITVECTOR [32],
+    	BOTVEC	= LOCAL_INFO [LOCAL_L_HDREND] : BITVECTOR [32];
+
+    LOCAL
+    	STR 	: BLOCK [DSC$K_S_BLN,BYTE],
+    	STR2	: BLOCK [DSC$K_S_BLN,BYTE],
+    	OPT,
+    	STATUS;
+
+    INIT_DYNDESC (STR, STR2);
+
+    CLI$GET_VALUE (setopt_d, STR);
+
+    OPT = (INCR I FROM 0 TO SETOPT_COUNT-1 DO
+    	    IF STR$POSITION (.SETOPT [.I], STR) EQL 1 THEN EXITLOOP .I);
+    CASE .OPT FROM 0 TO SETOPT_COUNT-1 OF
+    SET
+    [0]:
+    	BEGIN
+    	    IF CLI$PRESENT (.QUAL [0]) EQL CLI$_PRESENT THEN
+    	    BEGIN
+    	    	CFG_CHANGED = 1;
+    	    	CLI$GET_VALUE (.QUAL [0], STR);
+    	    	$BINTIM (TIMBUF=STR, TIMADR=SMTP_INFO [SMTP_Q_RETRY]);
+    	    END;
+    	    IF CLI$PRESENT (.QUAL [1]) EQL CLI$_PRESENT THEN
+    	    BEGIN
+    	    	CFG_CHANGED = 1;
+    	    	CLI$GET_VALUE (.QUAL [1], STR);
+    	    	LIB$CVT_DTB (.STR [DSC$W_LENGTH], .STR [DSC$A_POINTER],
+    	    	    SMTP_INFO [SMTP_L_MAXTRIES]);
+    	    END;
+    	    IF CLI$PRESENT (.QUAL [2]) EQL CLI$_PRESENT THEN
+    	    BEGIN
+    	    	CFG_CHANGED = 1;
+    	    	CLI$GET_VALUE (.QUAL [2], STR);
+    	    	LIB$CVT_DTB (.STR [DSC$W_LENGTH], .STR [DSC$A_POINTER],
+    	    	    SMTP_INFO [SMTP_L_MAXDNS]);
+    	    END;
+    	    STATUS = CLI$PRESENT (.QUAL [5]);
+    	    IF .STATUS NEQ CLI$_ABSENT THEN
+    	    BEGIN
+    	    	CFG_CHANGED = 1;
+    	    	SMTP_INFO [SMTP_V_ACCTG] = .STATUS NEQ CLI$_NEGATED;
+    	    END;
+    	    STATUS = CLI$PRESENT (.QUAL [8]);
+    	    IF .STATUS EQL CLI$_PRESENT THEN
+    	    BEGIN
+    	    	CFG_CHANGED = 1;
+    	    	CLI$GET_VALUE (.QUAL [8], STR);
+    	    	SMTP_INFO [SMTP_W_DEFRTR] = MIN (SMTP_S_DEFRTR,
+    	    	    	.STR [DSC$W_LENGTH]);
+    	    	CH$MOVE (.SMTP_INFO [SMTP_W_DEFRTR], .STR [DSC$A_POINTER],
+    	    	    	SMTP_INFO [SMTP_T_DEFRTR]);
+    	    END
+    	    ELSE IF .STATUS EQL CLI$_NEGATED THEN
+    	    BEGIN
+    	    	CFG_CHANGED = 1;
+    	    	SMTP_INFO [SMTP_W_DEFRTR] = 0;
+    	    END;
+    	    STATUS = CLI$PRESENT (.QUAL [11]);
+    	    IF .STATUS EQL CLI$_PRESENT THEN
+    	    BEGIN
+    	    	BIND
+    	    	    rblque = smtp_info [SMTP_Q_RBLQUE] : QUEDEF;
+    	    	LOCAL
+    	    	    txt : REF TXTDEF;
+    	    	CFG_CHANGED = 1;
+    	    	SMTP_INFO [SMTP_V_RBL] = 1;
+    	    	WHILE NOT REMQUE (.rblque [QUE_L_HEAD], txt) DO
+    	    	    FREETXT (txt);
+    	    	WHILE CLI$GET_VALUE (.QUAL [11], STR) DO
+    	    	    INSTXT (str, .rblque [QUE_L_TAIL]);
+    	    END
+    	    ELSE IF .STATUS EQL CLI$_NEGATED THEN
+    	    BEGIN
+    	    	LOCAL
+    	    	    txt : REF TXTDEF;
+    	    	CFG_CHANGED = 1;
+    	    	SMTP_INFO [SMTP_V_RBL] = 0;
+    	    	WHILE NOT REMQUE_HEAD (smtp_info [SMTP_Q_RBLQUE], txt) DO
+    	    	    FREETXT (txt);
+    	    END;
+    	    STATUS = CLI$PRESENT (.QUAL [16]);
+    	    IF .STATUS EQL CLI$_PRESENT THEN
+    	    BEGIN
+    	    	CFG_CHANGED = 1;
+    	    	SMTP_INFO [SMTP_V_NOVRFY] = 0;
+    	    END
+    	    ELSE IF .STATUS EQL CLI$_NEGATED THEN
+    	    BEGIN
+    	    	CFG_CHANGED = 1;
+    	    	SMTP_INFO [SMTP_V_NOVRFY] = 1;
+    	    END;
+    	    STATUS = CLI$PRESENT (.QUAL [17]);
+    	    IF .STATUS EQL CLI$_PRESENT THEN
+    	    BEGIN
+    	    	CFG_CHANGED = 1;
+    	    	SMTP_INFO [SMTP_V_NORELAY] = 0;
+    	    END
+    	    ELSE IF .STATUS EQL CLI$_NEGATED THEN
+    	    BEGIN
+    	    	CFG_CHANGED = 1;
+    	    	SMTP_INFO [SMTP_V_NORELAY] = 1;
+    	    END;
+    	    STATUS = CLI$PRESENT (.QUAL [18]);
+    	    IF .STATUS EQL CLI$_PRESENT THEN
+    	    BEGIN
+    	    	CFG_CHANGED = 1;
+    	    	SMTP_INFO [SMTP_V_VALDOM] = 1;
+    	    END
+    	    ELSE IF .STATUS EQL CLI$_NEGATED THEN
+    	    BEGIN
+    	    	CFG_CHANGED = 1;
+    	    	SMTP_INFO [SMTP_V_VALDOM] = 0;
+    	    END;
+    	    status = CLI$PRESENT (.qual [21]);
+    	    IF .status EQL CLI$_PRESENT THEN
+    	    BEGIN
+    	    	cfg_changed = 1;
+    	    	smtp_info [SMTP_V_AUTHCRAM] = CLI$PRESENT (%ASCID'AUTHENTICATION.CRAM_MD5') EQL CLI$_PRESENT;
+    	    	smtp_info [SMTP_V_AUTHPLAIN] = CLI$PRESENT (%ASCID'AUTHENTICATION.PLAIN') EQL CLI$_PRESENT;
+    	    END
+    	    ELSE IF .status EQL CLI$_NEGATED THEN
+    	    BEGIN
+    	    	cfg_changed = 1;
+    	    	smtp_info [SMTP_V_AUTHCRAM] = smtp_info [SMTP_V_AUTHPLAIN] = 0;
+    	    END;
+            status = CLI$PRESENT (.qual [3]);
+            IF .status NEQ CLI$_ABSENT THEN
+            BEGIN
+                cfg_changed = 1;
+                smtp_info [SMTP_V_NOPCTHACK] = .status EQL CLI$_NEGATED;
+            END;
+    	    status = CLI$PRESENT (.qual [22]);
+    	    IF .status NEQ CLI$_ABSENT THEN
+    	    BEGIN
+    	    	cfg_changed = 1;
+		smtp_info [SMTP_V_TLS] = .status EQL CLI$_PRESENT;
+    	    END;
+    	END;
+
+    [1]:
+    	BEGIN
+    	    STATUS = CLI$PRESENT (.QUAL [3]);
+    	    IF .STATUS NEQ CLI$_ABSENT THEN
+    	    BEGIN
+    	    	CFG_CHANGED = 1;
+    	    	ROUTER_INFO [ROUTER_V_PERCENT_HACK] =
+    	    	    (.STATUS EQL CLI$_PRESENT);
+    	    END;
+    	    STATUS = CLI$PRESENT (.QUAL [5]);
+    	    IF .STATUS NEQ CLI$_ABSENT THEN
+    	    BEGIN
+    	    	CFG_CHANGED = 1;
+    	    	ROUTER_INFO [ROUTER_V_ACCTG] = .STATUS EQL CLI$_PRESENT;
+    	    END;
+    	    STATUS = CLI$PRESENT (.QUAL [13]);
+    	    IF .STATUS NEQ CLI$_ABSENT THEN
+    	    BEGIN
+    	    	CFG_CHANGED = 1;
+    	    	ROUTER_INFO [ROUTER_V_OMIT_VMSMAIL_SENDER] =
+    	    	    (.STATUS EQL CLI$_PRESENT);
+    	    END;
+    	END;
+
+    [2]:
+    	BEGIN
+    	    IF CLI$PRESENT (.QUAL [0]) EQL CLI$_PRESENT THEN
+    	    BEGIN
+    	    	CFG_CHANGED = 1;
+    	    	CLI$GET_VALUE (.QUAL [0], STR);
+    	    	$BINTIM (TIMBUF=STR, TIMADR=LOCAL_INFO [LOCAL_Q_RETRY]);
+    	    END;
+    	    IF CLI$PRESENT (.QUAL [1]) EQL CLI$_PRESENT THEN
+    	    BEGIN
+    	    	CFG_CHANGED = 1;
+    	    	CLI$GET_VALUE (.QUAL [1], STR);
+    	    	LIB$CVT_DTB (.STR [DSC$W_LENGTH], .STR [DSC$A_POINTER],
+    	    	    LOCAL_INFO [LOCAL_L_MAXTRIES]);
+    	    END;
+    	    STATUS = CLI$PRESENT (.QUAL [5]);
+    	    IF .STATUS NEQ CLI$_ABSENT THEN
+    	    BEGIN
+    	    	CFG_CHANGED = 1;
+    	    	LOCAL_INFO [LOCAL_V_ACCTG] = .STATUS NEQ CLI$_NEGATED;
+    	    END;
+    	    STATUS = CLI$PRESENT (.QUAL [10]);
+    	    IF .STATUS NEQ CLI$_ABSENT THEN
+    	    BEGIN
+    	    	CFG_CHANGED = 1;
+    	    	LOCAL_INFO [LOCAL_V_ONE_FROM] = .STATUS EQLU CLI$_NEGATED;
+    	    END;
+    	    status = CLI$PRESENT (.QUAL [12]);
+    	    IF .status NEQ CLI$_ABSENT THEN
+    	    BEGIN
+    	    	cfg_changed = 1;
+    	    	local_info [LOCAL_V_CC_POSTMASTER] = .status NEQU CLI$_NEGATED;
+    	    END;
+    	    status = CLI$PRESENT (.QUAL [19]);
+    	    IF .status NEQ CLI$_ABSENT THEN
+    	    BEGIN
+    	    	cfg_changed = 1;
+    	    	local_info [LOCAL_V_DONT_DECODE_QP] = .status EQLU CLI$_NEGATED;
+    	    END;
+    	    status = CLI$PRESENT (.qual [4]);
+    	    IF .status NEQ CLI$_ABSENT THEN
+    	    BEGIN
+    	    	cfg_changed = 1;
+    	    	local_info [LOCAL_V_LONG_LINES] = .status NEQU CLI$_NEGATED;
+    	    END;
+    	    status = CLI$PRESENT (.qual [7]);
+    	    IF .status NEQ CLI$_ABSENT THEN
+    	    BEGIN
+    	    	cfg_changed = 1;
+    	    	local_info [LOCAL_V_OMIT_RESENT] = .status NEQU CLI$_NEGATED;
+    	    END;
+    	    status = CLI$PRESENT (.QUAL [20]);
+    	    IF .status NEQ CLI$_ABSENT THEN
+    	    BEGIN
+    	    	cfg_changed = 1;
+    	    	IF .status EQLU CLI$_PRESENT THEN
+    	    	BEGIN
+    	    	    local_info [LOCAL_V_NO_EXQUOTA] = 1;
+    	    	    local_info [LOCAL_V_EXQUOTA_FATAL] = CLI$PRESENT (%ASCID'DISABLE_EXQUOTA.FATAL') EQLU CLI$_PRESENT;
+    	    	END
+    	    	ELSE
+    	    	BEGIN
+    	    	    local_info [LOCAL_V_NO_EXQUOTA] = 0;
+    	    	    local_info [LOCAL_V_EXQUOTA_FATAL] = 0;
+    	    	END;
+    	    END;
+    	    IF CLI$PRESENT (.QUAL [6]) EQL CLI$_PRESENT THEN
+    	    BEGIN
+    	    	INCR I FROM 0 TO HDROPT_COUNT-1 DO
+    	    	BEGIN
+    	    	    IF CLI$PRESENT (.HDROPT [.I]) EQL CLI$_PRESENT THEN
+    	    	    WHILE CLI$GET_VALUE (.HDROPT [.I], STR) DO
+    	    	    BEGIN
+    	    	    	STATUS = -1;
+    	    	    	IF STR$POSITION (STR, no_d) EQL 1 THEN
+    	    	    	BEGIN
+    	    	    	    STATUS = 0;
+    	    	    	    STR$RIGHT (STR, STR, %REF (3));
+    	    	    	END;
+    	    	    	OPT = (INCR I FROM 0 TO HDRNAME_COUNT-1 DO
+    	    	    	    IF STR$POSITION (.HDRNAME [.I], STR) EQL 1 THEN
+    	    	    	    EXITLOOP .I);
+    	    	    	IF .OPT EQL HDRNAME_COUNT-1 THEN
+    	    	    	    IF .I EQL 0 THEN
+    	    	    	    	LOCAL_INFO [LOCAL_L_HDRTOP] = .STATUS
+    	    	    	    ELSE
+    	    	    	    	LOCAL_INFO [LOCAL_L_HDREND] = .STATUS
+    	    	    	ELSE
+    	    	    	    IF .I EQL 0 THEN
+    	    	    	    	TOPVEC [.OPT+1] = .STATUS
+    	    	    	    ELSE
+    	    	    	    	BOTVEC [.OPT+1] = .STATUS;
+    	    	    END;
+    	    	END;
+    	    	CFG_CHANGED = 1;
+    	    END;
+    	END;
+
+    [3]:
+    	BEGIN
+    	    IF CLI$PRESENT (.QUAL [0]) EQL CLI$_PRESENT THEN
+    	    BEGIN
+    	    	CFG_CHANGED = 1;
+    	    	CLI$GET_VALUE (.QUAL [0], STR);
+    	    	$BINTIM (TIMBUF=STR, TIMADR=DNSMTP_INFO [DNSMTP_Q_RETRY]);
+    	    END;
+    	    IF CLI$PRESENT (.QUAL [1]) EQL CLI$_PRESENT THEN
+    	    BEGIN
+    	    	CFG_CHANGED = 1;
+    	    	CLI$GET_VALUE (.QUAL [1], STR);
+    	    	LIB$CVT_DTB (.STR [DSC$W_LENGTH], .STR [DSC$A_POINTER],
+    	    	    DNSMTP_INFO [DNSMTP_L_MAXTRIES]);
+    	    END;
+    	    STATUS = CLI$PRESENT (.QUAL [5]);
+    	    IF .STATUS NEQ CLI$_ABSENT THEN
+    	    BEGIN
+    	    	CFG_CHANGED = 1;
+    	    	DNSMTP_INFO [DNSMTP_V_ACCTG] = .STATUS NEQ CLI$_NEGATED;
+    	    END;
+    	END;
+
+    [4]:
+    	BEGIN
+    	    IF CLI$PRESENT (.QUAL [0]) EQL CLI$_PRESENT THEN
+    	    BEGIN
+    	    	CFG_CHANGED = 1;
+    	    	CLI$GET_VALUE (.QUAL [0], STR);
+    	    	$BINTIM (TIMBUF=STR, TIMADR=SITE_INFO [SITE_Q_RETRY]);
+    	    END;
+    	    IF CLI$PRESENT (.QUAL [1]) EQL CLI$_PRESENT THEN
+    	    BEGIN
+    	    	CFG_CHANGED = 1;
+    	    	CLI$GET_VALUE (.QUAL [1], STR);
+    	    	LIB$CVT_DTB (.STR [DSC$W_LENGTH], .STR [DSC$A_POINTER],
+    	    	    SITE_INFO [SITE_L_MAXTRIES]);
+    	    END;
+%(    	    STATUS = CLI$PRESENT (.QUAL [5]);
+    	    IF .STATUS NEQ CLI$_ABSENT THEN
+    	    BEGIN
+    	    	CFG_CHANGED = 1;
+    	    	SITE_INFO [SITE_V_ACCTG] = .STATUS NEQ CLI$_NEGATED;
+    	    END;)%
+    	END;
+
+    [5]:
+    	BEGIN
+    	    STATUS = CLI$PRESENT (.QUAL [14]);
+    	    IF .STATUS NEQ CLI$_ABSENT THEN
+    	    BEGIN
+    	    	CFG_CHANGED = 1;
+    	    	IF .STATUS EQL CLI$_NEGATED THEN
+    	    	    MLF_INFO [MLF_L_MAXFWD] = 0  ! no maximum
+    	    	ELSE
+    	    	BEGIN
+    	    	    CLI$GET_VALUE (.QUAL [14], STR);
+    	    	    LIB$CVT_DTB (.STR [DSC$W_LENGTH], .STR [DSC$A_POINTER], MLF_INFO [MLF_L_MAXFWD]);
+    	    	END;
+    	    END;
+    	    STATUS = CLI$PRESENT (.QUAL [15]);
+    	    IF .STATUS NEQ CLI$_ABSENT THEN
+    	    BEGIN
+    	    	MLF_INFO [MLF_L_DELAYDAYS] = 0;
+    	    	CFG_CHANGED = 1;
+    	    	IF .STATUS NEQ CLI$_NEGATED THEN
+    	    	BEGIN
+    	    	    BIND DELAYDAYS = MLF_INFO [MLF_L_DELAYDAYS] : BITVECTOR [];
+    	    	    WHILE CLI$GET_VALUE (.QUAL [15], STR) DO
+    	    	    BEGIN
+    	    	    	INCR I FROM 0 TO DAYNAME_COUNT-1 DO
+    	    	    	BEGIN
+    	    	    	    BIND DN = .DAYNAME [.I] : BLOCK [,BYTE];
+    	    	    	    LOCAL LEN;
+    	    	    	    LEN = MIN (.DN [DSC$W_LENGTH], .STR [DSC$W_LENGTH]);
+    	    	    	    IF CH$EQL (.LEN, .DN [DSC$A_POINTER], .LEN, .STR [DSC$A_POINTER], %C' ') THEN
+    	    	    	    	DELAYDAYS [.I+1] = 1;
+    	    	    	END;
+    	    	    END;
+    	    	END;
+    	    END;
+    	END;
+
+    TES;
+
+    FREE_STRINGS (STR, STR2);
+
+    SS$_NORMAL
+
+END; ! CMD_SET
+
+%SBTTL 'CMD_SHOW'
+GLOBAL ROUTINE CMD_SHOW =
+BEGIN
+!++
+! FUNCTIONAL DESCRIPTION:
+!
+!   MCP SHOW command.
+!
+! RETURNS:  	cond_value, longword (unsigned), write only, by value
+!
+! PROTOTYPE:
+!
+!   CMD_SHOW
+!
+! IMPLICIT INPUTS:  None.
+!
+! IMPLICIT OUTPUTS: None.
+!
+! COMPLETION CODES:
+!
+!   SS$_NORMAL:	    	normal successful completion.
+!
+! SIDE EFFECTS:
+!
+!   None.
+!--
+    TABLE (OPTIONS, 'ALL', 'SYSTEM_USERS', 'LISTS', 'REWRITE_RULES',
+    	'PATHS', 'ALIASES', 'CONFIGURATION_FILE', 'FILE_SERVERS',
+    	'SMTP', 'LOCAL', 'ROUTER', 'DECNET_SMTP', 'SITE', 'VERSION',
+    	'MLF', 'LOCAL_DOMAINS', 'INSIDE_NETWORK_ADDRESSES', 'USERS');
+
+    EXTERNAL ROUTINE
+    	SHOW_SYSUSERS,
+    	SHOW_MLISTS,
+    	SHOW_RWRULES,
+    	SHOW_PATHS,
+    	SHOW_ALIASES,
+    	SHOW_FSUSER,
+    	SHOW_FILE,
+    	SHOW_SMTP,
+    	SHOW_LOCAL,
+    	SHOW_ROUTER,
+    	SHOW_DNSMTP,
+    	SHOW_SITE,
+    	SHOW_MLF,
+    	SHOW_LCLDOMS,
+    	SHOW_RELAYS,
+    	SHOW_USERS,
+    	SHOW_VERSION;
+
+    LOCAL
+    	STR 	: BLOCK [DSC$K_S_BLN,BYTE],
+    	PAT 	: BLOCK [DSC$K_S_BLN,BYTE],
+    	actpat	: BLOCK [DSC$K_S_BLN,BYTE],
+    	OUTRTN,
+    	OUTCMD,
+    	OPT,
+    	brief,
+    	STATUS;
+
+    INIT_DYNDESC (STR, PAT, actpat);
+
+    CLI$GET_VALUE (pattern_d, actpat);
+    STR$UPCASE (PAT, actpat);
+    CLI$GET_VALUE (showopt_d, STR);
+
+    OPT = (INCR I FROM 0 TO OPTIONS_COUNT-1 DO
+    	    IF STR$POSITION (.OPTIONS [.I], STR) EQL 1 THEN EXITLOOP .I);
+
+    OUTCMD = CLI$PRESENT (command_d) EQL CLI$_PRESENT;
+
+    brief = CLI$PRESENT (%ASCID'BRIEF') EQL CLI$_PRESENT;
+
+    OUTRTN = LIB$PUT_OUTPUT;
+    IF CLI$PRESENT (output_d) EQL CLI$_PRESENT THEN
+    BEGIN
+    	CLI$GET_VALUE (output_d, STR);
+    	$FAB_INIT (FAB=SHOW_FAB, FNA=.STR [DSC$A_POINTER],
+    	    FNS=MIN (.STR [DSC$W_LENGTH], 255),
+    	    DNM='SYS$DISK:[].DAT', FAC=PUT, FOP=SQO, RAT=CR);
+    	STATUS = $CREATE (FAB=SHOW_FAB);
+    	IF .STATUS THEN
+    	BEGIN
+    	    $RAB_INIT (RAB=SHOW_RAB, FAB=SHOW_FAB, ROP=WBH);
+    	    STATUS = $CONNECT (RAB=SHOW_RAB);
+    	    IF .STATUS THEN OUTRTN = ALT_SHOW_OUTPUT
+    	    ELSE SIGNAL (MCP__NOOPNOUT, 1, STR, .STATUS, .SHOW_RAB [RAB$L_STV]);
+    	END
+    	ELSE SIGNAL (MCP__NOOPNOUT, 1, STR, .STATUS, .SHOW_FAB [FAB$L_STV]);
+    END;
+
+    IF (.OUTRTN EQLA LIB$PUT_OUTPUT) OR .STATUS THEN
+    SELECT .OPT OF
+    SET
+    	[0,6]	    : SHOW_FILE (.OUTRTN, .OUTCMD);
+    	[0,13]	    : SHOW_VERSION (.OUTRTN, .OUTCMD);
+    	[0,1]	    : SHOW_SYSUSERS (.OUTRTN, .OUTCMD);
+    	[0,2]	    : SHOW_MLISTS (.OUTRTN, .OUTCMD, PAT, (.OPT EQL 0), .brief);
+    	[0,3]	    : SHOW_RWRULES (.OUTRTN, .OUTCMD, PAT, (.OPT EQL 0));
+    	[0,4]	    : SHOW_PATHS (.OUTRTN, .OUTCMD, PAT, (.OPT EQL 0));
+    	[0,5]	    : SHOW_ALIASES (.OUTRTN, .OUTCMD, PAT, (.OPT EQL 0));
+    	[0,7]	    : SHOW_FSUSER (.OUTRTN, .OUTCMD, PAT, (.OPT EQL 0));
+    	[0,8]	    : SHOW_SMTP (.OUTRTN, .OUTCMD);
+    	[0,9]	    : SHOW_LOCAL (.OUTRTN, .OUTCMD);
+    	[0,10]	    : SHOW_ROUTER (.OUTRTN, .OUTCMD);
+    	[0,11]	    : SHOW_DNSMTP (.OUTRTN, .OUTCMD);
+    	[0,12]	    : SHOW_SITE (.OUTRTN, .OUTCMD);
+    	[0,14]	    : SHOW_MLF (.OUTRTN, .OUTCMD);
+    	[0,15]	    : SHOW_LCLDOMS (.OUTRTN, .OUTCMD);
+    	[0,16]	    : SHOW_RELAYS (.OUTRTN, .OUTCMD);
+    	[17]	    : SHOW_USERS (.outrtn, .outcmd, actpat);
+    	[ALWAYS]    : IF NOT .OUTCMD THEN (.OUTRTN) (%ASCID'');
+    TES;
+
+    IF (.OUTRTN EQLA ALT_SHOW_OUTPUT) AND .STATUS THEN $CLOSE (FAB=SHOW_FAB);
+
+    FREE_STRINGS (STR, PAT, actpat);
+
+    SS$_NORMAL
+
+END; ! CMD_SHOW
+
+%SBTTL 'ALT_SHOW_OUTPUT'
+ROUTINE ALT_SHOW_OUTPUT (STR_A) =
+BEGIN
+!++
+! FUNCTIONAL DESCRIPTION:
+!
+!   Alternate output routine for SHOW commands.  Used only when
+!   output is redirected via the /OUTPUT qualifier.
+!
+! RETURNS:  	cond_value, longword (unsigned), write only, by value
+!
+! PROTOTYPE:
+!
+!   ALT_SHOW_OUTPUT
+!
+! IMPLICIT INPUTS:  None.
+!
+! IMPLICIT OUTPUTS: None.
+!
+! COMPLETION CODES:
+!
+!   RMS$_NORMAL:    	normal successful completion.
+!
+! SIDE EFFECTS:
+!
+!   None.
+!--
+    BIND
+    	STR = .STR_A : BLOCK [,BYTE];
+
+    SHOW_RAB [RAB$L_RBF] = .STR [DSC$A_POINTER];
+    SHOW_RAB [RAB$W_RSZ] = .STR [DSC$W_LENGTH];
+
+    $PUT (RAB=SHOW_RAB)
+
+END; ! ALT_SHOW_OUTPUT
+
+%SBTTL 'CMD_SAVE'
+GLOBAL ROUTINE CMD_SAVE =
+BEGIN
+!++
+! FUNCTIONAL DESCRIPTION:
+!
+!   MCP SAVE command.
+!
+! RETURNS:  	cond_value, longword (unsigned), write only, by value
+!
+! PROTOTYPE:
+!
+!   CMD_SAVE
+!
+! IMPLICIT INPUTS:  None.
+!
+! IMPLICIT OUTPUTS: None.
+!
+! COMPLETION CODES:
+!
+!   SS$_NORMAL:	    	normal successful completion.
+!
+! SIDE EFFECTS:
+!
+!   None.
+!--
+    LOCAL
+    	FSPEC	: BLOCK [DSC$K_S_BLN,BYTE],
+    	FAB 	: $FAB_DECL,
+    	NAM 	: $NAM_DECL,
+    	EBUF	: VECTOR [255,BYTE],
+    	STATUS;
+
+    INIT_DYNDESC (FSPEC);
+    IF CLI$PRESENT (filespec_d) EQL CLI$_PRESENT THEN
+    	CLI$GET_VALUE (filespec_d, FSPEC)
+    ELSE IF .CFGFILE [DSC$W_LENGTH] GTR 0 THEN
+    BEGIN
+    	$FAB_INIT (FAB=FAB, NAM=NAM, FNA=.CFGFILE [DSC$A_POINTER],
+    	    	FNS=.CFGFILE [DSC$W_LENGTH]);
+    	$NAM_INIT (NAM=NAM, ESA=EBUF, ESS=%ALLOCATION (EBUF), NOP=SYNCHK);
+    	IF $PARSE (FAB=FAB) THEN
+    	    STR$COPY_R (FSPEC, %REF (.NAM [NAM$B_ESL]-.NAM [NAM$B_VER]), EBUF)
+    	ELSE
+    	    STR$COPY_DX (FSPEC, CFGFILE);
+    END
+    ELSE
+    BEGIN
+    	STATUS = GET_CMD (FSPEC, file_prompt);
+    	IF NOT .STATUS OR .FSPEC [DSC$W_LENGTH] EQL 0 THEN RETURN SS$_NORMAL;
+    END;
+
+    STATUS = SAVE_MXCONFIG (FSPEC, CFGFILE);
+    IF .STATUS THEN
+    BEGIN
+    	CFG_CHANGED = 0;
+    	SIGNAL (MCP__WROTECFG, 1, CFGFILE);
+    END
+    ELSE
+    	SIGNAL (MCP__NOWRTCFG, 1, FSPEC);
+
+    FREE_STRINGS (FSPEC);
+
+    SS$_NORMAL
+
+END; ! CMD_SAVE
+
+
+%SBTTL 'PARSE_FILENAME'
+ROUTINE PARSE_FILENAME (len, addr) =
+BEGIN
+!++
+! FUNCTIONAL DESCRIPTION:
+!
+!   Parse a filename for syntactical correctness.
+!
+! RETURNS:  	cond_value, longword (unsigned), write only, by value
+!
+! PROTOTYPE:
+!
+!   PARSE_FILENAME	filename
+!
+! IMPLICIT INPUTS:  None.
+!
+! IMPLICIT OUTPUTS: None.
+!
+! COMPLETION CODES:
+!
+!   SS$_NORMAL:	    	normal successful completion.
+!
+! SIDE EFFECTS:
+!
+!   None.
+!--
+    LOCAL
+	buff	: $BBLOCK [NAM$C_MAXRSS],
+	nam	: $NAM (ESA = buff, ESS = %ALLOCATION(buff)),
+	fab	: $FAB (NAM = nam),
+    	status;
+
+    fab [FAB$L_FNA] = .addr;
+    fab [FAB$B_FNS] = .len;
+
+    RETURN ($PARSE (FAB = fab));
+
+END;
+
+
+%SBTTL 'PARSE_REWRITE_RULE'
+ROUTINE PARSE_REWRITE_RULE (len, addr) =
+BEGIN
+!++
+! FUNCTIONAL DESCRIPTION:
+!
+!   Parse a rewrite rule to ensure that the result is RFC821-compliant.
+!
+! RETURNS:  	cond_value, longword (unsigned), write only, by value
+!
+! PROTOTYPE:
+!
+!   PARSE_REWRITE_RULE	rewrite_rule
+!
+! IMPLICIT INPUTS:  None.
+!
+! IMPLICIT OUTPUTS: None.
+!
+! COMPLETION CODES:
+!
+!   SS$_NORMAL:	    	normal successful completion.
+!
+! SIDE EFFECTS:
+!
+!   None.
+!--
+    LOCAL
+	buff	: $BBLOCK [255],
+	dest	: REF $BBLOCK,
+	src	: REF $BBLOCK,
+	src_end	: REF $BBLOCK,
+	char	: BYTE,
+	lcl	: $BBLOCK [DSC$K_S_BLN],
+	domain	: $BBLOCK [DSC$K_S_BLN],
+	newaddr_d	: $BBLOCK [DSC$K_S_BLN],
+    	status;
+
+    INIT_DYNDESC (lcl, domain);
+
+    src = .addr;
+    src_end = .src + .len;
+    dest = buff;
+
+    WHILE (.src LEQA .src_end) DO
+	BEGIN
+	char = CH$RCHAR_A (src);
+	IF (.char EQLU %C'{')
+	THEN
+	    BEGIN
+	    CH$WCHAR_A (%C'x', dest);
+	    WHILE ((.src LEQA .src_end) AND (CH$RCHAR_A (src) NEQU %C'}')) DO;
+	    END
+	ELSE
+	    CH$WCHAR_A (.char, dest);
+	END;
+
+    newaddr_d [DSC$B_DTYPE] = DSC$K_DTYPE_T;
+    newaddr_d [DSC$B_CLASS] = DSC$K_CLASS_S;
+    newaddr_d [DSC$W_LENGTH] = CH$DIFF (.dest, buff) - 1;
+    newaddr_d [DSC$A_POINTER] = buff;
+
+    status = PARSE821 (newaddr_d, 0, lcl, domain);
+
+    FREE_STRINGS (lcl, domain);
+
+    RETURN (.status);
+
+END;
+
+
+GLOBAL ROUTINE CMD_SPAWN =
+BEGIN
+!+++
+! FUNCTIONAL DESCRIPTION:
+!
+!   Spawn a subprocess.
+!
+! RETURNS:  	cond_value, longword (unsigned), write only, by value
+!
+! PROTOTYPE:
+!
+!   CMD_SPAWN
+!
+! IMPLICIT INPUTS:  jpi_curpriv
+!
+! IMPLICIT OUTPUTS: None.
+!
+! COMPLETION CODES:
+!
+!   SS$_NORMAL:	    	normal successful completion.
+!
+! SIDE EFFECTS:
+!
+!   None.
+!--
+
+    LOCAL
+	spawn_cmd	: $BBLOCK [DSC$C_S_BLN],
+	status;
+
+    !
+    ! Disable privileges image is installed with but we don't have
+    !
+    status = $SETPRV (ENBFLG = 0, PRVADR = jpi_curpriv);
+
+    $INIT_DYNDESC(spawn_cmd);			!Set up a dynamic descriptor
+
+    status = CLI$GET_VALUE(			!Get the value of the spawn
+		p1_d,				!...command
+		spawn_cmd);			!...where to put it
+
+    status = LIB$SPAWN(				!Spawn a subprocess
+		(IF (.status)			!...was a command provided?
+		 THEN	spawn_cmd		!...yes, use it
+		 ELSE	0),			!...no, don't pass a command
+		0, 0, 0, 0, 0, 0, 0, 0, 0,	!...pass some defaults
+		%ASCID'MCP-sub$ ');		!...pass a prompt
+
+    !
+    ! Re-enable the installed image privileges
+    !
+    $SETPRV (ENBFLG = 1, PRVADR = jpi_curpriv);
+
+    STR$FREE1_DX(spawn_cmd);			!Free the command desc
+
+    IF NOT(.status)
+    THEN
+	SIGNAL (.status);
+
+    SS$_NORMAL
+
+END;
+
+
+%SBTTL	'CMD_ATTACH'
+GLOBAL ROUTINE cmd_attach =
+BEGIN
+!+
+!
+!  Routine:	CMD_ATTACH
+!
+!  Functional Description:
+!
+!	This routine is called in response to an ATTACH command.  It does the
+!	same thing as the DCL ATTACH command.  Attach processes can be 
+!	specified by process name or by PID (as a hexadecimal number).
+!
+!  Implicit Inputs:
+!
+!	p1_d	- an ASCID constant containing the value P1
+!	id_d	- an ASCID constant containing the value IDENTIFICATION
+!
+!  Parameters:
+!
+!	None.
+!
+!  Returns:
+!
+!	SS$_NORMAL, success
+!	SS$_NONEXPR, the process specified does not exist
+!	Other errors returned by LIB$ATTACH and $GETJPIW
+!
+!  Side effects:
+!
+!	None.
+!
+!-
+    REGISTER
+	status;
+
+    LOCAL
+	pid		: LONG,
+	value		: $BBLOCK [DSC$C_S_BLN],
+	jpi_list	: $ITMLST_DECL (ITEMS=1);
+
+    $INIT_DYNDESC (value);			!Set up a dynamic descriptor
+
+    !
+    ! Store the PID of the process to which to attach in pid.
+    !
+    status = CLI$GET_VALUE (id_d, value);	!Check if specified by /ID
+    IF (.status)				!Got a PID?
+    THEN					!Yes,
+	status = OTS$CVT_TZ_L (value, pid)	!Convert it to numeric data
+    ELSE
+	IF (.status EQLU CLI$_ABSENT)		!No, acceptable error?
+	THEN
+	    IF (status = CLI$PRESENT (parent_d))
+	    THEN
+		BEGIN
+		$ITMLST_INIT (ITMLST = jpi_list,	!Set up to get the PID
+			(ITMCOD =JPI$_OWNER,		!... of the parent
+			 BUFADR = pid,			!... process
+			 BUFSIZ = 4));
+		status = $GETJPIW (ITMLST = jpi_list);
+		IF (.pid EQLU 0)			!If 0 is returned,
+		THEN					!... there's no parent
+		    status = SS$_NONEXPR;		!... process
+		END
+	    ELSE
+		BEGIN					!Yes,
+		status = CLI$GET_VALUE (p1_d, value);	!Get process name
+		IF NOT(.status) THEN RETURN (.status);	!Return on error
+
+		$ITMLST_INIT (ITMLST = jpi_list,	!Set up to get the PID
+			(ITMCOD = JPI$_PID,
+			 BUFADR = pid,
+			 BUFSIZ = 4));
+		status = $GETJPIW (			!Get the pid of the process
+			PRCNAM=value,
+			ITMLST=jpi_list);
+
+		END;				!End of by process name
+
+    IF (.status)				!Got a valid PID?
+    THEN					!Yes,
+	status = LIB$ATTACH(pid);		!Try to attach to it
+
+    STR$FREE1_DX(value);			!Free the descrip set up above
+
+    IF NOT(.status)
+    THEN
+	SIGNAL (.status);
+
+    SS$_NORMAL
+
+END;						!End of do_attach
+
+%SBTTL 'ipaddr_strtonum'
+ROUTINE ipaddr_strtonum (str_a, addr_a) = 
+BEGIN
+!++
+! FUNCTIONAL DESCRIPTION:
+!
+!   Convert dotted-decimal IP address string to integer equivalent.
+!
+! RETURNS:  	cond_value, longword (unsigned), write only, by value
+!
+! PROTOTYPE:
+!
+!   ipaddr_strtonum  str, addr
+!
+!   str:     char_string, read only, by descriptor
+!   addr:    longword_unsigned, write only, by reference
+!
+! IMPLICIT INPUTS:  None.
+!
+! IMPLICIT OUTPUTS: None.
+!
+! COMPLETION CODES:
+!
+!   SS$_NORMAL:	    	normal successful completion.
+!
+! SIDE EFFECTS:
+!
+!   None.
+!--
+    BIND
+    	addr	= .addr_a   	: LONG;
+
+    LOCAL
+    	cp,
+    	len 	: WORD,
+    	parts	: VECTOR [4,BYTE],
+    	val,
+    	i,
+    	status;
+
+    status = LIB$ANALYZE_SDESC (.str_a, len, cp);
+    IF NOT .status THEN RETURN .status;
+
+    parts [0] = parts [1] = parts [2] = parts [3] = 0;
+
+    i = 0;
+    WHILE .i LSS 4 AND .len GTRU 0 DO
+    BEGIN
+    	LOCAL ch : BYTE;
+    	val = 0;
+    	ch = CH$RCHAR (.cp);
+    	WHILE (.ch NEQ %C'.') AND .len GTRU 0 DO
+    	BEGIN
+    	    IF .ch LSS %C'0' OR .ch GTR %C'9' THEN RETURN SS$_IVADDR;
+    	    val = .val * 10 + (.ch - %C'0');
+    	    cp = CH$PLUS (.cp, 1);
+    	    ch = CH$RCHAR (.cp);
+    	    len = .len - 1;
+    	END;
+    	IF .val GTRU 255 THEN RETURN SS$_IVADDR;
+    	parts [.i] = .val;
+    	i = .i + 1;
+    	IF .len GTRU 0 THEN
+    	BEGIN
+    	    cp = CH$PLUS (.cp, 1);
+    	    len = .len - 1;
+    	END;
+    END;
+
+    IF .i EQL 0 THEN RETURN SS$_IVADDR;
+
+    addr = (.parts [3] ^ 24) OR (.parts [2] ^ 16) OR (.parts [1] ^ 8) OR .parts [0];
+
+    SS$_NORMAL
+
+END; ! ipaddr_strtonum
+
+END
+ELUDOM

@@ -1,0 +1,739 @@
+%TITLE 'MCP_CMDIO'
+MODULE MCP_CMDIO (IDENT='V1.3-2',
+    	ADDRESSING_MODE (EXTERNAL=LONG_RELATIVE, NONEXTERNAL=LONG_RELATIVE)) =
+BEGIN
+!++
+! FACILITY: 	    MX Mailer Control Program
+!
+! ABSTRACT: 	    Command I/O routines used by MCP.
+!
+! MODULE DESCRIPTION:
+!
+!   This module contains terminal/command I/O routines.
+!
+! AUTHOR:   	    M. Madison
+!
+! Copyright (c) 2008, Matthew Madison.
+! 
+! All rights reserved.
+! 
+! Redistribution and use in source and binary forms, with or without
+! modification, are permitted provided that the following conditions
+! are met:
+! 
+!     * Redistributions of source code must retain the above
+!       copyright notice, this list of conditions and the following
+!       disclaimer.
+!     * Redistributions in binary form must reproduce the above
+!       copyright notice, this list of conditions and the following
+!       disclaimer in the documentation and/or other materials provided
+!       with the distribution.
+!     * Neither the name of the copyright owner nor the names of any
+!       other contributors may be used to endorse or promote products
+!       derived from this software without specific prior written
+!       permission.
+! 
+! THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
+! "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
+! LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
+! A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
+! OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
+! SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
+! LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
+! DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
+! THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
+! (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
+! OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+!
+! CREATION DATE:    12-DEC-1989
+!
+! MODIFICATION HISTORY:
+!
+!   12-DEC-1989	V1.0	Madison	    Initial coding (from WCP).
+!   16-JAN-1990	V1.0-1	Madison	    Don't interpret plain "@" as indirect.
+!   13-MAR-1990	V1.0-2	Madison	    Fix idiotic FIND_FIRST_NOT bug.
+!   20-MAR-1990	V1.0-3	Madison	    -2 didn't quite get them all.
+!   05-OCT-1990	V1.1	Madison	    Add STRIP routine to strip comments.
+!   10-MAR-1993 V1.2	Goatley     Converted to AXP.
+!   19-AUG-1996 V1.3	Goatley     Added support for key definitions.
+!    7-OCT-1996 V1.3-1	Goatley     Automatically load key defs file.
+!    9-OCT-1997 V1.3-2	Goatley	    Allow GET_CMD to be called with no args
+!				    to just initialize stuff.
+!--
+    LIBRARY 'SYS$LIBRARY:STARLET';
+    LIBRARY 'SYS$LIBRARY:TPAMAC';
+    LIBRARY 'MX_SRC_COMMON:FIELDS';
+    LIBRARY 'MX_SRC_COMMON:MX';
+    LIBRARY 'MCP';
+
+    FORWARD ROUTINE
+    	GET_CMD,
+    	INDIRECT,
+    	STRIP,
+    	STRIP_STORE;
+
+    EXTERNAL ROUTINE
+    	G_HAT (LIB$PUT_OUTPUT, LIB$TPARSE, STR$FIND_FIRST_IN_SET,
+    	    STR$FIND_FIRST_NOT_IN_SET, STR$RIGHT, STR$LEFT, STR$TRIM,
+    	    SMG$CREATE_VIRTUAL_KEYBOARD, SMG$READ_COMPOSED_LINE,
+	    SMG$CREATE_KEY_TABLE, SMG$LOAD_KEY_DEFS);
+
+    EXTERNAL LITERAL
+    	MCP__CANTIND, SMG$_EOF;
+
+    _DEF (IOC)
+    	IOC_L_FLINK 	= _LONG,
+    	IOC_L_BLINK 	= _LONG,
+    	IOC_X_FAB   	= _BYTES (FAB$C_BLN),
+    	IOC_X_RAB   	= _BYTES (RAB$C_BLN)
+    _ENDDEF (IOC);
+
+    OWN
+    	KBID	: INITIAL (0),
+	KTID	: INITIAL (0),
+    	IOCQUE	: IOCDEF;
+
+    FORWARD ROUTINE
+	cmd_define_key,
+	cmd_delete_key,
+	cmd_show_key,
+	decode_attributes;
+
+    BIND
+	key_name_str	= %ASCID'KEY_NAME',
+	equiv_str_str	= %ASCID'EQUIV_STR',
+	if_state_str	= %ASCID'IF_STATE',
+	set_state_str	= %ASCID'SET_STATE',
+	terminate_str	= %ASCID'TERMINATE',
+	echo_str	= %ASCID'ECHO',
+	lock_str	= %ASCID'LOCK',
+	fao_show_key_header	= %ASCID'!AS key state definitions:',
+	fao_show_key		= %ASCID'  !AS = "!AS"!AS';
+
+    MACRO
+    	TPA_A_P1    	=   TPA$C_LENGTH0+00,0,32,0%,
+    	TPA_A_P2    	=   TPA$C_LENGTH0+04,0,32,0%,
+    	TPA_A_P3    	=   TPA$C_LENGTH0+08,0,32,0%;
+
+%SBTTL 'State table for STRIP'
+
+    $INIT_STATE (STRIP_STATE, STRIP_KEY);
+
+    $STATE (STRIP1,
+    	(TPA$_BLANK, STRIP1),
+    	(TPA$_LAMBDA, STRIP2));
+    $STATE (STRIP2,
+    	(TPA$_EOS, TPA$_EXIT),
+    	('!', TPA$_EXIT),
+    	('"', STRIPQ, STRIP_STORE),
+    	(TPA$_ANY, STRIP2, STRIP_STORE));
+    $STATE (STRIPQ,
+    	('"', STRIP2, STRIP_STORE),
+    	(TPA$_EOS, TPA$_EXIT),
+    	(TPA$_ANY, STRIPQ, STRIP_STORE));
+
+%SBTTL 'GET_CMD'
+GLOBAL ROUTINE GET_CMD (STR_A, PROMPT_A, OUTLEN_A) =
+BEGIN
+!++
+! FUNCTIONAL DESCRIPTION:
+!
+!   Uses SMG$READ_COMPOSED_LINE to get a line from the command stream.
+!
+!   N.B.:   Must be called first without args to initialize the SMG$ stuff.
+!	    If called from CLI$DCL_PARSE and the user has keys defined,
+!	    CLI$DCL_PARSE is called from SMG$LOAD_KEY_DEFS, interfering
+!	    with the state of the in-progress CLI$DCL_PARSE call and
+!	    causing an accvio in that routine.
+!
+! RETURNS:  	cond_value, longword (unsigned), write only, by value
+!
+! PROTOTYPE:
+!
+!   GET_CMD  str [,prompt] [,outlen]
+!
+! IMPLICIT INPUTS:  None.
+!
+! IMPLICIT OUTPUTS: None.
+!
+! COMPLETION CODES:
+!
+!   SS$_NORMAL:	    	normal successful completion.
+!
+! SIDE EFFECTS:
+!
+!   None.
+!--
+
+    BUILTIN
+    	ACTUALCOUNT;
+
+    LOCAL
+    	PROMPT	: BLOCK [DSC$K_S_BLN,BYTE],
+    	STR 	: BLOCK [DSC$K_S_BLN,BYTE],
+    	LEN 	: WORD,
+    	XIOC	: REF IOCDEF,
+    	STATUS;
+
+    $INIT_DYNDESC (PROMPT);
+    $INIT_DYNDESC (STR);
+    IF ACTUALCOUNT () GTR 1 THEN
+    	IF .PROMPT_A NEQ 0 THEN
+    	    STR$COPY_DX (PROMPT, .PROMPT_A);
+
+    IF .KBID EQL 0 THEN
+    BEGIN
+    	SMG$CREATE_VIRTUAL_KEYBOARD (KBID);
+    	IOCQUE [IOC_L_BLINK] = IOCQUE [IOC_L_FLINK] = IOCQUE [IOC_L_FLINK];
+    	STR$PREFIX (PROMPT, %ASCID %STRING (%CHAR (10)));
+    END;
+
+    IF (.ktid EQLU 0)
+    THEN
+	BEGIN
+	status = SMG$CREATE_KEY_TABLE (ktid);
+	IF (.status)
+	THEN
+	    SMG$LOAD_KEY_DEFS (ktid, %ASCID'MX_MCP_KEYDEFS',
+				%ASCID'SYS$LOGIN:.INI');
+	END;
+
+    IF ACTUALCOUNT () EQLU 0 THEN RETURN SS$_NORMAL;	!Return if just INITing
+
+    WHILE 1 DO
+    BEGIN
+    	WHILE .IOCQUE [IOC_L_FLINK] NEQA IOCQUE [IOC_L_FLINK] DO
+    	BEGIN
+    	    BIND
+    	    	CURIOC  = .IOCQUE [IOC_L_FLINK] : IOCDEF,
+    	    	FAB 	= CURIOC [IOC_X_FAB]    : $FAB_DECL,
+    	    	RAB 	= CURIOC [IOC_X_RAB]    : $RAB_DECL;
+
+    	    IF (RAB [RAB$V_PMT] = (.PROMPT_A NEQ 0)) THEN
+    	    BEGIN
+    	    	RAB [RAB$L_PBF] = .PROMPT [DSC$A_POINTER];
+    	    	RAB [RAB$B_PSZ] = .PROMPT [DSC$W_LENGTH];
+    	    END;
+    	    STATUS = $GET (RAB=RAB);
+    	    IF .STATUS THEN
+    	    BEGIN
+    	    	IF NOT INDIRECT (.RAB [RAB$W_RSZ], .RAB [RAB$L_UBF]) THEN
+    	    	BEGIN
+    	    	    IF ACTUALCOUNT () GTR 2 THEN
+    	    	    	IF .OUTLEN_A NEQA 0 THEN .OUTLEN_A = .RAB [RAB$W_RSZ];
+    	    	    STR$COPY_R (.STR_A, RAB [RAB$W_RSZ], .RAB [RAB$L_UBF]);
+    	    	    LIB$PUT_OUTPUT (.STR_A);
+    	    	    STR$FREE1_DX (PROMPT);
+    	    	    RETURN SS$_NORMAL
+    	    	END;
+    	    END
+    	    ELSE
+    	    BEGIN
+    	    	$DISCONNECT (RAB=RAB);
+    	    	$CLOSE (FAB=FAB);
+    	    	LIB$FREE_VM (%REF (.RAB [RAB$W_USZ]), RAB [RAB$L_UBF]);
+    	    	REMQUE (CURIOC, XIOC);
+    	    	LIB$FREE_VM (%REF (IOC_S_IOCDEF), XIOC);
+    	    END;
+    	END;
+
+    	STATUS = SMG$READ_COMPOSED_LINE (KBID, KTID, STR, PROMPT, LEN);
+    	IF .STATUS THEN
+    	BEGIN
+    	    IF NOT INDIRECT (.STR [DSC$W_LENGTH], .STR [DSC$A_POINTER]) THEN
+    	    BEGIN
+    	    	IF ACTUALCOUNT () GTR 2 THEN
+    	    	    IF .OUTLEN_A NEQ 0 THEN .OUTLEN_A = .LEN;
+    	    	STR$COPY_DX (.STR_A, STR);
+    	    	STR$FREE1_DX (PROMPT);
+    	    	RETURN SS$_NORMAL;
+    	    END;
+    	END
+    	ELSE
+    	BEGIN
+    	    STR$FREE1_DX (STR);
+    	    STR$FREE1_DX (PROMPT);
+    	    IF .STATUS EQL SMG$_EOF THEN
+    	    	RETURN RMS$_EOF
+    	    ELSE
+    	    	RETURN .STATUS;
+    	END;
+
+    END; ! WHILE 1
+
+    SS$_ABORT
+
+END; ! GET_CMD
+
+%SBTTL 'INDIRECT'
+ROUTINE INDIRECT (INPLEN, INPADR) = 
+BEGIN
+!++
+! FUNCTIONAL DESCRIPTION:
+!
+!   Checks for an input redirection (@command-file).  If found, returns
+!   Otherwise returns 0.
+!
+! RETURNS:  	longword_unsigned, longword (unsigned), write only, by value
+!
+! PROTOTYPE:
+!
+!   INDIRECT  inplen, inpadr
+!
+! IMPLICIT INPUTS:  None.
+!
+! IMPLICIT OUTPUTS: None.
+!
+! COMPLETION CODES:
+!
+!   SS$_NORMAL:	    	normal successful completion.
+!
+! SIDE EFFECTS:
+!
+!   None.
+!--
+    LOCAL
+    	INPSTR	: BLOCK [DSC$K_S_BLN,BYTE],
+    	STR 	: BLOCK [DSC$K_S_BLN,BYTE],
+    	XABFHC	: $XABFHC_DECL,
+    	IOC 	: REF IOCDEF,
+    	I,
+    	STATUS;
+
+    IF .INPLEN EQL 0 THEN RETURN 0;
+
+    INPSTR [DSC$B_DTYPE] = DSC$K_DTYPE_T;
+    INPSTR [DSC$B_CLASS] = DSC$K_CLASS_S;
+    INPSTR [DSC$W_LENGTH] = .INPLEN;
+    INPSTR [DSC$A_POINTER] = .INPADR;
+
+    $INIT_DYNDESC (STR);
+
+    I = STR$FIND_FIRST_NOT_IN_SET (INPSTR, %ASCID %STRING (' ', %CHAR (9)));
+    IF CH$RCHAR (.INPADR+.I-1) NEQ %C'@' THEN RETURN 0;
+    STR$RIGHT (STR, INPSTR, %REF (.I+1));
+    I = STR$FIND_FIRST_NOT_IN_SET (STR, %ASCID %STRING (' ', %CHAR (9)));
+    IF .I GTR 1 THEN STR$RIGHT (STR, STR, I);
+    I = STR$FIND_FIRST_IN_SET (STR, %ASCID %STRING (' ', %CHAR (9), '!'));
+    IF .I GTR 0 THEN STR$LEFT (STR, STR, %REF (.I-1));
+    IF .STR [DSC$W_LENGTH] EQL 0 THEN
+    BEGIN
+    	STR$FREE1_DX (STR);
+    	RETURN 0;
+    END;
+    STATUS = LIB$GET_VM (%REF (IOC_S_IOCDEF), IOC);
+    IF NOT .STATUS THEN
+    BEGIN
+    	SIGNAL (MCP__CANTIND, 0, .STATUS);
+    	STR$FREE1_DX (STR);
+    	RETURN 0;
+    END;
+    BEGIN
+    	BIND
+    	    FAB = IOC [IOC_X_FAB] : $FAB_DECL,
+    	    RAB = IOC [IOC_X_RAB] : $RAB_DECL;
+
+    	$FAB_INIT (FAB=FAB, FNA=.STR [DSC$A_POINTER], FNS=.STR [DSC$W_LENGTH],
+    	    XAB=XABFHC, FAC=GET, SHR=SHRPUT, DNM='SYS$DISK:[].MCP');
+    	$XABFHC_INIT (XAB=XABFHC);
+    	STATUS = $OPEN (FAB=FAB);
+    	IF NOT .STATUS THEN
+    	BEGIN
+    	    SIGNAL (MCP__CANTIND, 0, .STATUS, .FAB [FAB$L_STV]);
+    	    STR$FREE1_DX (STR);
+    	    LIB$FREE_VM (%REF (IOC_S_IOCDEF), IOC);
+    	    RETURN 0;
+    	END;
+    	STR$FREE1_DX (STR);
+    	$RAB_INIT (RAB=RAB, FAB=FAB);
+    	STATUS = $CONNECT (RAB=RAB);
+    	IF NOT .STATUS THEN
+    	BEGIN
+    	    SIGNAL (MCP__CANTIND, 0, .STATUS, .RAB [RAB$L_STV]);
+    	    $CLOSE (FAB=FAB);
+    	    LIB$FREE_VM (%REF (IOC_S_IOCDEF), IOC);
+    	    RETURN 0;
+    	END;
+    	IF .FAB [FAB$W_MRS] EQL 0 THEN
+    	    IF .XABFHC [XAB$W_LRL] EQL 0 THEN
+    	    	RAB [RAB$W_USZ] = 1024
+    	    ELSE
+    	    	RAB [RAB$W_USZ] = .XABFHC [XAB$W_LRL]
+    	ELSE
+    	    RAB [RAB$W_USZ] = .FAB [FAB$W_MRS];
+    	FAB [FAB$L_XAB] = 0;
+    	STATUS = LIB$GET_VM (%REF (.RAB [RAB$W_USZ]), RAB [RAB$L_UBF]);
+    	IF NOT .STATUS THEN
+    	BEGIN
+    	    SIGNAL (MCP__CANTIND, 0, .STATUS);
+    	    $CLOSE (FAB=FAB);
+    	    LIB$FREE_VM (%REF (IOC_S_IOCDEF), IOC);
+    	    RETURN 0;
+    	END;
+    END;
+
+    INSQUE (.IOC, IOCQUE [IOC_L_FLINK]);
+
+    1
+
+END; ! INDIRECT
+
+%SBTTL 'STRIP'
+GLOBAL ROUTINE STRIP (OUTSTR_A, INSTR_A) =
+BEGIN
+!++
+! FUNCTIONAL DESCRIPTION:
+!
+!   Parses a command string, stripping leading and trailing blanks
+!   and comments (anything after a !).
+!
+! RETURNS:  	cond_value, longword (unsigned), write only, by value
+!
+! PROTOTYPE:
+!
+!   STRIP  outstr, instr
+!
+! IMPLICIT INPUTS:  None.
+!
+! IMPLICIT OUTPUTS: None.
+!
+! COMPLETION CODES:
+!
+!   SS$_NORMAL:	    	normal successful completion.
+!
+! SIDE EFFECTS:
+!
+!   None.
+!--
+    BIND
+    	INSTR	= .INSTR_A  : BLOCK [,BYTE],
+    	OUTSTR	= .OUTSTR_A : BLOCK [,BYTE];
+
+    LITERAL
+    	TPA_C_LENGTH	=   TPA$C_LENGTH0 + 8,
+    	TPA_K_COUNT 	=   TPA$K_COUNT0 + 2;
+
+    LOCAL
+    	TPABLK	: BLOCK [TPA_C_LENGTH,BYTE],
+    	SDSC	: BLOCK [DSC$K_S_BLN,BYTE],
+    	CMDLEN	: WORD,
+    	CMDBUF	: VECTOR [4096,BYTE],
+    	STATUS;
+
+    CMDLEN = 0;
+
+    TPABLK [TPA$L_COUNT] = TPA_K_COUNT;
+    TPABLK [TPA$L_OPTIONS] = TPA$M_BLANKS;
+    TPABLK [TPA$L_STRINGCNT] = .INSTR [DSC$W_LENGTH];
+    TPABLK [TPA$L_STRINGPTR] = .INSTR [DSC$A_POINTER];
+    TPABLK [TPA_A_P1] = CMDBUF;
+    TPABLK [TPA_A_P2] = CMDLEN;
+
+    STATUS = LIB$TPARSE (TPABLK, STRIP_STATE, STRIP_KEY);
+    IF NOT .STATUS THEN RETURN .STATUS;
+
+    SDSC [DSC$B_DTYPE] = DSC$K_DTYPE_T;
+    SDSC [DSC$B_CLASS] = DSC$K_CLASS_S;
+    SDSC [DSC$W_LENGTH] = .CMDLEN;
+    SDSC [DSC$A_POINTER] = CMDBUF;
+
+    STR$TRIM (OUTSTR, SDSC)
+
+END; ! STRIP
+
+%SBTTL 'STRIP_STORE'
+TPA_ROUTINE (STRIP_STORE, (OPTIONS, STRINGCNT, STRINGPTR, TOKENCNT,
+    	    TOKENPTR, CHAR, NUMBER, PARAM, BUF_A, LEN_A))
+!++
+! FUNCTIONAL DESCRIPTION:
+!
+!   Invoked by TPARSE to store a character.
+!
+! RETURNS:  	cond_value, longword (unsigned), write only, by value
+!
+! PROTOTYPE:
+!
+!   STRIP_STORE opt, scnt, sptr, tcnt, tptr, chr, num, par, p1, p2
+!
+! IMPLICIT INPUTS:  None.
+!
+! IMPLICIT OUTPUTS: None.
+!
+! COMPLETION CODES:
+!
+!   SS$_NORMAL:	    	normal successful completion.
+!
+! SIDE EFFECTS:
+!
+!   None.
+!--
+    BIND
+    	BUF 	= .BUF_A    : VECTOR [4096,BYTE],
+    	LEN 	= .LEN_A    : WORD;
+
+    BUF [.LEN] = .CHAR;
+    IF .LEN LSS 4096 THEN LEN = .LEN + 1;
+
+    SS$_NORMAL
+
+END; ! STRIP_STORE
+
+
+GLOBAL ROUTINE cmd_define_key =
+BEGIN
+!+
+! Functional Description:
+!
+!	CLI routine to define keys inside MCP.
+!-
+    EXTERNAL ROUTINE
+	G_HAT (SMG$CREATE_KEY_TABLE, SMG$ADD_KEY_DEF,
+		STR$FREE1_DX, CLI$GET_VALUE, CLI$PRESENT);
+
+    EXTERNAL LITERAL
+	CLI$_PRESENT, CLI$_ABSENT, CLI$_NEGATED, CLI$_DEFAULTED;
+
+    LOCAL
+	key		: $BBLOCK [DSC$K_S_BLN],
+	equiv		: $BBLOCK [DSC$K_S_BLN],
+	if_state	: $BBLOCK [DSC$K_S_BLN],
+	set_state	: $BBLOCK [DSC$K_S_BLN],
+	flags,
+	status;
+
+    $INIT_DYNDESC (key);
+    $INIT_DYNDESC (equiv);
+    $INIT_DYNDESC (if_state);
+    $INIT_DYNDESC (set_state);
+
+!    status = SMG$CREATE_KEY_TABLE (ktid);
+
+    status = CLI$GET_VALUE (key_name_str, key);
+    status = CLI$GET_VALUE (equiv_str_str, equiv);
+    status = CLI$GET_VALUE (if_state_str, if_state);
+    status = CLI$GET_VALUE (set_state_str, set_state);
+
+    flags = 0;
+    status = CLI$PRESENT (terminate_str);
+    IF (.status NEQU CLI$_ABSENT) AND (.status NEQU CLI$_NEGATED)
+    THEN
+	flags = .flags OR SMG$M_KEY_TERMINATE;
+
+    status = CLI$PRESENT (echo_str);
+    IF (.status EQLU CLI$_NEGATED)
+    THEN
+	flags = .flags OR SMG$M_KEY_NOECHO;
+
+    status = CLI$PRESENT (lock_str);
+    IF (.status) AND (.set_state [DSC$W_LENGTH] NEQU 0)
+    THEN
+	flags = .flags OR SMG$M_KEY_LOCK;
+
+    status = SMG$ADD_KEY_DEF (ktid, key,
+				(IF (.if_state [DSC$W_LENGTH] NEQU 0)
+				 THEN if_state ELSE 0),
+				flags, equiv,
+				(IF (.set_state [DSC$W_LENGTH] NEQU 0)
+				 THEN set_state ELSE 0));
+
+    STR$FREE1_DX (key);
+    STR$FREE1_DX (equiv);
+    IF (.if_state [DSC$W_LENGTH] NEQU 0) THEN STR$FREE1_DX (if_state);
+    IF (.set_state [DSC$W_LENGTH] NEQU 0) THEN STR$FREE1_DX (set_state);
+
+    IF NOT(.status) THEN SIGNAL(.status);
+    RETURN (.status);
+
+END;						!End of routine
+
+
+GLOBAL ROUTINE cmd_delete_key =
+BEGIN
+!+
+! Functional Description:
+!
+!	CLI routine to delete keys inside MCP.
+!-
+    EXTERNAL ROUTINE
+	G_HAT (SMG$DELETE_KEY_DEF, STR$FREE1_DX, CLI$GET_VALUE, CLI$PRESENT);
+
+    EXTERNAL LITERAL
+	CLI$_PRESENT, CLI$_ABSENT, CLI$_NEGATED, CLI$_DEFAULTED;
+
+    LOCAL
+	key		: $BBLOCK [DSC$K_S_BLN],
+	if_state	: $BBLOCK [DSC$K_S_BLN],
+	flags,
+	status;
+
+    $INIT_DYNDESC (key);
+    $INIT_DYNDESC (if_state);
+
+    status = CLI$GET_VALUE (key_name_str, key);
+    IF (CLI$PRESENT(if_state_str))
+    THEN
+	status = CLI$GET_VALUE (if_state_str, if_state);
+
+    status = SMG$DELETE_KEY_DEF (ktid, key,
+				(IF (.if_state [DSC$W_LENGTH] NEQU 0)
+				 THEN if_state ELSE 0));
+
+    STR$FREE1_DX (key);
+    IF (.if_state [DSC$W_LENGTH] NEQU 0) THEN STR$FREE1_DX (if_state);
+
+    IF NOT(.status) THEN SIGNAL(.status);
+    RETURN (.status);
+
+END;						!End of routine
+
+
+GLOBAL ROUTINE cmd_show_key =
+BEGIN
+!+
+! Functional Description:
+!
+!	CLI routine to show key definitions inside MCP.
+!-
+    EXTERNAL ROUTINE
+	G_HAT (LIB$SYS_FAO, LIB$PUT_OUTPUT, SMG$GET_KEY_DEF, SMG$LIST_KEY_DEFS,
+	 STR$COPY_DX, STR$FREE1_DX, CLI$GET_VALUE, CLI$PRESENT);
+
+    EXTERNAL LITERAL
+	CLI$_PRESENT, CLI$_ABSENT, CLI$_NEGATED, CLI$_DEFAULTED,
+	SMG$_NOMOREKEYS;
+
+    LOCAL
+	key		: $BBLOCK [DSC$K_S_BLN],
+	equiv		: $BBLOCK [DSC$K_S_BLN],
+	if_state	: $BBLOCK [DSC$K_S_BLN],
+	if_state2	: $BBLOCK [DSC$K_S_BLN],
+	set_state	: $BBLOCK [DSC$K_S_BLN],
+	faoout		: $BBLOCK [DSC$K_S_BLN],
+	flags,
+	full,
+	status;
+
+    $INIT_DYNDESC (key);
+    $INIT_DYNDESC (equiv);
+    $INIT_DYNDESC (if_state);
+    $INIT_DYNDESC (if_state2);
+    $INIT_DYNDESC (set_state);
+    $INIT_DYNDESC (faoout);
+
+    IF (CLI$PRESENT(if_state_str))
+    THEN
+	status = CLI$GET_VALUE (if_state_str, if_state)
+    ELSE
+	STR$COPY_DX (if_state, %ASCID'DEFAULT');
+
+    full = CLI$PRESENT (%ASCID'FULL');
+
+    IF NOT (CLI$PRESENT (%ASCID'ALL'))
+    THEN
+	BEGIN
+	status = CLI$GET_VALUE (key_name_str, key);
+	status = SMG$GET_KEY_DEF (ktid, key, if_state, flags,
+			equiv, set_state);
+	IF (.status)
+	THEN
+	    BEGIN
+	    IF .full
+	    THEN
+		decode_attributes (flags, set_state, set_state)
+	    ELSE
+		STR$FREE1_DX (set_state);
+	    LIB$SYS_FAO (fao_show_key_header, 0, faoout, if_state);
+	    LIB$PUT_OUTPUT (faoout);
+	    LIB$SYS_FAO (fao_show_key, 0, faoout,
+			key, equiv, set_state);
+	    LIB$PUT_OUTPUT (faoout);
+	    END;
+	END
+    ELSE	!/ALL specified
+	BEGIN
+	LOCAL context : INITIAL(0);
+	LIB$SYS_FAO (fao_show_key_header, 0, faoout, if_state);
+	LIB$PUT_OUTPUT (faoout);
+	WHILE (status = SMG$LIST_KEY_DEFS (ktid, context,
+			key, if_state2,
+			flags, equiv, set_state)) DO
+	    BEGIN
+	    IF (CH$EQL (.if_state [DSC$W_LENGTH], .if_state [DSC$A_POINTER],
+			.if_state2 [DSC$W_LENGTH], .if_state2 [DSC$A_POINTER],
+			0))
+	    THEN
+		BEGIN
+		IF .full
+		THEN
+		    decode_attributes (flags, set_state, set_state)
+		ELSE
+		    STR$FREE1_DX (set_state);
+		LIB$SYS_FAO (fao_show_key, 0, faoout, key, equiv, set_state);
+		LIB$PUT_OUTPUT (faoout);
+		END;
+	    END;
+	IF (.status EQLU SMG$_NOMOREKEYS)
+	THEN
+	    status = SS$_NORMAL;
+	END;
+
+    STR$FREE1_DX (key);
+    STR$FREE1_DX (equiv);
+    IF (.if_state [DSC$W_LENGTH] NEQU 0) THEN STR$FREE1_DX (if_state);
+    IF (.if_state2 [DSC$W_LENGTH] NEQU 0) THEN STR$FREE1_DX (if_state2);
+    IF (.set_state [DSC$W_LENGTH] NEQU 0) THEN STR$FREE1_DX (set_state);
+
+    IF NOT(.status) THEN SIGNAL (.status);
+    RETURN (.status);
+
+END;						!End of routine
+
+
+ROUTINE decode_attributes (attr_a, state_a, str_a) =
+BEGIN
+    BIND
+	attr	= .attr_a,
+	state	= .state_a	: $BBLOCK,
+	str	= .str_a	: $BBLOCK;
+
+    EXTERNAL ROUTINE
+	G_HAT (STR$APPEND, STR$COPY_DX, STR$CONCAT, STR$FREE1_DX);
+
+    LOCAL
+	work	: $BBLOCK [DSC$K_S_BLN];
+
+    $INIT_DYNDESC (work);
+
+    IF (.attr AND SMG$M_KEY_NOECHO) NEQU 0
+    THEN
+	STR$COPY_DX (work, %ASCID'  (noecho')
+    ELSE
+	STR$COPY_DX (work, %ASCID'  (echo');
+
+    IF (.attr AND SMG$M_KEY_TERMINATE) NEQU 0
+    THEN
+	STR$APPEND (work, %ASCID',terminate')
+    ELSE
+	STR$APPEND (work, %ASCID',noterminate');
+
+    STR$APPEND (work, %ASCID',noerase');
+
+    IF (.attr AND SMG$M_KEY_LOCK) NEQU 0
+    THEN
+	STR$APPEND (work, %ASCID',lock')
+    ELSE
+	STR$APPEND (work, %ASCID',nolock');
+
+    IF (state NEQA 0) AND (.state [DSC$W_LENGTH] NEQU 0)
+    THEN
+	STR$CONCAT (work, work, %ASCID',state=', state);
+
+    STR$CONCAT (str, work, %ASCID')');
+    STR$FREE1_DX (work);
+
+    SS$_NORMAL
+
+END;
+
+END
+ELUDOM

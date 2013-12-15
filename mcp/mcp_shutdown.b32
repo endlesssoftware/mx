@@ -1,0 +1,1146 @@
+%TITLE 'MCP_SHUTDOWN'
+MODULE MCP_SHUTDOWN (IDENT='V4.0',
+    	ADDRESSING_MODE (EXTERNAL=LONG_RELATIVE, NONEXTERNAL=LONG_RELATIVE)) =
+BEGIN
+!++
+! FACILITY: 	    MX Mailer Control Program (MCP)
+!
+! ABSTRACT: 	    Shutdown and reset commands for MCP.
+!
+! MODULE DESCRIPTION:
+!
+!   This module contains routines for implementing the SHUTDOWN
+!   and RESET commands in MCP.
+!
+!   NOT REENTRANT!
+!
+! AUTHOR:   	    M. Madison
+!
+! Copyright (c) 2008, Matthew Madison.
+! Copyright (c) 2011, Endless Software Solutions.
+! 
+! All rights reserved.
+! 
+! Redistribution and use in source and binary forms, with or without
+! modification, are permitted provided that the following conditions
+! are met:
+! 
+!     * Redistributions of source code must retain the above
+!       copyright notice, this list of conditions and the following
+!       disclaimer.
+!     * Redistributions in binary form must reproduce the above
+!       copyright notice, this list of conditions and the following
+!       disclaimer in the documentation and/or other materials provided
+!       with the distribution.
+!     * Neither the name of the copyright owner nor the names of any
+!       other contributors may be used to endorse or promote products
+!       derived from this software without specific prior written
+!       permission.
+! 
+! THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
+! "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
+! LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
+! A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
+! OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
+! SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
+! LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
+! DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
+! THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
+! (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
+! OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+!
+! CREATION DATE:    25-SEP-1990
+!
+! MODIFICATION HISTORY:
+!
+!   25-SEP-1990	V1.0	Madison	    Initial coding.
+!   30-SEP-1990	V1.0-1	Madison	    Be a bit more verbose.
+!   08-OCT-1990	V1.0-2	Madison	    Fix NOTIFY code.
+!   10-OCT-1990	V1.0-3	Madison	    If we fail, tell them why.
+!   11-OCT-1990	V1.1	Madison	    Iterate on success to catch backup prcs.
+!   14-OCT-1990	V1.1-1	Madison	    Fix LKI definition.
+!   15-OCT-1990	V1.1-2	Madison	    Kill standby agent processes on node shut.
+!   02-MAR-1991	V2.0	Madison	    No more "standby" processes.
+!   17-OCT-1991	V2.1	Madison	    Support RESET/ACC.
+!   28-OCT-1991	V2.2	Madison	    Separate SMTP from SMTP_SERVER. Add DNSMTP.
+!   11-NOV-1991	V2.2-1	Madison	    RESET/ACC now completely separate.
+!   18-FEB-1992	V2.3	Greer	    Add X25_SMTP support.
+!   04-MAR-1992	V2.4	Madison	    Modify cluster-wide actions.
+!   12-FEB-1993 V2.5	Goatley     Rename FLQ_ locks & logicals to MX_FLQ_.
+!   10-MAR-1993 V2.6	Goatley     Converted to AXP.
+!   12-DEC-1993 V2.7	Goatley     Added $DEQ to fix erroneous display.
+!   26-MAR-1994 V2.7-1	Goatley     Added FLQ_MGR.
+!   10-APR-1994 V2.8	Altmayer    Include agent status codes for MCP STATUS
+!   19-APR-1994 V2.8-1	Altmayer    Increase LKI buffer for MCP STATUS
+!   11-MAY-1994 V2.9	Altmayer    Add GRPW lock
+!   15-MAY-1994	V2.9-1	Altmayer    Add MX_LSV agent description
+!   17-MAY-1994	V2.9-2	Altmayer    Sort entries in MCP STATUS
+!   19-MAY-1994	V2.9-3	Altmayer    Avoid duplicated entries in MCP STATUS
+!   21-MAY-1994 V2.9-4	Goatley	    Fix typo causing RESET/SHUTDOWN accvio.
+!   27-FEB-1995 V2.10	Goatley     Increase max number of agents handled.
+!   17-NOV-1995 V2.10-1	Goatley     Add /NODE support to SHUTDOWN/RESET, STATUS.
+!   06-JAN-1997	V3.0	Madison	    Elminate MDMLIB.
+!   27-APR-1998	V3.1	Madison	    Fix GRWP typo; change "enabling" to "standing by".
+!   31-AUG-1998	V3.2	Madison	    Holding queue agents.
+!   13-MAR-1999	V3.3	Madison	    Eliminate fixed limit on number of agents.
+!   30-JAN-2000	V3.3-1	Madison	    More holding queues.
+!   25-NOV-2000	V3.4	Madison	    Remove Jnet support; add SHUTDOWN/WAIT.
+!   19-JAN-2001	V3.4-1	Madison	    Make /CLUSTER the default for RESET.
+!   14-MAR-2001 V3.4-2  Madison     Allow STATUS/NODE with no node names.
+!   05-DEC-2004 V3.4-3  Madison     Only count locks on the cluster node being shutdown.
+!   19-FEB-2005 V3.4-4  Madison     Fix use of VALBLK flags.
+!   03-Feb-2008 V4.0    Madison     Remove UUCP,LSV,XSMTP support.
+!--
+    LIBRARY 'SYS$LIBRARY:STARLET';
+    LIBRARY 'MX_SRC_COMMON:MX';
+    LIBRARY 'MX_SRC_COMMON:FIELDS';
+    LIBRARY 'MX_SRC_COMMON:IPC';
+    LIBRARY 'MX_SRC_COMMON:STATUS';
+    LIBRARY 'MCP';
+
+    FORWARD ROUTINE
+    	CMD_SHUTDOWN,
+    	NOTIFY,
+    	CMD_STATUS,
+    	LOCATE_AGENT;
+
+    EXTERNAL ROUTINE
+    	G_HAT (STR$CONCAT, LIB$GETJPI, LIB$PUT_OUTPUT, LIB$SYS_FAO,
+    	       LIB$CVT_DTB, LIB$GETSYI, LIB$WAIT, STR$UPCASE,
+    	       LIB$SUB_TIMES, LIB$WAIT);
+
+    EXTERNAL LITERAL
+    	MCP__INSFPRV, MCP__NOTIFIED, MCP__SHUTRESF, MCP__FORCED, MCP__NOAGENTS,
+	MCP__NONODES, MCP__UNKNODE, LIB$_NORMAL;
+
+    _DEF (LKL)
+    	LKL_W_WRITTEN	= _WORD,
+    	LKL_V_PERLK 	= _BITS (15),
+    	LKL_V_OVERRUN	= _BIT
+    _ENDDEF (LKL);
+
+    _DEF (SRT)
+	SRT_L_FLINK	= _LONG,
+	SRT_L_BLINK	= _LONG,
+	SRT_L_INDEX	= _LONG
+    _ENDDEF (SRT);
+
+    _DEF (NODE)
+	NODE_L_FLINK	= _LONG,
+	NODE_L_BLINK	= _LONG,
+	NODE_L_CSID	= _LONG,
+	NODE_T_NAME	= _BYTES(20)
+    _ENDDEF (NODE);
+
+    TABLE (AGENT, 'ROUTER', 'LOCAL', 'MLF', 'SMTP', '***unused***', '***unused***', 'SITE',
+    	    	'SMTP_SERVER', 'DECNET_SMTP', '***unused***', 'FLQ_MGR', '***unused***',
+    	    	'HOLD1', 'HOLD2', 'HOLD3', 'HOLD4', 'HOLD5', 'HOLD6', 'HOLD7', 'HOLD8');
+
+    TABLE (AGNAM, 'ROUTER', 'LOCAL', 'MLF', 'SMTP', '***unused***', '***unused***', 'SITE',
+    	    	'SMTP_SERVER', 'DNSMTP', '***unused***', 'FLQ_MGR', '***unused***',
+    	    	'HOLD1', 'HOLD2', 'HOLD3', 'HOLD4', 'HOLD5', 'HOLD6', 'HOLD7', 'HOLD8');
+
+    TABLE (AGDSC, 'Router agent', 'Local delivery agent',
+    	    	'Mailing list/file server', 'SMTP delivery agent',
+    	    	'***unused*** delivery agent', '***unused*** interface agent',
+    	    	'Site-specific delivery agent',
+    	    	'SMTP server (over TCP/IP)',
+    	    	'SMTP-over-DECnet server',
+    	    	'***unused***  server',
+		'MX FLQ manager',
+		'***unused*** interface agent',
+    	    	'Holding queue 1 agent',
+    	    	'Holding queue 2 agent',
+    	    	'Holding queue 3 agent',
+    	    	'Holding queue 4 agent',
+    	    	'Holding queue 5 agent',
+    	    	'Holding queue 6 agent',
+    	    	'Holding queue 7 agent',
+    	    	'Holding queue 8 agent');
+
+    TABLE (AGSTATUSES, 'Unknown',  'Reading Config.',  'Idle',
+		'Standing by', 'Selecting', 'Searching', 'Locating',
+		'Searching2', 'Processing', 'Retrying', 'Inserting',
+		'Search. for wait', 'Waiting for',
+		'Req update', 'FLQ Cleanup', 'FLQread wait', 'Wlock wait',
+		'Connected');
+
+    OWN
+    	MYPID;
+
+    BIND
+	cli_node		= %ASCID'NODE',
+	cli_agent		= %ASCID'AGENT',
+	flq_lck2_d		= %ASCID'FLQ_LCK2_',
+	flq_lock_d		= %ASCID'FLQ_LOCK_',
+	mx_d			= %ASCID'MX_',
+	mx2_d			= %ASCID'_MX_',
+    	hold_d	    	    	= %ASCID'HOLD',
+	grpw_mx_d		= %ASCID'_GRPW_MX_',
+	mx_flq_node_name_d	= %ASCID'MX_FLQ_NODE_NAME',
+	reset_d			= %ASCID'RESET',
+	shutdown_d		= %ASCID'SHUTDOWN',
+	syslck_d		= %ASCID'SYSLCK',
+	lnm$system_d		= %ASCID'LNM$SYSTEM',
+    	holding_queue_d	    	= %ASCID'HOLDING_QUEUE',
+    	cli_agent_hq_d	    	= %ASCID'AGENT.HOLDING_QUEUE',
+    	wait_d	    	    	= %ASCID'WAIT',
+    	nullstr_d   	    	= %ASCID'',
+    	nullstr_ac  	    	= %ASCIC'';
+
+
+%SBTTL 'CMD_SHUTDOWN'
+GLOBAL ROUTINE CMD_SHUTDOWN = 
+BEGIN
+!++
+! FUNCTIONAL DESCRIPTION:
+!
+!   Implements the SHUTDOWN and RESET commands.
+!
+!   SHUTDOWN or RESET with agent-name or /ALL (all agents):
+!   	Agent is found by looking at the FLQ lock for the process.
+!   	Lock value block is used to send shut/reset signal to process.
+!   	Process is repeated until no further agents are found.
+!
+!   Plain SHUTDOWN or RESET:
+!   	Each agent is found by looking at FLQ lock for the process.
+!   	Our CSID is added to LVB so only agents on our node get notified.
+!
+! RETURNS:  	cond_value, longword (unsigned), write only, by value
+!
+! PROTOTYPE:
+!
+!   CMD_SHUTDOWN
+!
+! IMPLICIT INPUTS:  None.
+!
+! IMPLICIT OUTPUTS: None.
+!
+! COMPLETION CODES:
+!
+!   SS$_NORMAL:	    	normal successful completion.
+!
+! SIDE EFFECTS:
+!
+!   None.
+!--
+    LOCAL
+    	ANAME	: BLOCK [DSC$K_S_BLN,BYTE],
+    	STR 	: BLOCK [DSC$K_S_BLN,BYTE],
+    	STR2	: BLOCK [DSC$K_S_BLN,BYTE],
+    	GRPW	: BLOCK [DSC$K_S_BLN,BYTE],
+    	FLQNODE	: BLOCK [DSC$K_S_BLN,BYTE],
+	cluster_nodes	: QUEDEF,
+	node_entry	: REF NODEDEF,
+    	CURPRIV	: VOLATILE BLOCK [8,BYTE],
+    	JPILST	: $ITMLST_DECL (ITEMS=2),
+    	syilst	: $ITMLST_DECL (ITEMS=2),
+    	PNAME	: VECTOR [32,BYTE],
+    	PNLEN	: WORD,
+    	PID	: VOLATILE,
+    	LNMBUF	: VECTOR [256,BYTE],
+    	LNMLEN	: WORD,
+    	LNMLST	: $ITMLST_DECL (ITEMS=1),
+	XPID,
+    	DID1, A,
+    	SHUTDOWN,
+    	CLUSTER_WIDE,
+    	RSTMSK,
+    	doing_hqs,
+    	csid	: VOLATILE,
+    	do_wait,
+    	STATUS;
+
+    $ITMLST_INIT (ITMLST=JPILST,
+    	(ITMCOD=JPI$_CURPRIV, BUFADR=CURPRIV, BUFSIZ=%ALLOCATION (CURPRIV)),
+    	(ITMCOD=JPI$_PID, BUFADR=MYPID, BUFSIZ=%ALLOCATION (MYPID)));
+    $GETJPI (ITMLST=JPILST);
+    IF NOT .CURPRIV [PRV$V_SYSLCK] THEN
+    BEGIN
+    	SIGNAL (MCP__INSFPRV, 1, syslck_d);
+    	RETURN SS$_NORMAL;
+    END;
+
+    INIT_DYNDESC (STR, ANAME, STR2, GRPW);
+
+    CLI$GET_VALUE (%ASCID'$VERB', STR);
+    SHUTDOWN = CH$RCHAR (.STR [DSC$A_POINTER]) EQL %C'S';
+    do_wait  = (IF .shutdown THEN (CLI$PRESENT (wait_d) EQLU CLI$_PRESENT) ELSE 0);
+    IF .shutdown THEN
+    	CLUSTER_WIDE  = CLI$PRESENT (%ASCID'ALL') EQL CLI$_PRESENT OR
+    	    	    	CLI$PRESENT (%ASCID'CLUSTER') EQL CLI$_PRESENT
+    ELSE
+    	cluster_wide = CLI$PRESENT (cli_node) NEQ CLI$_PRESENT;  ! RESETs cluster-wide by default
+
+    $ITMLST_INIT (ITMLST = syilst,
+	(ITMCOD = SYI$_NODE_CSID, BUFSIZ = %ALLOCATION(csid), BUFADR = csid));
+    INIT_QUEUE (cluster_nodes);
+    IF CLI$PRESENT (cli_node) EQL CLI$_PRESENT
+    THEN
+	BEGIN
+    	IF CLI$GET_VALUE (cli_node, str)
+    	THEN
+    	    BEGIN
+    	    DO
+	    	BEGIN
+	    	STR$UPCASE (str, str);
+	    	status = $GETSYIW (NODENAME = str, ITMLST = syilst);
+	    	IF (.status)
+	    	THEN
+		    BEGIN
+		    LIB$GET_VM (%REF(NODE_S_NODEDEF), node_entry);
+		    node_entry [NODE_L_CSID] = .csid;
+		    CH$WCHAR (.str [DSC$W_LENGTH], node_entry [NODE_T_NAME]);
+		    CH$MOVE (.str [DSC$W_LENGTH], .str [DSC$A_POINTER],
+			    node_entry [NODE_T_NAME]+1);
+		    INSQUE (.node_entry, .cluster_nodes [QUE_L_TAIL]);
+		    END
+	    	ELSE
+		    SIGNAL (MCP__UNKNODE, 1, str, .status);
+    	    	END
+    	    WHILE CLI$GET_VALUE (cli_node, str);
+	    END
+    	ELSE  ! /NODE with no node names specified - default to local node
+	    BEGIN
+	    LOCAL name_len;
+	    LIB$GET_VM (%REF(NODE_S_NODEDEF), node_entry);
+	    $ITMLST_INIT (ITMLST = syilst,
+	    	(ITMCOD = SYI$_NODE_CSID, BUFSIZ = 4,
+	     	BUFADR = node_entry [NODE_L_CSID]),
+	    	(ITMCOD = SYI$_NODENAME, BUFSIZ = 15,
+	     	BUFADR = node_entry [NODE_T_NAME]+1, RETLEN = name_len));
+	    status = $GETSYIW (ITMLST = syilst);
+	    CH$WCHAR (.name_len, node_entry [NODE_T_NAME]);
+	    INSQUE (.node_entry, .cluster_nodes [QUE_L_TAIL]);
+	    END;
+	END
+    ELSE
+	BEGIN
+	LOCAL name_len;
+	LIB$GET_VM (%REF(NODE_S_NODEDEF), node_entry);
+	$ITMLST_INIT (ITMLST = syilst,
+	    (ITMCOD = SYI$_NODE_CSID, BUFSIZ = 4,
+	     BUFADR = node_entry [NODE_L_CSID]),
+	    (ITMCOD = SYI$_NODENAME, BUFSIZ = 15,
+	     BUFADR = node_entry [NODE_T_NAME]+1, RETLEN = name_len));
+	status = $GETSYIW (ITMLST = syilst);
+	CH$WCHAR (.name_len, node_entry [NODE_T_NAME]);
+	INSQUE (.node_entry, .cluster_nodes [QUE_L_TAIL]);
+	END;
+
+    IF (.cluster_nodes [QUE_L_HEAD] EQLA cluster_nodes)
+    THEN
+	BEGIN
+	SIGNAL (MCP__NONODES);
+	RETURN SS$_NORMAL;
+	END;
+
+    IF NOT .SHUTDOWN THEN
+    BEGIN
+    	STATUS =  CLI$PRESENT (%ASCID'ACCOUNTING');
+    	IF .STATUS EQL CLI$_PRESENT THEN RSTMSK = 2
+    	ELSE RSTMSK = 1;
+    END
+    ELSE RSTMSK = 0;
+
+    $ITMLST_INIT (ITMLST=LNMLST,
+    	(ITMCOD=LNM$_STRING, BUFSIZ=%ALLOCATION (LNMBUF),
+    	 BUFADR=LNMBUF, RETLEN=LNMLEN));
+    $TRNLNM (LOGNAM=mx_flq_node_name_d, TABNAM=lnm$system_d,
+    	     ACMODE=%REF (PSL$C_EXEC), ITMLST=LNMLST);
+    INIT_SDESC (FLQNODE, .LNMLEN, LNMBUF);
+
+    DID1 = 0;
+    doing_hqs = 0;
+    IF CLI$PRESENT (cli_agent) EQL CLI$_PRESENT THEN
+    WHILE 1 DO
+    BEGIN
+    	CASE .doing_hqs FROM 0 TO 2 OF
+    	SET
+    	    [0] :
+    	    	IF CLI$PRESENT (cli_agent_hq_d) EQL CLI$_PRESENT THEN
+    	    	BEGIN
+    	    	    doing_hqs = 1;
+    	    	    CLI$GET_VALUE (cli_agent_hq_d, aname);
+    	    	END
+    	    	ELSE
+    	    	BEGIN
+    	    	    doing_hqs = 2;
+    	    	    IF NOT CLI$GET_VALUE (cli_agent, aname) THEN
+    	    	    	EXITLOOP;
+    	    	END;
+    	    [1] :
+    	    	IF NOT CLI$GET_VALUE (cli_agent_hq_d, aname) THEN
+    	    	BEGIN
+    	    	    doing_hqs = 2;
+    	    	    IF NOT CLI$GET_VALUE (cli_agent, aname) THEN
+    	    	    	EXITLOOP;
+    	    	END;
+    	    [2] :
+    	    	IF NOT CLI$GET_VALUE (cli_agent, aname) THEN
+    	    	    EXITLOOP;
+    	TES;
+
+    	IF .doing_hqs THEN
+    	BEGIN
+    	    STR$CONCAT (STR, flq_lock_d, FLQNODE, mx2_d, hold_d, aname);
+    	    STR$CONCAT (STR2, flq_lck2_d, FLQNODE, mx2_d, hold_d, aname);
+    	    STR$CONCAT (GRPW, mx_d, FLQNODE, grpw_mx_d, hold_d, aname);
+    	END
+    	ELSE
+    	BEGIN
+    	    A = (INCR I FROM 0 TO AGENT_COUNT-1 DO
+    	    	 IF STR$POSITION (.AGENT [.I], ANAME) EQL 1 THEN EXITLOOP .I);
+    	    STR$CONCAT (STR, flq_lock_d, FLQNODE, mx2_d, .AGNAM [.A]);
+    	    STR$CONCAT (STR2, flq_lck2_d, FLQNODE, mx2_d, .AGNAM [.A]);
+    	    STR$CONCAT (GRPW, mx_d, FLQNODE, grpw_mx_d, .AGNAM [.A]);
+    	END;
+
+	IF (.cluster_wide)
+	THEN
+	    BEGIN
+	    IF NOTIFY (STR, 0, .SHUTDOWN, .A, STR2, .RSTMSK, GRPW, .do_wait)
+	    THEN
+		SIGNAL (MCP__NOTIFIED, 3, .AGENT [.A], nullstr_d, %REF (nullstr_ac));
+	    END
+	ELSE
+	    BEGIN
+	    LOCAL node_ptr : REF NODEDEF;
+	    node_ptr = .cluster_nodes [QUE_L_HEAD];
+	    WHILE (.node_ptr NEQA cluster_nodes) DO
+		BEGIN
+	    	IF NOTIFY (STR, .node_ptr [NODE_L_CSID],
+    	    	    .SHUTDOWN, .A, STR2, .RSTMSK, GRPW, .do_wait) THEN
+	    	    SIGNAL (MCP__NOTIFIED, 3, .AGENT [.A], %ASCID' on node ',
+				node_ptr [NODE_T_NAME]);
+		node_ptr = .node_ptr [NODE_L_FLINK];
+		END;
+	    END;
+    END
+    ELSE
+    BEGIN
+    	INCR I FROM 0 TO AGENT_COUNT+(MX_K_HOLDQ_MAX-8)-1 DO
+    	BEGIN
+    	    IF .I LSSU AGENT_COUNT THEN
+    	    BEGIN
+    	    	STR$CONCAT (STR, flq_lock_d, FLQNODE, mx2_d, .AGNAM [.I]);
+    	    	STR$CONCAT (STR2, flq_lck2_d, FLQNODE, mx2_d, .AGNAM [.I]);
+	    	STR$CONCAT (GRPW, mx_d, FLQNODE, grpw_mx_d, .AGNAM [.I]);
+    	    END
+    	    ELSE
+    	    BEGIN
+    	    	LIB$SYS_FAO (%ASCID'FLQ_LOCK_!AS_MX_HOLD!UL', 0, str, flqnode, .i-AGENT_COUNT+9);
+    	    	LIB$SYS_FAO (%ASCID'FLQ_LCK2_!AS_MX_HOLD!UL', 0, str2, flqnode, .i-AGENT_COUNT+9);
+    	    	LIB$SYS_FAO (%ASCID'MX_!AS_GRPW_MX_HOLD!UL', 0, grpw, flqnode, .i-AGENT_COUNT+9);
+    	    END;
+	    IF (.cluster_wide)
+	    THEN
+		BEGIN
+		IF NOTIFY (STR, 0, .SHUTDOWN, .I, STR2, .RSTMSK, GRPW, .do_wait)
+		THEN
+		    SIGNAL (MCP__NOTIFIED, 3, .AGENT [.I], nullstr_d, %REF (nullstr_ac));
+		END
+	    ELSE
+		BEGIN
+		LOCAL node_ptr : REF NODEDEF;
+		node_ptr = .cluster_nodes [QUE_L_HEAD];
+		WHILE (.node_ptr NEQA cluster_nodes) DO
+		    BEGIN
+		    IF NOTIFY (STR, .node_ptr [NODE_L_CSID],
+				.SHUTDOWN, .I, STR2, .RSTMSK, GRPW, .do_wait) THEN
+			SIGNAL (MCP__NOTIFIED, 3, .AGENT [.I], %ASCID' on node ',
+				node_ptr [NODE_T_NAME]);
+		    node_ptr = .node_ptr [NODE_L_FLINK];
+		    END;
+		END;
+    	END;
+    END;
+
+    FREE_STRINGS (ANAME, STR, STR2);
+
+    WHILE NOT (REMQUE (.cluster_nodes [QUE_L_HEAD], node_entry)) DO
+	LIB$FREE_VM (%REF(NODE_S_NODEDEF), node_entry);
+
+    SS$_NORMAL
+
+END; ! CMD_SHUTDOWN
+
+%SBTTL 'NOTIFY'
+ROUTINE NOTIFY (RESNAM_A, CSID, SHUTDOWN, IDX, HDSKNAM_A, RSTMSK, GRPWNAM_A, WAIT) = 
+BEGIN
+!++
+! FUNCTIONAL DESCRIPTION:
+!
+!   Performs the shutdown notification.
+!
+! RETURNS:  	condition value
+!
+! PROTOTYPE:
+!
+!   NOTIFY  lkid, csid, shutdown, idx, hdsknam, rstmsk
+!
+! IMPLICIT INPUTS:  None.
+!
+! IMPLICIT OUTPUTS: None.
+!
+! COMPLETION CODES:
+!
+!   SS$_NORMAL:	    normal successful completion.
+!
+! SIDE EFFECTS:
+!
+!   None.
+!--
+    LOCAL
+    	LSB 	: LSBDEF,
+    	LSB2	: LSBDEF,
+	GRPWSB	: LSBDEF,
+    	LKCLST	: $ITMLST_DECL (ITEMS=3),
+    	LKILST	: $ITMLST_DECL (ITEMS=1),
+    	LKI 	: REF BLOCKVECTOR [,LKI$C_LENGTH,BYTE],
+    	LKL 	: LKLDEF,
+    	IOSB	: VECTOR [4,WORD],
+    	DID_ONE,
+    	CVTCNT, GRANTCNT, WAITCNT, lkiblksize,
+    	LKCNT, LKIDX,
+        lkncnt,
+    	STATUS;
+
+    $ITMLST_INIT (ITMLST=LKCLST,
+    	(ITMCOD=LKI$_CVTCOUNT, BUFADR=CVTCNT, BUFSIZ=%ALLOCATION (CVTCNT)),
+    	(ITMCOD=LKI$_GRANTCOUNT, BUFADR=GRANTCNT, BUFSIZ=%ALLOCATION (GRANTCNT)),
+    	(ITMCOD=LKI$_WAITCOUNT, BUFADR=WAITCNT, BUFSIZ=%ALLOCATION (WAITCNT)));
+
+
+    DID_ONE = 0;
+
+    STATUS = $ENQW (LKMODE=LCK$K_NLMODE, LKSB=LSB, FLAGS=LCK$M_SYSTEM,
+    	    	    	RESNAM=.RESNAM_A);
+    IF .STATUS THEN STATUS = .LSB [LSB_W_STATUS];
+    IF NOT .STATUS THEN
+    BEGIN
+    	SIGNAL (MCP__SHUTRESF, 1, (IF .SHUTDOWN THEN shutdown_d
+    	    	    	ELSE reset_d), .STATUS);
+    	RETURN .STATUS;
+    END;
+
+    status = $GETLKIW (LKIDADR=lsb [LSB_L_LKID], ITMLST=lkclst, IOSB=iosb);
+    IF .status THEN status = .iosb [0];
+    IF .status THEN
+    	lkiblksize = (.waitcnt + .cvtcnt + .grantcnt + 16) * LKI$C_LENGTH
+    ELSE
+    	lkiblksize = 128 * LKI$C_LENGTH;
+
+    status = LIB$GET_VM (lkiblksize, lki);
+    IF NOT .status THEN
+    BEGIN
+    	SIGNAL (MCP__SHUTRESF, 1, (IF .SHUTDOWN THEN shutdown_d
+    	    	    	    	   ELSE reset_d), .STATUS);
+    	$DEQ (LKID=.lsb [LSB_L_LKID]);
+    	RETURN .did_one;
+    END;
+    
+    $ITMLST_INIT (ITMLST=LKILST,
+    	 (ITMCOD=LKI$_LOCKS, BUFADR=.lki, BUFSIZ=.lkiblksize, RETLEN=LKL));
+
+    STATUS = $GETLKIW (LKIDADR=LSB [LSB_L_LKID], ITMLST=LKILST, IOSB=IOSB);
+    IF .STATUS THEN STATUS = .IOSB [0];
+
+    IF .STATUS THEN LKCNT = .LKL [LKL_W_WRITTEN] / .LKL [LKL_V_PERLK]
+    ELSE SIGNAL (MCP__SHUTRESF, 1, (IF .SHUTDOWN THEN shutdown_d
+    	    	    	ELSE reset_d), .STATUS);
+    IF NOT .STATUS OR .LKCNT LSS 2 THEN
+    BEGIN
+    	LIB$FREE_VM (lkiblksize, lki);
+    	$DEQ (LKID=.LSB [LSB_L_LKID]);
+    	RETURN .DID_ONE;
+    END;
+
+    IF .CSID NEQ 0 THEN
+    BEGIN
+    	LKIDX = (INCR I FROM 0 TO .LKCNT-1 DO
+    	    	    IF .LKI [.I,LKI$L_CSID] EQL .CSID
+    	    	    	AND .LKI [.I,LKI$L_PID] NEQ .MYPID THEN
+    	    	    	EXITLOOP .I);
+    	IF .LKIDX LSS 0 THEN
+    	BEGIN
+    	    LIB$FREE_VM (lkiblksize, lki);
+    	    $DEQ (LKID=.LSB [LSB_L_LKID]);
+    	    RETURN .DID_ONE;
+    	END;
+    END;
+
+    STATUS = $ENQW (LKMODE=LCK$K_EXMODE, LKSB=GRPWSB,
+    	    FLAGS=LCK$M_SYSTEM, RESNAM=.GRPWNAM_A);
+    IF .STATUS THEN STATUS = .GRPWSB [LSB_W_STATUS];
+    IF .STATUS THEN
+    BEGIN
+	STATUS = $ENQW (LKMODE=LCK$K_EXMODE, LKSB=LSB2,
+		FLAGS=LCK$M_SYSTEM, RESNAM=.HDSKNAM_A);
+	IF .STATUS THEN STATUS = .LSB2 [LSB_W_STATUS];
+	IF .STATUS THEN
+	BEGIN
+	    STATUS = $ENQW (LKMODE=LCK$K_EXMODE, LKSB=LSB,
+		    FLAGS=(LCK$M_SYSTEM OR LCK$M_CONVERT));
+	    IF .STATUS THEN STATUS = .LSB [LSB_W_STATUS];
+	    IF .STATUS THEN
+	    BEGIN
+		LSB [LSB_B_CMD]  = (IF .SHUTDOWN THEN MX_K_CMD_SHUTDOWN ELSE
+				    MX_K_CMD_RESET);
+		LSB [LSB_L_RMASK] = (IF .SHUTDOWN THEN 0 ELSE .RSTMSK);
+		LSB [LSB_L_CSID]  = .CSID;
+		$DEQ (LKID=.LSB [LSB_L_LKID], VALBLK=LSB [LSB_X_VALBLK]);
+		DID_ONE = 1;
+	    END
+	    ELSE
+	    BEGIN
+    	    	LIB$FREE_VM (lkiblksize, lki);
+		$DEQ (LKID=.LSB [LSB_L_LKID]);
+		SIGNAL (MCP__SHUTRESF, 1, (IF .SHUTDOWN THEN shutdown_d
+			    ELSE reset_d), .STATUS);
+		RETURN .STATUS;
+	    END;
+		$DEQ (LKID=.LSB2 [LSB_L_LKID]);
+	END
+	ELSE
+    	BEGIN
+    	    $DEQ (LKID=.lsb [LSB_L_LKID]);
+    	    SIGNAL (MCP__SHUTRESF, 1, (IF .SHUTDOWN THEN shutdown_d
+			    ELSE reset_d), .STATUS);
+    	END;
+	$DEQ (LKID=.GRPWSB [LSB_L_LKID]);
+    END
+    ELSE
+    BEGIN
+    	$DEQ (LKID=.lsb [LSB_L_LKID]);
+    	SIGNAL (MCP__SHUTRESF, 1, (IF .SHUTDOWN THEN shutdown_d
+			ELSE reset_d), .STATUS);
+    END;
+
+    IF .did_one AND .wait THEN
+    BEGIN
+    	LOCAL
+    	    start_time	    : VECTOR [2,LONG],
+    	    cur_time	    : VECTOR [2,LONG],
+    	    max_time	    : VECTOR [2,LONG],
+    	    diff_time	    : VECTOR [2,LONG],
+    	    junk_time	    : VECTOR [2,LONG];
+
+    	$BINTIM (TIMADR=max_time, TIMBUF=%ASCID'0 00:00:30.0');
+    	$GETTIM (TIMADR=start_time);
+
+    	status = $ENQW (LKMODE=LCK$K_NLMODE, LKSB=lsb, FLAGS=LCK$M_SYSTEM,
+    	    	    	RESNAM=.resnam_a);
+    	IF .status THEN status = .lsb [LSB_W_STATUS];
+    	IF .status THEN
+    	BEGIN
+    	    DO
+    	    BEGIN
+    	    	$ITMLST_INIT (ITMLST=lkilst, (ITMCOD=LKI$_LOCKS, BUFADR=.lki, BUFSIZ=.lkiblksize, RETLEN=lkl));
+    	    	status = $GETLKIW (LKIDADR=lsb [LSB_L_LKID], ITMLST=lkilst, IOSB=iosb);
+    	    	IF .status THEN status = .iosb [0];
+    	    	IF NOT .status THEN
+    	    	    EXITLOOP;
+    	    	lkcnt = .lkl [LKL_W_WRITTEN] / .lkl [LKL_V_PERLK];
+                lkncnt = 0;
+                INCR i FROM 0 TO .lkcnt-1 DO
+                    IF .lki [.i,LKI$L_PID] NEQU .mypid AND
+                        (.csid EQLU 0 OR .csid EQLU .lki [.i,LKI$L_CSID]) THEN
+                        lkncnt = .lkncnt + 1;
+    	    	IF .lkncnt EQLU 0 THEN
+    	    	    EXITLOOP;
+    	    	$GETTIM (TIMADR=cur_time);
+    	    	IF LIB$SUB_TIMES (cur_time, start_time, diff_time) NEQU LIB$_NORMAL THEN
+    	    	    EXITLOOP;
+    	    	IF LIB$SUB_TIMES (max_time, diff_time, junk_time) NEQU LIB$_NORMAL THEN
+    	    	    EXITLOOP;
+    	    	LIB$WAIT (%REF (%E'1.0'));
+    	    END
+    	    WHILE 1;
+    	    $DEQ (LKID=.lsb [LSB_L_LKID]);
+    	END;
+    END;
+
+    LIB$FREE_VM (lkiblksize, lki);
+
+    .did_one
+
+END; ! NOTIFY
+
+%SBTTL 'CMD_STATUS'
+GLOBAL ROUTINE CMD_STATUS = 
+BEGIN
+!++
+! FUNCTIONAL DESCRIPTION:
+!
+!   Implements the STATUS command, returning the status of
+!   the various MX agents.
+!
+! RETURNS:  	cond_value, longword (unsigned), write only, by value
+!
+! PROTOTYPE:
+!
+!   CMD_STATUS
+!
+! IMPLICIT INPUTS:  None.
+!
+! IMPLICIT OUTPUTS: None.
+!
+! COMPLETION CODES:
+!
+!   SS$_NORMAL:	    	normal successful completion.
+!
+! SIDE EFFECTS:
+!
+!   None.
+!--
+    LOCAL
+    	ANAME	: BLOCK [DSC$K_S_BLN,BYTE],
+    	FLQNODE	: BLOCK [DSC$K_S_BLN,BYTE],
+    	str	: BLOCK [DSC$K_S_BLN,BYTE],
+    	andsc   : BLOCK [DSC$K_S_BLN,BYTE],
+    	addsc   : BLOCK [DSC$K_S_BLN,BYTE],
+    	anbuf   : VECTOR [32,BYTE],
+    	adbuf   : VECTOR [32,BYTE],
+    	anptr   : REF BLOCK [,BYTE],
+    	adptr   : REF BLOCK [,BYTE],
+	cluster_nodes	: QUEDEF,
+	node_entry	: REF NODEDEF,
+    	CURPRIV	: VOLATILE BLOCK [8,BYTE],
+    	JPILST	: $ITMLST_DECL (ITEMS=2),
+    	syilst	: $ITMLST_DECL (ITEMS=2),
+    	PNAME	: VECTOR [32,BYTE],
+    	PNLEN	: WORD,
+    	LNMBUF	: VECTOR [256,BYTE],
+    	LNMLEN	: WORD,
+    	LNMLST	: $ITMLST_DECL (ITEMS=1),
+    	DID1,
+    	A,
+    	PID	: VOLATILE,
+	csid	: VOLATILE,
+    	VAXCLUSTER,
+    	doing_hqs,
+    	STATUS;
+
+    $ITMLST_INIT (ITMLST=JPILST,
+    	(ITMCOD=JPI$_CURPRIV, BUFADR=CURPRIV, BUFSIZ=%ALLOCATION (CURPRIV)),
+    	(ITMCOD=JPI$_PID, BUFADR=PID, BUFSIZ=%ALLOCATION (PID)));
+    $GETJPI (ITMLST=JPILST);
+    IF NOT .CURPRIV [PRV$V_SYSLCK] THEN
+    BEGIN
+    	SIGNAL (MCP__INSFPRV, 1, syslck_d);
+    	RETURN SS$_NORMAL;
+    END;
+    LIB$GETSYI (%REF (SYI$_VAXCLUSTER), VAXCLUSTER);
+    VAXCLUSTER = (.VAXCLUSTER NEQ 0);
+
+    INIT_DYNDESC (ANAME, str);
+
+    $ITMLST_INIT (ITMLST=LNMLST,
+    	(ITMCOD=LNM$_STRING, BUFSIZ=%ALLOCATION (LNMBUF),
+    	 BUFADR=LNMBUF, RETLEN=LNMLEN));
+    $TRNLNM (LOGNAM=mx_flq_node_name_d, TABNAM=lnm$system_d,
+    	     ACMODE=%REF (PSL$C_EXEC), ITMLST=LNMLST);
+    INIT_SDESC (FLQNODE, .LNMLEN, LNMBUF);
+
+    $ITMLST_INIT (ITMLST = syilst,
+	(ITMCOD = SYI$_NODE_CSID, BUFSIZ = %ALLOCATION(csid), BUFADR = csid));
+    INIT_QUEUE (cluster_nodes);
+    IF CLI$PRESENT(cli_node)
+    THEN
+	BEGIN
+	WHILE (CLI$GET_VALUE (cli_node, str)) DO
+	    BEGIN
+	    STR$UPCASE (str, str);
+	    status = $GETSYIW (NODENAME = str, ITMLST = syilst);
+	    IF (.status)
+	    THEN
+		BEGIN
+		LIB$GET_VM (%REF(NODE_S_NODEDEF), node_entry);
+		node_entry [NODE_L_CSID] = .csid;
+		CH$WCHAR (.str [DSC$W_LENGTH], node_entry [NODE_T_NAME]);
+		CH$MOVE (.str [DSC$W_LENGTH], .str [DSC$A_POINTER],
+			node_entry [NODE_T_NAME]+1);
+		INSQUE (.node_entry, .cluster_nodes [QUE_L_TAIL]);
+		END
+	    ELSE
+		SIGNAL (MCP__UNKNODE, 1, str, .status);
+	    END;
+
+	IF (.cluster_nodes [QUE_L_HEAD] EQLA cluster_nodes)
+	THEN
+	    BEGIN
+	    LIB$GET_VM (%REF(NODE_S_NODEDEF), node_entry);
+            status = $GETSYIW (ITMLST=syilst);
+            IF NOT .status THEN csid = 0;
+	    node_entry [NODE_L_CSID] = .csid;
+            INSQUE (.node_entry, .cluster_nodes [QUE_L_TAIL]);
+	    END;
+	
+	END
+    ELSE
+	csid = 0;
+
+    DID1 = 0;
+    doing_hqs = 0;
+
+    IF CLI$PRESENT (cli_agent) EQL CLI$_PRESENT THEN
+    WHILE 1 DO
+    BEGIN
+
+    	CASE .doing_hqs FROM 0 TO 2 OF
+    	SET
+    	    [0] :
+    	    	IF CLI$PRESENT (cli_agent_hq_d) EQL CLI$_PRESENT THEN
+    	    	BEGIN
+    	    	    doing_hqs = 1;
+    	    	    CLI$GET_VALUE (cli_agent_hq_d, aname);
+    	    	END
+    	    	ELSE
+    	    	BEGIN
+    	    	    doing_hqs = 2;
+    	    	    IF NOT CLI$GET_VALUE (cli_agent, aname) THEN
+    	    	    	EXITLOOP;
+    	    	END;
+    	    [1] :
+    	    	IF NOT CLI$GET_VALUE (cli_agent_hq_d, aname) THEN
+    	    	BEGIN
+    	    	    doing_hqs = 2;
+    	    	    IF NOT CLI$GET_VALUE (cli_agent, aname) THEN
+    	    	    	EXITLOOP;
+    	    	END;
+    	    [2] :
+    	    	IF NOT CLI$GET_VALUE (cli_agent, aname) THEN
+    	    	    EXITLOOP;
+    	TES;
+
+    	IF .doing_hqs THEN
+    	BEGIN
+    	    LOCAL hnum;
+    	    LIB$CVT_DTB (.aname [DSC$W_LENGTH], .aname [DSC$A_POINTER], hnum);
+    	    INIT_SDESC (andsc, %ALLOCATION (anbuf), anbuf);
+    	    $FAO (%ASCID'HOLD!UL', andsc, andsc, .hnum);
+    	    anptr = andsc;
+    	    INIT_SDESC (addsc, %ALLOCATION (adbuf), adbuf);
+    	    $FAO (%ASCID'Holding queue !UL agent', addsc, addsc, .hnum);
+    	    adptr = addsc;
+    	END
+    	ELSE
+    	BEGIN
+    	    A = (INCR I FROM 0 TO AGENT_COUNT-1 DO
+    	    	 IF STR$POSITION (.AGENT [.I], ANAME) EQL 1 THEN EXITLOOP .I);
+    	    anptr = .AGNAM [.A];
+    	    adptr = .AGDSC [.A];
+    	END;
+
+	IF .csid EQLU 0
+	THEN
+	    LOCATE_AGENT (.anptr, .adptr, FLQNODE, .PID, .VAXCLUSTER, DID1, 0)
+	ELSE
+	BEGIN
+	    LOCAL node_ptr : REF NODEDEF;
+	    node_ptr = .cluster_nodes [QUE_L_HEAD];
+	    WHILE (.node_ptr NEQA cluster_nodes) DO
+	    BEGIN
+		LOCATE_AGENT (.anptr, .adptr, FLQNODE, .PID, .VAXCLUSTER, DID1,
+			.node_ptr [NODE_L_CSID]);
+		node_ptr = .node_ptr [NODE_L_FLINK];
+	    END;
+	END;
+    END
+    ELSE
+    BEGIN
+    	INCR I FROM 0 TO AGENT_COUNT+(MX_K_HOLDQ_MAX-8)-1 DO
+    	BEGIN
+    	    IF .i LSSU AGENT_COUNT THEN
+    	    BEGIN
+    	    	anptr = .agnam [.i];
+    	    	adptr = .agdsc [.i];
+    	    END
+    	    ELSE
+    	    BEGIN
+    	    	INIT_SDESC (andsc, %ALLOCATION (anbuf), anbuf);
+    	    	$FAO (%ASCID'HOLD!UL', andsc, andsc, .i-AGENT_COUNT+9);
+    	    	anptr = andsc;
+    	    	INIT_SDESC (addsc, %ALLOCATION (adbuf), adbuf);
+    	    	$FAO (%ASCID'Holding queue !UL agent', addsc, addsc, .i-AGENT_COUNT+9);
+    	    	adptr = addsc;
+    	    END;
+	    IF .csid EQLU 0
+	    THEN
+		LOCATE_AGENT (.anptr, .adptr, FLQNODE, .PID, .VAXCLUSTER, DID1, 0)
+	    ELSE
+	    BEGIN
+		LOCAL node_ptr : REF NODEDEF;
+		node_ptr = .cluster_nodes [QUE_L_HEAD];
+		WHILE .node_ptr NEQA cluster_nodes DO
+		BEGIN
+		    LOCATE_AGENT (.anptr, .adptr, FLQNODE, .PID, .VAXCLUSTER, DID1,
+				.node_ptr [NODE_L_CSID]);
+		    node_ptr = .node_ptr [NODE_L_FLINK];
+		END;
+	    END;
+    	END;
+    END;
+
+    IF NOT .DID1 THEN
+    	SIGNAL (MCP__NOAGENTS, 0);
+
+    FREE_STRINGS (ANAME, str);
+
+    WHILE NOT (REMQUE (.cluster_nodes [QUE_L_HEAD], node_entry)) DO
+	LIB$FREE_VM (%REF(NODE_S_NODEDEF), node_entry);
+
+    SS$_NORMAL
+
+END; ! CMD_STATUS
+
+%SBTTL 'LOCATE_AGENT'
+ROUTINE LOCATE_AGENT (ANAM_A, ADSC_A, FLQNODE_A, MYPID, VAXCLUSTER, DID1_A, mycsid) =
+BEGIN
+!++
+! FUNCTIONAL DESCRIPTION:
+!
+!   Displays an agent's status.
+!
+! RETURNS:  	condition value
+!
+! PROTOTYPE:
+!
+!   LOCATE_AGENT  lkid, csid, shutdown, idx, hdsknam, rstmsk
+!
+! IMPLICIT INPUTS:  None.
+!
+! IMPLICIT OUTPUTS: None.
+!
+! COMPLETION CODES:
+!
+!   SS$_NORMAL:	    normal successful completion.
+!
+! SIDE EFFECTS:
+!
+!   None.
+!--
+    BIND
+    	adsc	    = .ADSC_A	    : BLOCK [,BYTE],
+    	anam	    = .ANAM_A	    : BLOCK [,BYTE],
+    	FLQNODE	    = .FLQNODE_A    : BLOCK [DSC$K_S_BLN,BYTE],
+    	DID1	    = .DID1_A;
+
+    LOCAL
+    	LSB 	: LSBDEF,
+    	LSB2	: LSBDEF,
+    	lkclst	: $ITMLST_DECL (ITEMS=3),
+    	LKILST	: $ITMLST_DECL (ITEMS=1),
+    	LKI 	: REF BLOCKVECTOR [,LKI$C_LENGTH,BYTE],
+    	LKL 	: LKLDEF,
+    	IOSB	: VECTOR [4,WORD],
+    	STR 	: BLOCK [DSC$K_S_BLN,BYTE],
+    	RESNAM	: BLOCK [DSC$K_S_BLN,BYTE],
+    	PRCNAM	: BLOCK [DSC$K_S_BLN,BYTE],
+    	SYSNAM	: BLOCK [DSC$K_S_BLN,BYTE],
+    	CMDSB	: LSBDEF,
+	CMDWSB	: LSBDEF,
+    	CMDNAM	: BLOCK [DSC$K_S_BLN,BYTE],
+	SRTQUE	: QUEDEF,
+	S	: REF SRTDEF,
+	SENT	: REF SRTDEF,
+    	srtbase : REF BLOCKVECTOR [,SRT_S_SRTDEF,BYTE],
+    	srtlstsize, srtlstidx,
+    	DID_ONE,
+    	CVTCNT, GRANTCNT, WAITCNT, lkiblksize,
+    	LKCNT, LKIDX,
+    	STATUS;
+
+    INIT_DYNDESC (RESNAM, STR, PRCNAM, SYSNAM, CMDNAM);
+
+    $ITMLST_INIT (ITMLST=LKCLST,
+    	(ITMCOD=LKI$_CVTCOUNT, BUFADR=CVTCNT, BUFSIZ=%ALLOCATION (CVTCNT)),
+    	(ITMCOD=LKI$_GRANTCOUNT, BUFADR=GRANTCNT, BUFSIZ=%ALLOCATION (GRANTCNT)),
+    	(ITMCOD=LKI$_WAITCOUNT, BUFADR=WAITCNT, BUFSIZ=%ALLOCATION (WAITCNT)));
+
+    STR$CONCAT (RESNAM, flq_lock_d, FLQNODE, mx2_d, anam);
+    STATUS = $ENQW (LKMODE=LCK$K_NLMODE, LKSB=LSB, FLAGS=LCK$M_SYSTEM,
+    	    	    	RESNAM=RESNAM);
+    IF .STATUS THEN STATUS = .LSB [LSB_W_STATUS];
+    IF NOT .STATUS THEN
+    BEGIN
+    	FREE_STRINGS (RESNAM);
+    	RETURN SS$_NORMAL;
+    END;
+
+    status = $GETLKIW (LKIDADR=lsb [LSB_L_LKID], ITMLST=lkclst, IOSB=iosb);
+    IF .status THEN status = .iosb [0];
+    IF .status THEN
+    	lkiblksize = (.waitcnt + .cvtcnt + .grantcnt + 16) * LKI$C_LENGTH
+    ELSE
+    	lkiblksize = 128 * LKI$C_LENGTH;
+
+    status = LIB$GET_VM (lkiblksize, lki);
+    IF NOT .status THEN
+    BEGIN
+    	$DEQ (LKID=.lsb [LSB_L_LKID]);
+    	RETURN .status;
+    END;
+    
+    $ITMLST_INIT (ITMLST=LKILST,
+    	 (ITMCOD=LKI$_LOCKS, BUFADR=.lki, BUFSIZ=.lkiblksize, RETLEN=LKL));
+
+    STATUS = $GETLKIW (LKIDADR=LSB [LSB_L_LKID], ITMLST=LKILST, IOSB=IOSB);
+    IF .STATUS THEN STATUS = .IOSB [0];
+    IF .STATUS THEN IF .LKL [LKL_V_OVERRUN] THEN STATUS = SS$_DATAOVERUN;
+
+    $DEQ (LKID = .lsb [LSB_L_LKID]);
+
+    IF .STATUS THEN LKCNT = .LKL [LKL_W_WRITTEN] / .LKL [LKL_V_PERLK]
+    ELSE LKCNT = 0;
+    IF NOT .STATUS OR .LKCNT LSS 2 THEN
+    BEGIN
+    	LIB$FREE_VM (lkiblksize, lki);
+    	FREE_STRINGS (RESNAM);
+    	RETURN SS$_NORMAL;
+    END;
+
+    srtlstsize = .lkcnt * SRT_S_SRTDEF;
+    status = LIB$GET_VM (srtlstsize, srtbase);
+    srtlstidx = 0;
+
+    INIT_QUEUE (SRTQUE);
+    INCR I FROM 0 TO .LKCNT-1 DO
+    	IF (.LKI [.I,LKI$L_PID] NEQ .MYPID) AND
+	   ((.mycsid EQLU 0) OR			!No node was passed OR
+	   !If a node ID was passed in, make sure it matches this one!
+	   ((.mycsid NEQU 0) AND (.mycsid EQLU .lki [.i, LKI$L_CSID])))
+	THEN
+	BEGIN
+    	    SENT = srtbase [.srtlstidx,0,0,0,0];
+	    SENT [SRT_L_INDEX] = .I;
+
+	    S = .SRTQUE [QUE_L_HEAD];
+	    WHILE .S NEQA SRTQUE DO
+	    BEGIN
+		! Ignore duplicates
+		IF .LKI [.S [SRT_L_INDEX], LKI$L_PID] EQLU .LKI [.I,LKI$L_PID]
+		THEN EXITLOOP;
+
+		IF .LKI [.S [SRT_L_INDEX], LKI$L_PID] GTRU .LKI [.I,LKI$L_PID] 
+		THEN BEGIN
+    	    	    srtlstidx = .srtlstidx + 1;
+		    INSQUE (.SENT, .S [SRT_L_BLINK]);
+		    EXITLOOP;
+		END;
+
+		S = .S [SRT_L_FLINK];
+	    END;
+	    IF .S EQLA SRTQUE THEN
+    	    BEGIN
+    	    	srtlstidx = .srtlstidx + 1;
+		INSQUE (.SENT, .SRTQUE [QUE_L_TAIL]);
+    	    END;
+	END;
+
+    WHILE NOT REMQUE (.SRTQUE [QUE_L_HEAD], S) DO
+    BEGIN
+	IF NOT .DID1 THEN
+	BEGIN
+	    DID1 = 1;
+	    IF .VAXCLUSTER THEN
+	    BEGIN
+		LIB$PUT_OUTPUT (
+		    %ASCID'  PID     Node   Process name         Status        Agent type');
+		LIB$PUT_OUTPUT (
+		    %ASCID'-------- ------ --------------- ------------------ ------------');
+	    END
+	    ELSE
+	    BEGIN
+		LIB$PUT_OUTPUT (
+		    %ASCID'  PID     Process name         Status       Agent type');
+		LIB$PUT_OUTPUT (
+		    %ASCID'-------- --------------- ------------------ -----------');
+	    END;
+	END;
+
+	! In case we get no status information, provide default
+	CMDSB [LSB_L_STCODE] = MX_K_STATUS_UNKNOWN;
+
+	! Guarantee exclusive access to command lock
+	LIB$SYS_FAO (%ASCID'MX_CMDW_!XL', 0, CMDNAM,
+					.LKI [.S [SRT_L_INDEX],LKI$L_PID]);
+	STATUS = $ENQW (LKMODE=LCK$K_EXMODE, LKSB=CMDWSB, RESNAM=CMDNAM,
+			FLAGS=LCK$M_SYSTEM);
+	IF .STATUS THEN STATUS = .CMDWSB [LSB_W_STATUS];
+	IF .STATUS THEN
+	BEGIN
+	    LIB$SYS_FAO (%ASCID'MX_CMD_!XL', 0, CMDNAM,
+		.LKI [.S [SRT_L_INDEX], LKI$L_PID]);
+	    STATUS = $ENQW (LKMODE=LCK$K_EXMODE, LKSB=CMDSB,
+			FLAGS=(LCK$M_SYSTEM OR LCK$M_VALBLK), RESNAM=CMDNAM);
+	    IF .STATUS THEN STATUS = .CMDSB [LSB_W_STATUS];
+	    IF .STATUS THEN
+	    BEGIN
+		CMDSB [LSB_B_CMD] = MX_K_CMD_NOOP;  ! no command to send
+		$DEQ (LKID=.CMDSB [LSB_L_LKID],
+			VALBLK=CMDSB [LSB_X_VALBLK]);
+	    END;
+	END;
+
+	$DEQ (LKID=.CMDWSB [LSB_L_LKID]);
+
+	SELECTONE .CMDSB [LSB_L_STCODE] OF
+	SET
+	[MX_K_STATUS_PROCESSING,
+	 MX_K_STATUS_RETRYING,
+	 MX_K_STATUS_WAITING] :	    ! Show status and current entry
+	    LIB$SYS_FAO (%ASCID'!11AS #!5UL', 0, STR,
+		.AGSTATUSES [.CMDSB [LSB_L_STCODE]],
+		.CMDSB [LSB_L_STPAR]);
+	[MX_K_STATUS_LOCATING,
+	 MX_K_STATUS_SEARCHING,
+	 MX_K_STATUS_SEARCHING2] :	    ! Show status and current entry
+	    LIB$SYS_FAO (%ASCID'!11AS @!5UL', 0, STR,
+		.AGSTATUSES [.CMDSB [LSB_L_STCODE]],
+		.CMDSB [LSB_L_STPAR]);
+	[MX_K_STATUS_FLQ_RWAIT,
+	 MX_K_STATUS_WORK_LWAIT]:	    ! Show status and current entry
+	    LIB$SYS_FAO (%ASCID'!11AS  !5UL', 0, STR,
+		.AGSTATUSES [.CMDSB [LSB_L_STCODE]],
+		.CMDSB [LSB_L_STPAR]);
+	[MX_K_STATUS_SMTP_CONNECTED] :  ! Show status and # of connections
+	    LIB$SYS_FAO (%ASCID'!15AS !2UL', 0, STR,
+		.AGSTATUSES [.CMDSB [LSB_L_STCODE]],
+		.CMDSB [LSB_L_STPAR]);
+	[MX_K_STATUS_REQUPDATE]:	    ! Status & debugging checkpoint
+	    LIB$SYS_FAO (%ASCID'!15AS !2UL', 0, STR,
+		.AGSTATUSES [.CMDSB [LSB_L_STCODE]],
+		.CMDSB [LSB_L_STPAR]);
+	[OTHERWISE] :	    ! Show status only
+	    LIB$SYS_FAO (%ASCID'!18AS', 0, STR,
+		.AGSTATUSES [.CMDSB [LSB_L_STCODE]]);
+	TES;
+
+	LIB$GETJPI (%REF (JPI$_PRCNAM),
+			LKI [.S [SRT_L_INDEX], LKI$L_PID], 0, 0, PRCNAM);
+	IF .VAXCLUSTER THEN
+	BEGIN
+	    LIB$GETSYI (%REF (SYI$_NODENAME), 0, SYSNAM, 0,
+		LKI [.S [SRT_L_INDEX],LKI$L_CSID]);
+	    LIB$SYS_FAO (%ASCID'!XL !6AS !15AS !18AS !AS', 0, STR,
+		.LKI [.S [SRT_L_INDEX], LKI$L_PID], SYSNAM, PRCNAM, STR, adsc);
+	END
+	ELSE
+	    LIB$SYS_FAO (%ASCID'!XL !15AS !18AS !AS', 0, STR,
+		.LKI [.S [SRT_L_INDEX], LKI$L_PID], PRCNAM, STR, adsc);
+
+	LIB$PUT_OUTPUT (STR);
+    END;
+
+    LIB$FREE_VM (srtlstsize, srtbase);
+    LIB$FREE_VM (lkiblksize, lki);
+    FREE_STRINGS (STR, RESNAM, PRCNAM, SYSNAM, CMDNAM);
+
+    SS$_NORMAL
+
+END; ! LOCATE_AGENT
+
+END
+ELUDOM

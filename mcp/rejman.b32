@@ -1,0 +1,2750 @@
+%TITLE 'REJMAN'
+MODULE REJMAN (IDENT='V2.7', MAIN=REJMAN,
+    	ADDRESSING_MODE (EXTERNAL=LONG_RELATIVE, NONEXTERNAL=LONG_RELATIVE)) =
+BEGIN
+!++
+! FACILITY: 	    REJMAN
+!
+! ABSTRACT:
+!
+!   MX SMTP rejection filter database manager.
+!
+! MODULE DESCRIPTION:
+!
+!   This module contains the routines that implement the MX
+!   rejection database manager.
+!
+! AUTHOR:   	    M. Madison
+!
+! Copyright (c) 2008, Matthew Madison.
+! Copyright (c) 2012, Endless Software Solutions.
+! 
+! All rights reserved.
+! 
+! Redistribution and use in source and binary forms, with or without
+! modification, are permitted provided that the following conditions
+! are met:
+! 
+!     * Redistributions of source code must retain the above
+!       copyright notice, this list of conditions and the following
+!       disclaimer.
+!     * Redistributions in binary form must reproduce the above
+!       copyright notice, this list of conditions and the following
+!       disclaimer in the documentation and/or other materials provided
+!       with the distribution.
+!     * Neither the name of the copyright owner nor the names of any
+!       other contributors may be used to endorse or promote products
+!       derived from this software without specific prior written
+!       permission.
+! 
+! THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
+! "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
+! LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
+! A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
+! OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
+! SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
+! LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
+! DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
+! THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
+! (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
+! OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+!
+! CREATION DATE:    07-SEP-1997
+!
+! MODIFICATION HISTORY:
+!
+!   07-SEP-1997	V1.0	Madison	    Initial coding (based on MCP).
+!   10-SEP-1997	V1.0-1	Madison	    Turn on new NOPARSE flag on FORMAT_HDR
+!   	    	    	    	    to avoid X-MX-Warnings.
+!   05-OCT-1997	V1.1	Madison	    Add the PURGE command.
+!   10-OCT-1997	V1.1-1	Madison	    Keydef ACCVIO fix from MCP.B32.
+!   14-OCT-1997	V1.2	Madison	    CHECK command.
+!   11-JUN-1998	V2.0	Madison	    SPAMFILTER commands.
+!   20-JUN-1998	V2.0-1	Madison	    INCLUDE_REASON flag on heuristics.
+!   14-OCT-1998	V2.0-2	Madison	    Better handling of null from strings.
+!   29-NOV-2000	V2.1	Madison	    ADD REJ/HEAD/FORW.
+!   03-DEC-2000	V2.1-1	Madison	    Catch invalid headers on ADD REJ/HEADER.
+!   05-MAY-2001 V2.1-2  Madison     Fix display of X-MX-Warning: header rejections.
+!   17-FEB-2002 V2.2    Madison     Assign unique IDs to rules.
+!   09-MAR-2003 V2.3    Madison     Make sure we initialize things properly.
+!   17-FEB-2010 V2.4	Sneddon	    Added FROM_BAD_LOCAL_USER.
+!   15-MAR-2010 V2.5	Sneddon	    Added FROM_USER_MSGID_HOST.
+!   13-JUL-2012 V2.6    Sneddon	    ADD REJ/HEAD/ACCEPT.
+!   16-JUL-2012 V2.6-1  Sneddon	    Removed remains of old $FAO directive.
+!   18-JUL-2012 V2.7	Sneddon	    Added SENDER_ADDRESS_VERIFY.
+!--
+
+    LIBRARY 'SYS$LIBRARY:STARLET';
+    LIBRARY 'MX_SRC_COMMON:MX';
+    LIBRARY 'MX_SRC_COMMON:MX_LCLDEFS';
+    LIBRARY 'MX_SRC_COMMON:REGEX';
+    LIBRARY 'MCP';
+
+    FORWARD ROUTINE
+    	REJMAN,
+    	REJMAN_HANDLER,
+    	CMD_EXIT,
+    	CMD_QUIT,
+    	CMD_HELP,
+    	CMD_ADDSPAM,
+    	CMD_ADDEXCL,
+    	CMD_DELSPAM,
+    	CMD_DELEXCL,
+    	CMD_ENBHEUR,
+    	CMD_DSBHEUR,
+    	CMD_SETHEUR,
+    	CMD_PURGE,
+    	CMD_SHOW,
+    	ALT_SHOW_OUTPUT,
+    	CMD_SAVE,
+    	CMD_SPAWN,
+    	CMD_ATTACH,
+    	CMD_CHECK,
+    	found_header,
+    	found_spam,
+    	SHOW_DATABASE,
+    	SHOW_VERSION,
+    	SHOW_REJECTIONS,
+    	SHOW_HEURISTICS,
+    	espam_match,
+    	match_wild,
+        match_regex;
+
+    EXTERNAL ROUTINE
+    	GET_CMD,
+    	STRIP,
+    	LOAD_MXCONFIG,
+    	SAVE_ESPAMDB,
+    	G_HAT (MEM_GETTXT, PARSE_HDRS, FORMAT_HDR, MX_VERSION, QUOTE_STRING),
+    	G_HAT (LIB$GET_FOREIGN, STR$CASE_BLIND_COMPARE, STR$TRIM,
+    	    STR$FIND_FIRST_NOT_IN_SET, STR$CONCAT, STR$UPCASE, STR$RIGHT,
+    	    LIB$SUB_TIMES, LIB$CONVERT_DATE_STRING, LIB$CVT_DTB,
+	    LIB$SPAWN, LIB$ATTACH, OTS$CVT_TZ_L, LIB$ANALYZE_SDESC);
+
+    EXTERNAL
+    	REJMAN_CMD_CLD, REJMAN_CLD;
+
+    EXTERNAL LITERAL
+    	REJMAN__NOMATCH, REJMAN__ALREADY, REJMAN__NORDDB, REJMAN__INVHDR,
+    	REJMAN__READDB, REJMAN__NOWRTDB, REJMAN__WROTEDB, CLI$_NOCOMD,
+    	REJMAN__NOOPNOUT, REJMAN__INVADDR, REJMAN__NOPURGE, REJMAN__PURGED,
+    	REJMAN__INVDT, REJMAN__CKNOMATCH, REJMAN__CKMATCH, REJMAN__CKMATCHRW,
+        REJMAN__INVIDENT, REJMAN__INVREGEX,
+    	LIB$_NORMAL, CLI$_LOCPRES, CLI$_DEFAULTED;
+
+    GLOBAL
+    	ESPAMQUE	: QUEDEF,
+    	GHEUR_INFO  	: GHEURDEF,
+    	HEURTBL	    	: HEURDEF_ARRAY (HEUR_K_COUNT),
+    	CFG_CHANGED 	: INITIAL (0),
+    	CFGFILE	    	: BLOCK [DSC$K_S_BLN,BYTE],
+        SPAMLASTID      : LONG;
+
+    OWN
+    	cfgfile_rdt 	: VECTOR [2,LONG],
+    	SHOW_FAB    	: $FAB_DECL,
+    	SHOW_RAB    	: $RAB_DECL,
+	jpi_curpriv	: VECTOR [2,LONG],
+	jpi_procpriv	: VECTOR [2,LONG],
+    	heur_kwd   	: VECTOR [HEUR_K_COUNT,LONG] INITIAL (
+    	    	    	    %ASCID'NULL_FROM', %ASCID'NULL_TO', %ASCID'FROM_TO_SENDER_SAME',
+    	    	    	    %ASCID'MSGID_HAS_TO', %ASCID'INVALID_AOL_ADDRESS', %ASCID'NUMERIC_ADDRESS',
+    	    	    	    %ASCID'RECEIVED_AFTER_FROM', %ASCID'X_UIDL', %ASCID'NULL_MSGID',
+    	    	    	    %ASCID'INVALID_HOTMAIL_ADDRESS', %ASCID'RECEIVED_ALL_ZEROS', %ASCID'UIDL_AUTH_SENDER',
+    	    	    	    %ASCID'PRECEDENCE_BULK', %ASCID'MSGID_HAS_FROM', %ASCID'INVALID_FROM', %ASCID'INVALID_TO',
+			    %ASCID'FROM_BAD_LOCAL_USER', %ASCID'FROM_USER_MSGID_HOST', %ASCID'SENDER_ADDRESS_VERIFY'),
+    	heur_num    	: VECTOR [HEUR_K_COUNT,LONG] INITIAL (
+    	    	    	    HEUR_K_NULL_FROM, HEUR_K_NULL_TO, HEUR_K_FROM_TO_SENDER_SAME,
+    	    	    	    HEUR_K_MSGID_HAS_TO, HEUR_K_INVALID_AOL_ADDRESS, HEUR_K_NUMERIC_ADDRESS,
+    	    	    	    HEUR_K_RECEIVED_AFTER_FROM, HEUR_K_X_UIDL, HEUR_K_NULL_MSGID,
+    	    	    	    HEUR_K_INVALID_HOTMAIL_ADDRESS, HEUR_K_RECEIVED_ALL_ZEROS, HEUR_K_UIDL_AUTH_SENDER,
+    	    	    	    HEUR_K_PRECEDENCE_BULK, HEUR_K_MSGID_HAS_FROM, HEUR_K_INVALID_FROM, HEUR_K_INVALID_TO,
+			    HEUR_K_FROM_BAD_LOCAL_USER, HEUR_K_FROM_USER_MSGID_HOST, HEUR_K_SENDER_ADDRESS_VERIFY),
+        default_confidence  : VECTOR [HEUR_K_COUNT,LONG] INITIAL (
+                                HEUR_K_DC_NULL_FROM, HEUR_K_DC_NULL_TO, HEUR_K_DC_FROM_TO_SENDER_SAME,
+                                HEUR_K_DC_MSGID_HAS_TO, HEUR_K_DC_INVALID_AOL_ADDRESS, HEUR_K_DC_NUMERIC_ADDRESS,
+                                HEUR_K_DC_RECEIVED_AFTER_FROM, HEUR_K_DC_X_UIDL, HEUR_K_DC_NULL_MSGID,
+                                HEUR_K_DC_INVALID_HOTMAIL_ADDR, HEUR_K_DC_RECEIVED_ALL_ZEROS,
+    	    	    	    	HEUR_K_DC_UIDL_AUTH_SENDER, HEUR_K_DC_PRECEDENCE_BULK,
+    	    	    	    	HEUR_K_DC_MSGID_HAS_FROM, HEUR_K_DC_INVALID_FROM, HEUR_K_DC_INVALID_TO,
+				HEUR_K_DC_FROM_BAD_LOCAL_USER, HEUR_K_DC_FROM_USER_MSGID_HOST,
+				HEUR_K_DC_SENDER_ADDRESS_VERIFY);
+
+    BIND
+	verb_d			= %ASCID'$VERB',
+	null_d			= %ASCID'<>',
+    	null_str    	    	= %ASCID''  	    	    : BLOCK [,BYTE],
+	atsign_d		= %ASCID'@',
+    	db_d	    	    	= %ASCID'DATABASE',
+    	cmd_d	    	    	= %ASCID'CMD',
+    	dbfile_d    	    	= %ASCID'MX_REJECTION_DATABASE',
+    	mxcfg_d	    	    	= %ASCID'MX_DIR:.MXCFG'	    : BLOCK [,BYTE],
+    	rejman_prompt_d	    	= %ASCID'REJMAN> ',
+    	sender_d    	    	= %ASCID'SENDER',
+    	recipient_d 	    	= %ASCID'RECIPIENT',
+    	address_d   	    	= %ASCID'ADDRESS',
+    	header_d    	    	= %ASCID'HEADER',
+    	hdrpat_d    	    	= %ASCID'HDRPAT',
+    	accept_d    	    	= %ASCID'ACCEPT',
+    	accept_rewrite_d    	= %ASCID'ACCEPT.REWRITE',
+    	message_d   	    	= %ASCID'MESSAGE',
+    	showopt_d   	    	= %ASCID'SHOWOPT',
+    	command_d   	    	= %ASCID'COMMAND',
+    	output_d    	    	= %ASCID'OUTPUT',
+    	filespec_d  	    	= %ASCID'FILESPEC',
+    	file_prompt 	    	= %ASCID'_File: ',
+    	p1_d	    	    	= %ASCID'P1',
+    	id_d	    	    	= %ASCID'ID',
+    	parent_d    	    	= %ASCID'PARENT',
+    	before_d    	    	= %ASCID'BEFORE',
+    	log_d	    	    	= %ASCID'LOG',
+    	heuristic_d 	    	= %ASCID'HEURISTIC',
+    	default_d   	    	= %ASCID'DEFAULT',
+    	confidence_level_d  	= %ASCID'CONFIDENCE_LEVEL',
+    	all_d	    	    	= %ASCID'ALL',
+    	reject_action_d	    	= %ASCID'REJECT_ACTION',
+    	reject_action_dot_forward_d = %ASCID'REJECT_ACTION.FORWARD',
+    	confidence_level_dot_accept_d = %ASCID'CONFIDENCE_LEVEL.ACCEPT',
+    	confidence_level_dot_reject_d = %ASCID'CONFIDENCE_LEVEL.REJECT',
+    	include_reason_d    	= %ASCID'INCLUDE_REASON',
+    	forward_to_d	    	= %ASCID'FORWARD_TO',
+        identifier_d            = %ASCID'IDENTIFIER',
+        regex_text_d            = %ASCID'  (regular expression matching)';
+
+%SBTTL 'REJMAN'
+GLOBAL ROUTINE REJMAN =
+BEGIN
+!++
+! FUNCTIONAL DESCRIPTION:
+!
+!   REJMAN main routine
+!
+! RETURNS:  	cond_value, longword (unsigned), write only, by value
+!
+! PROTOTYPE:
+!
+!   REJMAN
+!
+! IMPLICIT INPUTS:  None.
+!
+! IMPLICIT OUTPUTS: None.
+!
+! COMPLETION CODES:
+!
+!   SS$_NORMAL:	    	normal successful completion.
+!
+! SIDE EFFECTS:
+!
+!   None.
+!--
+    LOCAL
+    	CMD 	: BLOCK [DSC$K_S_BLN,BYTE],
+    	STR 	: BLOCK [DSC$K_S_BLN,BYTE],
+    	INPFIL	: BLOCK [DSC$K_S_BLN,BYTE],
+	jpi_items	: $ITMLST_DECL (ITEMS=2),
+    	LOG,
+    	STATUS;
+    ENABLE
+    	REJMAN_HANDLER;
+
+    INIT_DYNDESC (CMD, INPFIL, CFGFILE);
+
+    INIT_QUEUE (ESPAMQUE);
+    spamlastid = 0;
+
+    !
+    !  Get our privileges just in case REJMAN is installed with privileges
+    !  that we need to disable before any SPAWN.
+    !
+    $ITMLST_INIT (ITMLST = jpi_items,			!Initialize the item
+		(ITMCOD	= JPI$_PROCPRIV,
+		 BUFSIZ	= %ALLOCATION(jpi_procpriv),
+		 BUFADR	= jpi_procpriv),
+		(ITMCOD	= JPI$_CURPRIV,
+		 BUFSIZ	= %ALLOCATION(jpi_curpriv),
+		 BUFADR	= jpi_curpriv));
+    jpi_curpriv [0] = jpi_curpriv [1] = jpi_procpriv [0] =
+		jpi_procpriv [1] = 0;
+    $GETJPIW (ITMLST = jpi_items);
+
+    !
+    !  In case the user wants to SPAWN, we need to be able to disable any
+    !  privileges we weren't installed with.
+    !
+    ! PROCPRIV  points to the process-permanent privileges.  CURPRIV points to
+    ! the privileges currently enabled (including privileges belonging to  the
+    ! installed program).
+    !
+    ! We  want  to  disable  all  image privileges that are currently enabled.
+    ! This is accomplished by performing a complemented AND of the two  masks.
+    ! The  resulting  mask  in  CURPRIV is the mask of all privileges that the
+    ! program is installed with that do not really belong to us.
+    !
+    jpi_curpriv[0] = .jpi_curpriv[0] AND NOT(.jpi_procpriv[0]);
+    jpi_curpriv[1] = .jpi_curpriv[1] AND NOT(.jpi_procpriv[1]);
+
+    LOG = 0;
+    STATUS = LIB$GET_FOREIGN (CMD);
+    IF .STATUS AND .CMD [DSC$W_LENGTH] GTR 0 THEN
+    BEGIN
+    	STR$PREFIX (CMD, %ASCID'REJMAN ');
+    	CLI$DCL_PARSE (CMD, REJMAN_CMD_CLD, LIB$GET_FOREIGN, LIB$GET_FOREIGN);
+    	STATUS = CLI$PRESENT (db_d);
+    	IF .STATUS EQL CLI$_PRESENT THEN
+    	    CLI$GET_VALUE (db_d, INPFIL)
+    	ELSE IF .STATUS NEQ CLI$_NEGATED THEN
+    	    STR$COPY_DX (INPFIL, dbfile_d);
+    	IF CLI$PRESENT (cmd_d) EQL CLI$_PRESENT THEN
+    	    CLI$GET_VALUE (cmd_d, CMD)
+    	ELSE
+    	    FREE_STRINGS (CMD);
+    END
+    ELSE STR$COPY_DX (INPFIL, dbfile_d);
+
+    IF .INPFIL [DSC$W_LENGTH] GTR 0 THEN
+    BEGIN
+        cfgfile_rdt [0] = cfgfile_rdt [1] = 0;
+    	STATUS = LOAD_MXCONFIG (INPFIL, mxcfg_d, CFGFILE, CFG_M_EXTSPAM OR CFG_M_SPAMHEUR, CFGFILE_RDT);
+    	IF NOT .STATUS THEN
+    	    SIGNAL (REJMAN__NORDDB, 1, INPFIL, .STATUS);
+    	FREE_STRINGS (INPFIL);
+    END;
+
+    IF .status AND .SPAMLASTID EQLU 0 THEN
+    BEGIN
+        LOCAL
+            e : REF EXTSPAMDEF;
+        e = .ESPAMQUE [QUE_L_HEAD];
+        IF .e NEQA ESPAMQUE THEN
+        BEGIN
+            WHILE .e NEQA ESPAMQUE DO
+            BEGIN
+                spamlastid = .spamlastid + 1;
+                e [EXTSPAM_L_RULEID] = .spamlastid;
+                e [EXTSPAM_V_DIRTY] = 1;
+                e = .e [EXTSPAM_L_FLINK];
+            END;
+            CFG_CHANGED = 1;
+        END;
+    END;
+
+    ! Call GET_CMD with no args to initialize the SMG stuff.
+    GET_CMD ();
+
+    IF .CMD [DSC$W_LENGTH] GTR 0 THEN
+    BEGIN
+    	STATUS = CLI$DCL_PARSE (CMD, REJMAN_CLD, GET_CMD, GET_CMD, rejman_prompt_d);
+    	IF .STATUS EQL RMS$_EOF THEN RETURN SS$_NORMAL;
+    	IF NOT .STATUS THEN RETURN (.STATUS OR STS$M_INHIB_MSG);
+    	STATUS = CLI$DISPATCH ();
+    	CMD_EXIT ();
+    	RETURN .STATUS OR STS$M_INHIB_MSG;
+    END;
+
+    INIT_DYNDESC (STR);
+
+    WHILE 1 DO
+    BEGIN
+    	STATUS = GET_CMD (STR, rejman_prompt_d);
+    	IF .STATUS EQL RMS$_EOF THEN
+    	BEGIN
+    	    STATUS = CMD_EXIT ();
+    	    EXITLOOP;
+    	END;
+    	STRIP (CMD, STR);
+    	IF .CMD [DSC$W_LENGTH] GTR 0 THEN
+    	BEGIN
+    	    STATUS = CLI$DCL_PARSE (CMD, REJMAN_CLD, GET_CMD, GET_CMD,
+    	    	    	    	rejman_prompt_d);
+    	    IF .STATUS EQL RMS$_EOF THEN
+    	    	STATUS = CMD_EXIT ()
+    	    ELSE IF .STATUS THEN
+    	    	STATUS = CLI$DISPATCH ();
+    	    IF .STATUS EQL RMS$_EOF THEN EXITLOOP;
+    	END;
+    END;
+
+    FREE_STRINGS (CMD, STR, CFGFILE);
+
+    SS$_NORMAL
+
+END; ! REJMAN
+
+%SBTTL 'REJMAN_HANDLER'
+GLOBAL ROUTINE REJMAN_HANDLER (SIG : REF VECTOR [,LONG],
+    	    	    MECH : REF VECTOR [,LONG], ENBL : REF VECTOR [,LONG]) =
+BEGIN
+!++
+! FUNCTIONAL DESCRIPTION:
+!
+!   Condition handler for REJMAN.
+!
+! RETURNS:  	cond_value, longword (unsigned), write only, by value
+!
+! PROTOTYPE:
+!
+!   REJMAN_HANDLER
+!
+! IMPLICIT INPUTS:  None.
+!
+! IMPLICIT OUTPUTS: None.
+!
+! COMPLETION CODES:
+!
+!   SS$_NORMAL:	    	normal successful completion.
+!
+! SIDE EFFECTS:
+!
+!   None.
+!--
+    BIND
+    	COND = SIG [1] : BLOCK [,BYTE];
+
+    EXTERNAL LITERAL
+    	CLI$_ABSENT;
+
+    SELECTONE .COND OF
+    SET
+    	[SS$_UNWIND, CLI$_ABSENT] : SS$_NORMAL;
+    	[OTHERWISE] : SS$_RESIGNAL;
+    TES
+
+END;
+
+%SBTTL 'CMD_EXIT'
+GLOBAL ROUTINE CMD_EXIT =
+BEGIN
+!++
+! FUNCTIONAL DESCRIPTION:
+!
+!   REJMAN EXIT command.  Saves current configuration and returns RMS$_EOF
+!   (as if user pressed CTRL/Z).
+!
+! RETURNS:  	cond_value, longword (unsigned), write only, by value
+!
+! PROTOTYPE:
+!
+!   CMD_EXIT
+!
+! IMPLICIT INPUTS:  None.
+!
+! IMPLICIT OUTPUTS: None.
+!
+! COMPLETION CODES:
+!
+!   SS$_NORMAL:	    	normal successful completion.
+!
+! SIDE EFFECTS:
+!
+!   None.
+!--
+    LOCAL
+    	RSPEC	: BLOCK [DSC$K_S_BLN,BYTE],
+    	FSPEC	: BLOCK [DSC$K_S_BLN,BYTE],
+    	FAB 	: $FAB_DECL,
+    	NAM 	: $NAM_DECL,
+    	EBUF	: VECTOR [255,BYTE],
+    	STATUS;
+
+    IF NOT .CFG_CHANGED THEN RETURN RMS$_EOF;
+
+    IF .CFGFILE [DSC$W_LENGTH] EQL 0 THEN
+    BEGIN
+    	STR$COPY_DX (cfgfile, dbfile_d);
+    	cfgfile_rdt [0] = cfgfile_rdt [1] = 0;
+    END;
+
+    INIT_DYNDESC (RSPEC, FSPEC);
+    $FAB_INIT (FAB=FAB, NAM=NAM, FNA=.CFGFILE [DSC$A_POINTER],
+    	    	FNS=.CFGFILE [DSC$W_LENGTH], DNA=.mxcfg_d [DSC$A_POINTER],
+    	        DNS=.mxcfg_d [DSC$W_LENGTH]);
+    $NAM_INIT (NAM=NAM, ESA=EBUF, ESS=%ALLOCATION (EBUF), NOP=SYNCHK);
+    IF $PARSE (FAB=FAB) THEN
+    	STR$COPY_R (FSPEC, %REF (.NAM [NAM$B_ESL]-.NAM [NAM$B_VER]), EBUF)
+    ELSE
+    	STR$COPY_DX (FSPEC, CFGFILE);
+
+    STATUS = SAVE_ESPAMDB (FSPEC, cfgfile_rdt, RSPEC);
+    IF NOT .STATUS THEN
+    BEGIN
+    	SIGNAL (REJMAN__NOWRTDB, 1, FSPEC);
+    	FREE_STRINGS (FSPEC);
+    	RETURN SS$_NORMAL
+    END
+    ELSE
+    	SIGNAL (REJMAN__WROTEDB, 1, RSPEC);
+
+    FREE_STRINGS (FSPEC, RSPEC);
+
+    RMS$_EOF
+
+END; ! CMD_EXIT
+
+%SBTTL 'CMD_QUIT'
+GLOBAL ROUTINE CMD_QUIT =
+BEGIN
+!++
+! FUNCTIONAL DESCRIPTION:
+!
+!   REJMAN QUIT command, for leaving REJMAN without saving new configuration.
+!   If configuration has changed
+!
+! RETURNS:  	cond_value, longword (unsigned), write only, by value
+!
+! PROTOTYPE:
+!
+!   CMD_QUIT
+!
+! IMPLICIT INPUTS:  None.
+!
+! IMPLICIT OUTPUTS: None.
+!
+! COMPLETION CODES:
+!
+!   SS$_NORMAL:	    	normal successful completion.
+!
+! SIDE EFFECTS:
+!
+!   None.
+!--
+    LOCAL
+    	STR : BLOCK [DSC$K_S_BLN,BYTE],
+    	STATUS;
+
+    INIT_DYNDESC (STR);
+
+    IF .CFG_CHANGED THEN
+    BEGIN
+    	STATUS = GET_CMD (STR, %ASCID %STRING ('Configuration has been ',
+    	    'changed.  Quit without saving? [No]: '));
+    	IF NOT .STATUS OR .STR [DSC$W_LENGTH] EQL 0 THEN
+    	    STATUS = SS$_NORMAL
+    	ELSE
+    	BEGIN
+    	    LOCAL CH : BYTE;
+    	    CH = CH$RCHAR (.STR [DSC$A_POINTER]);
+    	    IF .CH NEQ 'Y' AND .CH NEQ 'y' THEN STATUS = SS$_NORMAL
+    	    ELSE STATUS = RMS$_EOF
+    	END;
+    END
+    ELSE STATUS = RMS$_EOF;
+
+    FREE_STRINGS (STR);
+
+    .STATUS
+
+END; ! CMD_QUIT
+
+%SBTTL 'CMD_HELP'
+GLOBAL ROUTINE CMD_HELP =
+BEGIN
+!++
+! FUNCTIONAL DESCRIPTION:
+!
+!   REJMAN HELP command.
+!
+! RETURNS:  	cond_value, longword (unsigned), write only, by value
+!
+! PROTOTYPE:
+!
+!   CMD_HELP
+!
+! IMPLICIT INPUTS:  None.
+!
+! IMPLICIT OUTPUTS: None.
+!
+! COMPLETION CODES:
+!
+!   SS$_NORMAL:	    	normal successful completion.
+!
+! SIDE EFFECTS:
+!
+!   None.
+!--
+    LOCAL
+    	TOPIC	: BLOCK [DSC$K_S_BLN,BYTE],
+    	STATUS;
+
+    INIT_DYNDESC (TOPIC);
+    STATUS = CLI$GET_VALUE (%ASCID'HELP_REQUEST', TOPIC);
+    LBR$OUTPUT_HELP (LIB$PUT_OUTPUT, 0, TOPIC, %ASCID'MX_REJMAN_HELPLIB',
+    	%REF (HLP$M_PROMPT), GET_CMD);
+
+    SS$_NORMAL
+
+END; ! CMD_HELP
+
+%SBTTL 'CMD_ADDSPAM'
+GLOBAL ROUTINE CMD_ADDSPAM =
+BEGIN
+!++
+! FUNCTIONAL DESCRIPTION:
+!
+!   REJMAN ADD REJECTION command.
+!
+! RETURNS:  	cond_value, longword (unsigned), write only, by value
+!
+! PROTOTYPE:
+!
+!   CMD_ADDSPAM
+!
+! IMPLICIT INPUTS:  None.
+!
+! IMPLICIT OUTPUTS: None.
+!
+! COMPLETION CODES:
+!
+!   SS$_NORMAL:	    	normal successful completion.
+!
+! SIDE EFFECTS:
+!
+!   None.
+!--
+    LOCAL
+    	str 	: BLOCK [DSC$K_S_BLN,BYTE],
+    	sndrpat : BLOCK [DSC$K_S_BLN,BYTE],
+    	rcptpat : BLOCK [DSC$K_S_BLN,BYTE],
+        regex   : REGEXDEF,
+    	e   	: REF EXTSPAMDEF,
+        is_regex,
+    	status;
+
+    INIT_DYNDESC (str);
+
+    is_regex = CLI$PRESENT (%ASCID'REGEX') EQL CLI$_PRESENT;
+
+!  Adds for ADD REJECTION/HEADER have different syntax
+
+    status = CLI$PRESENT (header_d);
+    IF .status EQL CLI$_PRESENT OR .status EQL CLI$_DEFAULTED THEN
+    BEGIN
+    	LOCAL
+    	    hque    : QUEDEF,
+    	    hq2	    : QUEDEF,
+    	    h	    : REF TXTDEF;
+
+    	CLI$GET_VALUE (hdrpat_d, str);
+
+    	h = MEM_GETTXT (.str [DSC$W_LENGTH], .str [DSC$A_POINTER]);
+    	INIT_QUEUE (hque, hq2);
+    	INSQUE (.h, .hque [QUE_L_TAIL]);
+    	status = PARSE_HDRS (hque, hq2);
+    	WHILE NOT REMQUE (.hque [QUE_L_HEAD], h) DO FREETXT (h);
+    	IF .status THEN
+    	    IF QUEUE_EMPTY (hq2) THEN
+    	    BEGIN
+    	    	SIGNAL (REJMAN__INVHDR, 1, str);
+    	    	status = REJMAN__INVHDR;
+    	    END;
+    	IF .status THEN
+    	BEGIN
+    	    REMQUE (.hq2 [QUE_L_HEAD], h);
+    	    IF found_header (.h, e) THEN
+    	    BEGIN
+    	    	SIGNAL (REJMAN__ALREADY, 1, %ASCID'header-based rejection');
+    	    	status = REJMAN__ALREADY;
+    	    	FREETXT (h);
+    	    END;
+    	END;
+
+        IF .status AND .is_regex THEN
+        BEGIN
+            LOCAL
+                sdsc : BLOCK [DSC$K_S_BLN,BYTE],
+                ebuf : VECTOR [64,BYTE],
+                err,
+                elen;
+            INIT_SDESC (sdsc, .h [TXT_W_LEN], h [TXT_T_TEXT]);
+            IF (err = MX_REGCOMP (regex, sdsc, REG_M_EXTENDED OR REG_M_ICASE OR REG_M_NOSUB)) NEQ 0 THEN
+            BEGIN
+                elen = MX_REGERROR (.err, regex, ebuf, %ALLOCATION (ebuf));
+                SIGNAL (REJMAN__INVHDR, 1, str, REJMAN__INVREGEX, 2, .elen, ebuf);
+                status = REJMAN__INVHDR;
+            END
+            ELSE
+                MX_REGFREE (regex);
+        END;
+
+    	IF .status THEN
+    	BEGIN
+    	    status = LIB$GET_VM (%REF (EXTSPAM_S_EXTSPAMDEF), E);
+    	    IF .status THEN
+    	    BEGIN
+    	    	CH$FILL (%CHAR (0), EXTSPAM_S_EXTSPAMDEF, .e);
+    	    	$GETTIM (TIMADR=e [EXTSPAM_Q_DTADD]);
+    	    	e [EXTSPAM_A_HDMATCH] = .h;
+                e [EXTSPAM_V_REGEX] = .is_regex;
+	    	IF CLI$PRESENT (accept_d) EQL CLI$_PRESENT THEN
+	    	BEGIN
+	    	    e [EXTSPAM_V_ACCEPT] = 1;
+	    	    IF CLI$PRESENT (accept_rewrite_d) EQL CLI$_PRESENT THEN
+	    	    BEGIN
+	    	    	CLI$GET_VALUE (accept_rewrite_d, str);
+	    	    	e [EXTSPAM_A_RWADDR] = MEM_GETTXT (.str [DSC$W_LENGTH], .str [DSC$A_POINTER]);
+	    	    END;
+	    	END
+    	    	ELSE IF CLI$PRESENT (forward_to_d) EQL CLI$_PRESENT THEN
+    	    	BEGIN
+    	    	    CLI$GET_VALUE (forward_to_d, str);
+    	    	    e [EXTSPAM_A_RWADDR] = MEM_GETTXT (.str [DSC$W_LENGTH], .str [DSC$A_POINTER]);
+    	    	END;
+    	    	e [EXTSPAM_V_DIRTY] = 1;
+                spamlastid = .spamlastid + 1;
+                e [EXTSPAM_L_RULEID] = .spamlastid;
+    	    	INSQUE (.e, .ESPAMQUE [QUE_L_TAIL]);
+    	    	CFG_CHANGED = 1;
+    	    	status = SS$_NORMAL;
+    	    END;
+    	END;
+
+    	FREE_STRINGS (str);
+    	RETURN .status;
+
+    END;
+
+! Regular ADD REJECTION sender [rcpt]
+
+    INIT_DYNDESC (sndrpat, rcptpat);
+
+    CLI$GET_VALUE (sender_d, sndrpat);
+    IF .sndrpat [DSC$W_LENGTH] EQL 0 THEN
+    BEGIN
+    	SIGNAL (REJMAN__INVADDR, 1, sndrpat);
+    	FREE_STRINGS (str, sndrpat, rcptpat);
+    	RETURN REJMAN__INVADDR;
+    END;
+
+    IF .is_regex THEN
+    BEGIN
+        LOCAL
+            ebuf    : VECTOR [64,BYTE],
+            elen,
+            err;
+
+        IF (err = MX_REGCOMP (regex, sndrpat, REG_M_EXTENDED OR REG_M_ICASE OR REG_M_NOSUB)) NEQ 0 THEN
+        BEGIN
+            elen = MX_REGERROR (.err, regex, ebuf, %ALLOCATION (ebuf));
+    	    SIGNAL (REJMAN__INVADDR, 1, sndrpat, REJMAN__INVREGEX, 2, .elen, ebuf);
+    	    FREE_STRINGS (str, sndrpat, rcptpat);
+    	    RETURN REJMAN__INVADDR;
+        END
+        ELSE
+            MX_REGFREE (regex);
+    END;
+
+    IF CLI$PRESENT (recipient_d) EQL CLI$_PRESENT THEN
+    BEGIN
+    	CLI$GET_VALUE (recipient_d, rcptpat);
+    	IF .rcptpat [DSC$W_LENGTH] EQL 0 THEN
+    	BEGIN
+    	    SIGNAL (REJMAN__INVADDR, 1, rcptpat);
+    	    FREE_STRINGS (str, sndrpat, rcptpat);
+    	    RETURN REJMAN__INVADDR;
+    	END;
+        IF .is_regex THEN
+            IF MX_REGCOMP (regex, rcptpat, REG_M_EXTENDED OR REG_M_ICASE OR REG_M_NOSUB) NEQ 0 THEN
+            BEGIN
+    	        SIGNAL (REJMAN__INVADDR, 1, rcptpat);
+    	        FREE_STRINGS (str, sndrpat, rcptpat);
+    	        RETURN REJMAN__INVADDR;
+            END
+            ELSE
+                MX_REGFREE (regex);
+    END;
+
+    IF CLI$PRESENT (address_d) EQL CLI$_PRESENT THEN
+    BEGIN
+    	CLI$GET_VALUE (address_d, str);
+    	IF .str [DSC$W_LENGTH] EQL 0 THEN
+    	BEGIN
+    	    SIGNAL (REJMAN__INVADDR, 1, str);
+    	    FREE_STRINGS (str, sndrpat, rcptpat);
+    	    RETURN REJMAN__INVADDR;
+    	END;
+    END;
+
+    IF found_spam (str, sndrpat, rcptpat, e) THEN
+    BEGIN
+    	SIGNAL (REJMAN__ALREADY, 1, %ASCID'rejection');
+    	FREE_STRINGS (str, sndrpat, rcptpat);
+    	RETURN REJMAN__ALREADY;
+    END;
+
+    status = LIB$GET_VM (%REF (EXTSPAM_S_EXTSPAMDEF), e);
+    IF .status THEN
+    BEGIN
+    	CH$FILL (%CHAR (0), EXTSPAM_S_EXTSPAMDEF, .e);
+    	$GETTIM (TIMADR=e [EXTSPAM_Q_DTADD]);
+        e [EXTSPAM_V_REGEX] = .is_regex;
+    	e [EXTSPAM_V_DIRTY] = 1;
+    	e [EXTSPAM_A_FRMATCH] = MEM_GETTXT (.sndrpat [DSC$W_LENGTH], .sndrpat [DSC$A_POINTER]);
+    	IF .rcptpat [DSC$W_LENGTH] NEQ 0 THEN
+    	    e [EXTSPAM_A_TOMATCH] = MEM_GETTXT (.rcptpat [DSC$W_LENGTH], .rcptpat [DSC$A_POINTER]);
+    	IF .str [DSC$W_LENGTH] NEQ 0 THEN
+    	    e [EXTSPAM_A_IPMATCH] = MEM_GETTXT (.str [DSC$W_LENGTH], .str [DSC$A_POINTER]);
+    	IF CLI$PRESENT (accept_d) EQL CLI$_PRESENT THEN
+    	BEGIN
+    	    e [EXTSPAM_V_ACCEPT] = 1;
+    	    IF CLI$PRESENT (accept_rewrite_d) EQL CLI$_PRESENT THEN
+    	    BEGIN
+    	    	CLI$GET_VALUE (accept_rewrite_d, str);
+    	    	e [EXTSPAM_A_RWADDR] = MEM_GETTXT (.str [DSC$W_LENGTH], .str [DSC$A_POINTER]);
+    	    END;
+    	END
+    	ELSE IF CLI$PRESENT (message_d) EQL CLI$_PRESENT THEN
+    	BEGIN
+    	    CLI$GET_VALUE (message_d, str);
+    	    e [EXTSPAM_A_RWADDR] = MEM_GETTXT (.str [DSC$W_LENGTH], .str [DSC$A_POINTER]);
+    	END;
+        spamlastid = .spamlastid + 1;
+        e [EXTSPAM_L_RULEID] = .spamlastid;
+    	INSQUE (.e, .ESPAMQUE [QUE_L_TAIL]);
+    	CFG_CHANGED = 1;
+    END;
+
+    FREE_STRINGS (str, sndrpat, rcptpat);
+
+    .status
+
+END; ! CMD_ADDSPAM
+
+%SBTTL 'CMD_ADDEXCL'
+GLOBAL ROUTINE CMD_ADDEXCL =
+BEGIN
+!++
+! FUNCTIONAL DESCRIPTION:
+!
+!   REJMAN ADD EXCLUSION command.
+!
+! RETURNS:  	cond_value, longword (unsigned), write only, by value
+!
+! PROTOTYPE:
+!
+!   CMD_ADDEXCL
+!
+! IMPLICIT INPUTS:  None.
+!
+! IMPLICIT OUTPUTS: None.
+!
+! COMPLETION CODES:
+!
+!   SS$_NORMAL:	    	normal successful completion.
+!
+! SIDE EFFECTS:
+!
+!   None.
+!--
+    LOCAL
+    	str 	: BLOCK [DSC$K_S_BLN,BYTE],
+    	str2	: BLOCK [DSC$K_S_BLN,BYTE],
+    	e   	: REF TXTDEF,
+    	qhdr	: REF QUEDEF,
+    	index,
+    	status;
+
+    INIT_DYNDESC (str, str2);
+    index = HEUR_K_GLOBAL;
+    qhdr  = gheur_info [GHEUR_Q_GBLEXCL];
+
+    IF CLI$PRESENT (heuristic_d) EQL CLI$_PRESENT THEN
+    BEGIN
+    	CLI$GET_VALUE (heuristic_d, str);
+    	INCR i FROM 0 TO HEUR_K_COUNT-1 DO
+    	BEGIN
+    	    BIND hkwd = .heur_kwd [.i] : BLOCK [,BYTE];
+    	    IF .str [DSC$W_LENGTH] LEQ .hkwd [DSC$W_LENGTH] AND
+    	    	CH$EQL (.str [DSC$W_LENGTH], .str [DSC$A_POINTER], .str [DSC$W_LENGTH], .hkwd [DSC$A_POINTER]) THEN
+    	    BEGIN
+    	    	index = .heur_num [.i];
+    	    	qhdr  = heurtbl [.index,HEUR_Q_EXCL];
+    	    	EXITLOOP;
+    	    END;
+    	END;
+    END;
+
+    CLI$GET_VALUE (address_d, str2);
+    STR$UPCASE (str, str2);
+
+    e = .qhdr [QUE_L_HEAD];
+    WHILE .e NEQA qhdr [QUE_L_HEAD] DO
+    BEGIN
+    	IF CH$EQL (.str [DSC$W_LENGTH], .str [DSC$A_POINTER], .e [TXT_W_LEN], e [TXT_T_TEXT]) THEN EXITLOOP;
+    	e = .e [TXT_L_FLINK];
+    END;
+
+    IF .e NEQA qhdr [QUE_L_HEAD] THEN
+    BEGIN
+    	SIGNAL (REJMAN__ALREADY, 1, %ASCID'exclusion');
+    	status = REJMAN__ALREADY;
+    END
+    ELSE
+    BEGIN
+    	e = MEM_GETTXT (.str [DSC$W_LENGTH], .str [DSC$A_POINTER]);
+    	e [TXT_W_CODE] = .index;
+    	INSQUE (.e, .qhdr [QUE_L_TAIL]);
+    	cfg_changed = 1;
+    	status = SS$_NORMAL;
+    END;
+
+    FREE_STRINGS (str, str2);
+
+    .status
+
+END; ! CMD_ADDEXCL
+
+%SBTTL 'CMD_DELSPAM'
+GLOBAL ROUTINE CMD_DELSPAM =
+BEGIN
+!++
+! FUNCTIONAL DESCRIPTION:
+!
+!   REJMAN DELETE REJECTION command.
+!
+! RETURNS:  	cond_value, longword (unsigned), write only, by value
+!
+! PROTOTYPE:
+!
+!   CMD_DELSPAM
+!
+! IMPLICIT INPUTS:  None.
+!
+! IMPLICIT OUTPUTS: None.
+!
+! COMPLETION CODES:
+!
+!   SS$_NORMAL:	    	normal successful completion.
+!
+! SIDE EFFECTS:
+!
+!   None.
+!--
+    LOCAL
+    	str 	: BLOCK [DSC$K_S_BLN,BYTE],
+    	sndrpat : BLOCK [DSC$K_S_BLN,BYTE],
+    	rcptpat : BLOCK [DSC$K_S_BLN,BYTE],
+    	e       : REF EXTSPAMDEF,
+    	status;
+
+    INIT_DYNDESC (str);
+
+    IF CLI$PRESENT (identifier_d) EQL CLI$_PRESENT THEN
+    BEGIN
+        LOCAL
+            id : LONG;
+
+        CLI$GET_VALUE (identifier_d, str);
+        IF NOT LIB$CVT_DTB (.str [DSC$W_LENGTH], .str [DSC$A_POINTER], id) THEN
+        BEGIN
+            SIGNAL (REJMAN__INVIDENT, 1, str);
+            FREE_STRINGS (str);
+            RETURN REJMAN__INVIDENT;
+        END;
+        e = .espamque [QUE_L_HEAD];
+        WHILE .e NEQA espamque AND .e [EXTSPAM_L_RULEID] NEQU .id DO
+            e = .e [EXTSPAM_L_FLINK];
+        IF .e EQLA espamque THEN
+        BEGIN
+            SIGNAL (REJMAN__NOMATCH, 1, %ASCID'identifier');
+            FREE_STRINGS (str);
+            RETURN REJMAN__NOMATCH;
+        END;
+        e [EXTSPAM_V_DELETED] = e [EXTSPAM_V_DIRTY] = 1;
+        CFG_CHANGED = 1;
+        RETURN SS$_NORMAL;
+
+    END;
+
+!  DELETE REJECTION/HEADER has different syntax
+
+    IF CLI$PRESENT (header_d) EQL CLI$_PRESENT THEN
+    BEGIN
+    	LOCAL
+    	    hque    : QUEDEF,
+    	    hq2	    : QUEDEF,
+    	    h	    : TXTDEF;
+
+    	CLI$GET_VALUE (hdrpat_d, str);
+
+    	h = MEM_GETTXT (.str [DSC$W_LENGTH], .str [DSC$A_POINTER]);
+    	INIT_QUEUE (hque, hq2);
+    	INSQUE (.h, .hque [QUE_L_TAIL]);
+    	status = PARSE_HDRS (hque, hq2);
+    	WHILE NOT REMQUE (.hque [QUE_L_HEAD], h) DO FREETXT (h);
+    	IF .status THEN
+    	BEGIN
+    	    REMQUE (.hq2 [QUE_L_HEAD], h);
+    	    IF found_header (.h, e) THEN
+    	    BEGIN
+    	    	e [EXTSPAM_V_DELETED] = e [EXTSPAM_V_DIRTY] = 1;
+    	    	CFG_CHANGED = 1;
+    	    	status = SS$_NORMAL;
+    	    END
+    	    ELSE
+    	    BEGIN
+    	    	SIGNAL (REJMAN__NOMATCH, 1, %ASCID'header-based rejection');
+    	    	status = REJMAN__NOMATCH;
+    	    END;
+    	    FREETXT (h);
+    	END;
+
+    	FREE_STRINGS (str);
+    	RETURN .status;
+
+    END;
+
+! Regular DELETE REJECTION sender [rcpt]
+
+    INIT_DYNDESC (sndrpat, rcptpat);
+
+    CLI$GET_VALUE (sender_d, sndrpat);
+    IF CLI$PRESENT (recipient_d) EQL CLI$_PRESENT THEN
+    	CLI$GET_VALUE (recipient_d, rcptpat);
+
+    IF CLI$PRESENT (address_d) EQL CLI$_PRESENT THEN
+    	CLI$GET_VALUE (address_d, str);
+
+    IF found_spam (str, sndrpat, rcptpat, e) THEN
+    BEGIN
+    	e [EXTSPAM_V_DELETED] = e [EXTSPAM_V_DIRTY] = 1;
+    	status = SS$_NORMAL;
+    	CFG_CHANGED = 1;
+    END
+    ELSE
+    BEGIN
+    	SIGNAL (REJMAN__NOMATCH, 1, %ASCID'rejection');
+    	status = REJMAN__NOMATCH;
+    END;
+
+    FREE_STRINGS (str, sndrpat, rcptpat);
+
+    .status
+
+END; ! CMD_DELSPAM
+
+%SBTTL 'CMD_DELEXCL'
+GLOBAL ROUTINE CMD_DELEXCL =
+BEGIN
+!++
+! FUNCTIONAL DESCRIPTION:
+!
+!   REJMAN DELETE EXCLUSION command.
+!
+! RETURNS:  	cond_value, longword (unsigned), write only, by value
+!
+! PROTOTYPE:
+!
+!   CMD_DELEXCL
+!
+! IMPLICIT INPUTS:  None.
+!
+! IMPLICIT OUTPUTS: None.
+!
+! COMPLETION CODES:
+!
+!   SS$_NORMAL:	    	normal successful completion.
+!
+! SIDE EFFECTS:
+!
+!   None.
+!--
+    LOCAL
+    	str 	: BLOCK [DSC$K_S_BLN,BYTE],
+    	str2	: BLOCK [DSC$K_S_BLN,BYTE],
+    	e   	: REF TXTDEF,
+    	qhdr	: REF QUEDEF,
+    	index,
+    	status;
+
+    INIT_DYNDESC (str, str2);
+    index = HEUR_K_GLOBAL;
+    qhdr  = gheur_info [GHEUR_Q_GBLEXCL];
+
+    IF CLI$PRESENT (heuristic_d) EQL CLI$_PRESENT THEN
+    BEGIN
+    	CLI$GET_VALUE (heuristic_d, str);
+    	INCR i FROM 0 TO HEUR_K_COUNT-1 DO
+    	BEGIN
+    	    BIND hkwd = .heur_kwd [.i] : BLOCK [,BYTE];
+    	    IF .str [DSC$W_LENGTH] LEQ .hkwd [DSC$W_LENGTH] AND
+    	    	CH$EQL (.str [DSC$W_LENGTH], .str [DSC$A_POINTER], .str [DSC$W_LENGTH], .hkwd [DSC$A_POINTER]) THEN
+    	    BEGIN
+    	    	index = .heur_num [.i];
+    	    	qhdr  = heurtbl [.index,HEUR_Q_EXCL];
+    	    	EXITLOOP;
+    	    END;
+    	END;
+    END;
+
+    CLI$GET_VALUE (address_d, str2);
+    STR$UPCASE (str, str2);
+
+    e = .qhdr [QUE_L_HEAD];
+    WHILE .e NEQA qhdr [QUE_L_HEAD] DO
+    BEGIN
+    	IF CH$EQL (.str [DSC$W_LENGTH], .str [DSC$A_POINTER], .e [TXT_W_LEN], e [TXT_T_TEXT]) THEN EXITLOOP;
+    	e = .e [TXT_L_FLINK];
+    END;
+
+    IF .e NEQA qhdr [QUE_L_HEAD] THEN
+    BEGIN
+    	REMQUE (.e, e);
+    	FREETXT (e);
+    	CFG_CHANGED = 1;
+    	status = SS$_NORMAL;
+    END
+    ELSE
+    BEGIN
+    	SIGNAL (REJMAN__NOMATCH, 1, %ASCID'exclusion');
+    	status = REJMAN__NOMATCH;
+    END;
+
+    FREE_STRINGS (str, str2);
+
+    .status
+
+END; ! CMD_DELEXCL
+
+%SBTTL 'CMD_ENBHEUR'
+GLOBAL ROUTINE CMD_ENBHEUR =
+BEGIN
+!++
+! FUNCTIONAL DESCRIPTION:
+!
+!   REJMAN ENABLE HEURISTIC command.
+!
+! RETURNS:  	cond_value, longword (unsigned), write only, by value
+!
+! PROTOTYPE:
+!
+!   CMD_ENBHEUR
+!
+! IMPLICIT INPUTS:  None.
+!
+! IMPLICIT OUTPUTS: None.
+!
+! COMPLETION CODES:
+!
+!   SS$_NORMAL:	    	normal successful completion.
+!
+! SIDE EFFECTS:
+!
+!   None.
+!--
+    LOCAL
+    	str 	: BLOCK [DSC$K_S_BLN,BYTE],
+    	index,
+    	status;
+
+    IF CLI$PRESENT (all_d) NEQ CLI$_ABSENT THEN
+    BEGIN
+    	INCR i FROM 0 TO HEUR_K_COUNT-1 DO
+    	    heurtbl [.i,HEUR_V_ENABLED] = 1;
+    	CFG_CHANGED = 1;
+    	RETURN SS$_NORMAL;
+    END;
+
+    INIT_DYNDESC (str);
+
+    WHILE CLI$GET_VALUE (heuristic_d, str) DO
+    BEGIN
+    	index = HEUR_K_GLOBAL;
+    	INCR i FROM 0 TO HEUR_K_COUNT-1 DO
+    	BEGIN
+    	    BIND hkwd = .heur_kwd [.i] : BLOCK [,BYTE];
+    	    IF .str [DSC$W_LENGTH] LEQ .hkwd [DSC$W_LENGTH] AND
+    	    	CH$EQL (.str [DSC$W_LENGTH], .str [DSC$A_POINTER], .str [DSC$W_LENGTH], .hkwd [DSC$A_POINTER]) THEN
+    	    BEGIN
+    	    	index = .heur_num [.i];
+    	    	EXITLOOP;
+    	    END;
+    	END;
+    	IF .index NEQ HEUR_K_GLOBAL THEN
+    	BEGIN
+    	    CFG_CHANGED = 1;
+    	    heurtbl [.index,HEUR_V_ENABLED] = 1;
+    	    IF CLI$PRESENT (confidence_level_d) EQL CLI$_LOCPRES THEN
+    	    BEGIN
+    	    	CLI$GET_VALUE (confidence_level_d, str);
+    	    	IF STR$POSITION (default_d, str) EQL 1 THEN
+    	    	    heurtbl [.index, HEUR_L_CONFIDENCE] = .default_confidence [.index]
+    	    	ELSE
+    	    	BEGIN
+    	    	    LOCAL n;
+    	    	    n = .default_confidence [.index];
+    	    	    LIB$CVT_DTB (.str [DSC$W_LENGTH], .str [DSC$A_POINTER], n);
+    	    	    heurtbl [.index, HEUR_L_CONFIDENCE] = MAXU (HEUR_K_CONF_MIN, MINU (.n, HEUR_K_CONF_MAX));
+    	    	END;
+    	    END;
+    	END;
+    END;
+
+    FREE_STRINGS (str);
+
+    SS$_NORMAL
+
+END; ! CMD_ENBHEUR
+
+%SBTTL 'CMD_DSBHEUR'
+GLOBAL ROUTINE CMD_DSBHEUR =
+BEGIN
+!++
+! FUNCTIONAL DESCRIPTION:
+!
+!   REJMAN DISABLE HEURISTIC command.
+!
+! RETURNS:  	cond_value, longword (unsigned), write only, by value
+!
+! PROTOTYPE:
+!
+!   CMD_DSBHEUR
+!
+! IMPLICIT INPUTS:  None.
+!
+! IMPLICIT OUTPUTS: None.
+!
+! COMPLETION CODES:
+!
+!   SS$_NORMAL:	    	normal successful completion.
+!
+! SIDE EFFECTS:
+!
+!   None.
+!--
+    LOCAL
+    	str 	: BLOCK [DSC$K_S_BLN,BYTE],
+    	index,
+    	status;
+
+    IF CLI$PRESENT (all_d) NEQ CLI$_ABSENT THEN
+    BEGIN
+    	INCR i FROM 0 TO HEUR_K_COUNT-1 DO
+    	    heurtbl [.i,HEUR_V_ENABLED] = 0;
+    	CFG_CHANGED = 1;
+    	RETURN SS$_NORMAL;
+    END;
+
+    INIT_DYNDESC (str);
+
+    WHILE CLI$GET_VALUE (heuristic_d, str) DO
+    BEGIN
+    	index = HEUR_K_GLOBAL;
+    	INCR i FROM 0 TO HEUR_K_COUNT-1 DO
+    	BEGIN
+    	    BIND hkwd = .heur_kwd [.i] : BLOCK [,BYTE];
+    	    IF .str [DSC$W_LENGTH] LEQ .hkwd [DSC$W_LENGTH] AND
+    	    	CH$EQL (.str [DSC$W_LENGTH], .str [DSC$A_POINTER], .str [DSC$W_LENGTH], .hkwd [DSC$A_POINTER]) THEN
+    	    BEGIN
+    	    	index = .heur_num [.i];
+    	    	EXITLOOP;
+    	    END;
+    	END;
+    	IF .index NEQ HEUR_K_GLOBAL THEN
+    	BEGIN
+    	    CFG_CHANGED = 1;
+    	    heurtbl [.index,HEUR_V_ENABLED] = 0;
+    	END;
+    END;
+
+    FREE_STRINGS (str);
+
+    SS$_NORMAL
+
+END; ! CMD_DSBHEUR
+
+%SBTTL 'CMD_SETHEUR'
+GLOBAL ROUTINE CMD_SETHEUR =
+BEGIN
+!++
+! FUNCTIONAL DESCRIPTION:
+!
+!   REJMAN SET HEURISTIC command.
+!
+! RETURNS:  	cond_value, longword (unsigned), write only, by value
+!
+! PROTOTYPE:
+!
+!   CMD_SETHEUR
+!
+! IMPLICIT INPUTS:  None.
+!
+! IMPLICIT OUTPUTS: None.
+!
+! COMPLETION CODES:
+!
+!   SS$_NORMAL:	    	normal successful completion.
+!
+! SIDE EFFECTS:
+!
+!   None.
+!--
+    LOCAL
+    	str 	: BLOCK [DSC$K_S_BLN,BYTE],
+    	status;
+
+    INIT_DYNDESC (str);
+
+    status = CLI$PRESENT (include_reason_d);
+    IF .status EQL CLI$_PRESENT or .status EQL CLI$_NEGATED THEN
+    BEGIN
+    	gheur_info [GHEUR_V_INCLUDE_REASON] = .status EQL CLI$_PRESENT;
+    	CFG_CHANGED = 1;
+    END;
+
+    IF CLI$PRESENT (reject_action_d) EQL CLI$_PRESENT THEN
+    BEGIN
+    	IF CLI$PRESENT (reject_action_dot_forward_d) THEN
+    	BEGIN
+    	    CLI$GET_VALUE (reject_action_dot_forward_d, str);
+    	    gheur_info [GHEUR_W_ACTION] = HEUR_K_ACTION_FORWARD;
+    	    gheur_info [GHEUR_W_FWDTO] = MINU (GHEUR_S_FWDTO, .str [DSC$W_LENGTH]);
+    	    CH$MOVE (.gheur_info [GHEUR_W_FWDTO], .str [DSC$A_POINTER], gheur_info [GHEUR_T_FWDTO]);
+    	END
+    	ELSE
+    	    gheur_info [GHEUR_W_ACTION] = HEUR_K_ACTION_DROP;
+
+    	CFG_CHANGED = 1;
+
+    END;
+
+    IF CLI$PRESENT (confidence_level_d) EQL CLI$_PRESENT THEN
+    BEGIN
+    	IF CLI$PRESENT (confidence_level_dot_accept_d) EQL CLI$_PRESENT THEN
+    	BEGIN
+    	    CLI$GET_VALUE (confidence_level_dot_accept_d, str);
+    	    IF STR$POSITION (default_d, str) EQL 1 THEN
+    	    	gheur_info [GHEUR_L_CL_ACCEPT] = HEUR_K_ACCEPT_THRESHOLD_DEFAULT
+    	    ELSE
+    	    BEGIN
+    	    	LOCAL n;
+    	    	n = HEUR_K_ACCEPT_THRESHOLD_DEFAULT;
+    	    	LIB$CVT_DTB (.str [DSC$W_LENGTH], .str [DSC$A_POINTER], n);
+    	    	gheur_info [GHEUR_L_CL_ACCEPT] = MAXU (HEUR_K_CONF_MIN, MINU (.n, HEUR_K_CONF_MAX));
+    	    END;
+    	END;
+
+    	IF CLI$PRESENT (confidence_level_dot_reject_d) EQL CLI$_PRESENT THEN
+    	BEGIN
+    	    CLI$GET_VALUE (confidence_level_dot_reject_d, str);
+    	    IF STR$POSITION (default_d, str) EQL 1 THEN
+    	    	gheur_info [GHEUR_L_CL_REJECT] = HEUR_K_REJECT_THRESHOLD_DEFAULT
+    	    ELSE
+    	    BEGIN
+    	    	LOCAL n;
+    	    	n = HEUR_K_REJECT_THRESHOLD_DEFAULT;
+    	    	LIB$CVT_DTB (.str [DSC$W_LENGTH], .str [DSC$A_POINTER], n);
+    	    	gheur_info [GHEUR_L_CL_REJECT] = MAXU (HEUR_K_CONF_MIN, MINU (.n, HEUR_K_CONF_MAX));
+    	    END;
+    	END;
+
+    	CFG_CHANGED = 1;
+
+    END;
+
+    FREE_STRINGS (str);
+
+    SS$_NORMAL
+
+END; ! CMD_SETHEUR
+
+%SBTTL 'CMD_PURGE'
+GLOBAL ROUTINE CMD_PURGE =
+BEGIN
+!++
+! FUNCTIONAL DESCRIPTION:
+!
+!   REJMAN PURGE command.
+!
+! RETURNS:  	cond_value, longword (unsigned), write only, by value
+!
+! PROTOTYPE:
+!
+!   CMD_PURGE
+!
+! IMPLICIT INPUTS:  None.
+!
+! IMPLICIT OUTPUTS: None.
+!
+! COMPLETION CODES:
+!
+!   SS$_NORMAL:	    	normal successful completion.
+!
+! SIDE EFFECTS:
+!
+!   None.
+!--
+    LOCAL
+    	str 	: BLOCK [DSC$K_S_BLN,BYTE],
+    	e       : REF EXTSPAMDEF,
+    	dt  	: VECTOR [2,LONG],
+    	log,
+    	count,
+    	status;
+
+    INIT_DYNDESC (str);
+    log = CLI$PRESENT (log_d) NEQ CLI$_NEGATED;
+
+    IF CLI$PRESENT (before_d) EQL CLI$_PRESENT THEN
+    BEGIN
+    	CLI$GET_VALUE (before_d, str);
+    	status = LIB$CONVERT_DATE_STRING (str, dt);
+    	IF NOT .status THEN
+    	BEGIN
+    	    FREE_STRINGS (str);
+    	    SIGNAL (REJMAN__INVDT, 0, .status);
+    	    RETURN REJMAN__INVDT;
+    	END;
+    END
+    ELSE
+    BEGIN
+    	LOCAL
+    	    today   : VECTOR [2,LONG],
+    	    delta   : VECTOR [2,LONG];
+    	$BINTIM (TIMBUF=%ASCID'-- 00:00:00.00', TIMADR=today);
+    	$BINTIM (TIMBUF=%ASCID'30 00:00:00.00', TIMADR=delta);
+    	LIB$SUB_TIMES (today, delta, dt);
+    END;
+
+    count = 0;
+    e = .espamque [QUE_L_HEAD];
+    WHILE .e NEQA espamque DO
+    BEGIN
+    	LOCAL
+    	    junkdt : VECTOR [2,LONG],
+    	    testdt : REF VECTOR [2,LONG];
+    	IF CH$EQL (8, e [EXTSPAM_Q_DTREF], 8, UPLIT (0,0)) THEN  ! never referenced
+    	    testdt = e [EXTSPAM_Q_DTADD]
+    	ELSE
+    	    testdt = e [EXTSPAM_Q_DTREF];
+    	IF LIB$SUB_TIMES (dt, .testdt, junkdt) EQL LIB$_NORMAL THEN
+    	BEGIN
+    	    count = .count + 1;
+    	    e [EXTSPAM_V_DELETED] = e [EXTSPAM_V_DIRTY] = 1;
+    	    CFG_CHANGED = 1;
+    	END;
+    	e = .e [EXTSPAM_L_FLINK];
+    END;
+
+    IF .count EQL 0 THEN
+    	SIGNAL (REJMAN__NOPURGE, 1, dt)
+    ELSE IF .log THEN
+    	SIGNAL (REJMAN__PURGED, 2, .count, dt);
+
+    FREE_STRINGS (str);
+
+    IF .count EQL 0 THEN REJMAN__NOPURGE ELSE REJMAN__PURGED
+
+END; ! CMD_PURGE
+
+%SBTTL 'CMD_SHOW'
+GLOBAL ROUTINE CMD_SHOW =
+BEGIN
+!++
+! FUNCTIONAL DESCRIPTION:
+!
+!   REJMAN SHOW command.
+!
+! RETURNS:  	cond_value, longword (unsigned), write only, by value
+!
+! PROTOTYPE:
+!
+!   CMD_SHOW
+!         
+! IMPLICIT INPUTS:  None.
+!
+! IMPLICIT OUTPUTS: None.
+!
+! COMPLETION CODES:
+!
+!   SS$_NORMAL:	    	normal successful completion.
+!
+! SIDE EFFECTS:
+!
+!   None.
+!--
+    TABLE (OPTIONS, 'ALL', 'REJECTIONS', 'DATABASE_FILE', 'VERSION', 'HEURISTICS');
+
+    LOCAL
+    	STR 	: BLOCK [DSC$K_S_BLN,BYTE],
+    	OUTRTN,
+    	OUTCMD,
+    	OPT,
+    	STATUS,
+        cmdstat;
+
+    INIT_DYNDESC (STR);
+
+    CLI$GET_VALUE (showopt_d, STR);
+
+    OPT = (INCR I FROM 0 TO OPTIONS_COUNT-1 DO
+    	    IF STR$POSITION (.OPTIONS [.I], STR) EQL 1 THEN EXITLOOP .I);
+
+    OUTCMD = CLI$PRESENT (command_d) EQL CLI$_PRESENT;
+
+    cmdstat = SS$_NORMAL;
+    OUTRTN = LIB$PUT_OUTPUT;
+    IF CLI$PRESENT (output_d) EQL CLI$_PRESENT THEN
+    BEGIN
+    	CLI$GET_VALUE (output_d, STR);
+    	$FAB_INIT (FAB=SHOW_FAB, FNA=.STR [DSC$A_POINTER],
+    	    FNS=MIN (.STR [DSC$W_LENGTH], 255),
+    	    DNM='SYS$DISK:[].DAT', FAC=PUT, FOP=SQO, RAT=CR);
+    	STATUS = $CREATE (FAB=SHOW_FAB);
+    	IF .STATUS THEN
+    	BEGIN
+    	    $RAB_INIT (RAB=SHOW_RAB, FAB=SHOW_FAB, ROP=WBH);
+    	    STATUS = $CONNECT (RAB=SHOW_RAB);
+    	    IF .STATUS THEN OUTRTN = ALT_SHOW_OUTPUT
+    	    ELSE SIGNAL (REJMAN__NOOPNOUT, 1, STR, .STATUS, .SHOW_RAB [RAB$L_STV]);
+    	END
+    	ELSE SIGNAL (REJMAN__NOOPNOUT, 1, STR, .STATUS, .SHOW_FAB [FAB$L_STV]);
+        cmdstat = REJMAN__NOOPNOUT;
+    END;
+
+    IF (.OUTRTN EQLA LIB$PUT_OUTPUT) OR .STATUS THEN
+    SELECT .OPT OF
+    SET
+    	[0,1]	    : cmdstat = SHOW_REJECTIONS (.outrtn, .outcmd, (.opt EQL 0));
+    	[0,2] 	    : SHOW_DATABASE (.outrtn, .outcmd);
+    	[0,3]	    : SHOW_VERSION (.outrtn, .outcmd);
+    	[0,4] 	    : SHOW_HEURISTICS (.outrtn, .outcmd);
+    	[ALWAYS]    : IF NOT .OUTCMD THEN (.OUTRTN) (%ASCID'');
+    TES;
+
+    IF (.OUTRTN EQLA ALT_SHOW_OUTPUT) AND .STATUS THEN $CLOSE (FAB=SHOW_FAB);
+
+    FREE_STRINGS (STR);
+
+    .cmdstat
+
+END; ! CMD_SHOW
+
+%SBTTL 'ALT_SHOW_OUTPUT'
+ROUTINE ALT_SHOW_OUTPUT (STR_A) =
+BEGIN
+!++
+! FUNCTIONAL DESCRIPTION:
+!
+!   Alternate output routine for SHOW commands.  Used only when
+!   output is redirected via the /OUTPUT qualifier.
+!
+! RETURNS:  	cond_value, longword (unsigned), write only, by value
+!
+! PROTOTYPE:
+!
+!   ALT_SHOW_OUTPUT
+!
+! IMPLICIT INPUTS:  None.
+!
+! IMPLICIT OUTPUTS: None.
+!
+! COMPLETION CODES:
+!
+!   RMS$_NORMAL:    	normal successful completion.
+!
+! SIDE EFFECTS:
+!
+!   None.
+!--
+    BIND
+    	STR = .STR_A : BLOCK [,BYTE];
+
+    SHOW_RAB [RAB$L_RBF] = .STR [DSC$A_POINTER];
+    SHOW_RAB [RAB$W_RSZ] = .STR [DSC$W_LENGTH];
+
+    $PUT (RAB=SHOW_RAB)
+
+END; ! ALT_SHOW_OUTPUT
+
+%SBTTL 'CMD_SAVE'
+GLOBAL ROUTINE CMD_SAVE =
+BEGIN
+!++
+! FUNCTIONAL DESCRIPTION:
+!
+!   REJMAN SAVE command.
+!
+! RETURNS:  	cond_value, longword (unsigned), write only, by value
+!
+! PROTOTYPE:
+!
+!   CMD_SAVE
+!
+! IMPLICIT INPUTS:  None.
+!
+! IMPLICIT OUTPUTS: None.
+!
+! COMPLETION CODES:
+!
+!   SS$_NORMAL:	    	normal successful completion.
+!
+! SIDE EFFECTS:
+!
+!   None.
+!--
+    LOCAL
+    	FSPEC	: BLOCK [DSC$K_S_BLN,BYTE],
+    	FAB 	: $FAB_DECL,
+    	NAM 	: $NAM_DECL,
+    	EBUF	: VECTOR [255,BYTE],
+    	STATUS;
+
+    INIT_DYNDESC (FSPEC);
+    IF CLI$PRESENT (filespec_d) EQL CLI$_PRESENT THEN
+    BEGIN
+    	CLI$GET_VALUE (filespec_d, FSPEC);
+    	CFGFILE_RDT [0] = CFGFILE_RDT [1] = 0;
+    END
+    ELSE IF .CFGFILE [DSC$W_LENGTH] GTR 0 THEN
+    BEGIN
+    	$FAB_INIT (FAB=FAB, NAM=NAM, FNA=.CFGFILE [DSC$A_POINTER],
+    	    	FNS=.CFGFILE [DSC$W_LENGTH]);
+    	$NAM_INIT (NAM=NAM, ESA=EBUF, ESS=%ALLOCATION (EBUF), NOP=SYNCHK);
+    	IF $PARSE (FAB=FAB) THEN
+    	    STR$COPY_R (FSPEC, %REF (.NAM [NAM$B_ESL]-.NAM [NAM$B_VER]), EBUF)
+    	ELSE
+    	    STR$COPY_DX (FSPEC, CFGFILE);
+    END
+    ELSE
+    BEGIN
+    	STATUS = GET_CMD (FSPEC, file_prompt);
+    	IF NOT .STATUS OR .FSPEC [DSC$W_LENGTH] EQL 0 THEN RETURN SS$_NORMAL;
+    	CFGFILE_RDT [0] = CFGFILE_RDT [1] = 0;
+    END;
+
+    STATUS = SAVE_ESPAMDB (FSPEC, CFGFILE_RDT, CFGFILE);
+    IF .STATUS THEN
+    BEGIN
+    	CFG_CHANGED = 0;
+    	SIGNAL (REJMAN__WROTEDB, 1, CFGFILE);
+    END
+    ELSE
+    	SIGNAL (REJMAN__NOWRTDB, 1, FSPEC);
+
+    FREE_STRINGS (FSPEC);
+
+    SS$_NORMAL
+
+END; ! CMD_SAVE
+
+GLOBAL ROUTINE CMD_SPAWN =
+BEGIN
+!+++
+! FUNCTIONAL DESCRIPTION:
+!
+!   Spawn a subprocess.
+!
+! RETURNS:  	cond_value, longword (unsigned), write only, by value
+!
+! PROTOTYPE:
+!
+!   CMD_SPAWN
+!
+! IMPLICIT INPUTS:  jpi_curpriv
+!
+! IMPLICIT OUTPUTS: None.
+!
+! COMPLETION CODES:
+!
+!   SS$_NORMAL:	    	normal successful completion.
+!
+! SIDE EFFECTS:
+!
+!   None.
+!--
+
+    LOCAL
+	spawn_cmd	: $BBLOCK [DSC$C_S_BLN],
+	status;
+
+    !
+    ! Disable privileges image is installed with but we don't have
+    !
+    status = $SETPRV (ENBFLG = 0, PRVADR = jpi_curpriv);
+
+    $INIT_DYNDESC(spawn_cmd);			!Set up a dynamic descriptor
+
+    status = CLI$GET_VALUE(			!Get the value of the spawn
+		p1_d,				!...command
+		spawn_cmd);			!...where to put it
+
+    status = LIB$SPAWN(				!Spawn a subprocess
+		(IF (.status)			!...was a command provided?
+		 THEN	spawn_cmd		!...yes, use it
+		 ELSE	0),			!...no, don't pass a command
+		0, 0, 0, 0, 0, 0, 0, 0, 0,	!...pass some defaults
+		%ASCID'REJMAN-sub$ ');		!...pass a prompt
+
+    !
+    ! Re-enable the installed image privileges
+    !
+    $SETPRV (ENBFLG = 1, PRVADR = jpi_curpriv);
+
+    STR$FREE1_DX(spawn_cmd);			!Free the command desc
+
+    IF NOT(.status)
+    THEN
+	SIGNAL (.status);
+
+    SS$_NORMAL
+
+END;
+
+%SBTTL	'CMD_ATTACH'
+GLOBAL ROUTINE cmd_attach =
+BEGIN
+!+
+!
+!  Routine:	CMD_ATTACH
+!
+!  Functional Description:
+!
+!	This routine is called in response to an ATTACH command.  It does the
+!	same thing as the DCL ATTACH command.  Attach processes can be 
+!	specified by process name or by PID (as a hexadecimal number).
+!
+!  Implicit Inputs:
+!
+!	p1_d	- an ASCID constant containing the value P1
+!	id_d	- an ASCID constant containing the value IDENTIFICATION
+!
+!  Parameters:
+!
+!	None.
+!
+!  Returns:
+!
+!	SS$_NORMAL, success
+!	SS$_NONEXPR, the process specified does not exist
+!	Other errors returned by LIB$ATTACH and $GETJPIW
+!
+!  Side effects:
+!
+!	None.
+!
+!-
+    REGISTER
+	status;
+
+    LOCAL
+	pid		: LONG,
+	value		: $BBLOCK [DSC$C_S_BLN],
+	jpi_list	: $ITMLST_DECL (ITEMS=1);
+
+    $INIT_DYNDESC (value);			!Set up a dynamic descriptor
+
+    !
+    ! Store the PID of the process to which to attach in pid.
+    !
+    status = CLI$GET_VALUE (id_d, value);	!Check if specified by /ID
+    IF (.status)				!Got a PID?
+    THEN					!Yes,
+	status = OTS$CVT_TZ_L (value, pid)	!Convert it to numeric data
+    ELSE
+	IF (.status EQLU CLI$_ABSENT)		!No, acceptable error?
+	THEN
+	    IF (status = CLI$PRESENT (parent_d))
+	    THEN
+		BEGIN
+		$ITMLST_INIT (ITMLST = jpi_list,	!Set up to get the PID
+			(ITMCOD =JPI$_OWNER,		!... of the parent
+			 BUFADR = pid,			!... process
+			 BUFSIZ = 4));
+		status = $GETJPIW (ITMLST = jpi_list);
+		IF (.pid EQLU 0)			!If 0 is returned,
+		THEN					!... there's no parent
+		    status = SS$_NONEXPR;		!... process
+		END
+	    ELSE
+		BEGIN					!Yes,
+		status = CLI$GET_VALUE (p1_d, value);	!Get process name
+		IF NOT(.status) THEN RETURN (.status);	!Return on error
+
+		$ITMLST_INIT (ITMLST = jpi_list,	!Set up to get the PID
+			(ITMCOD = JPI$_PID,
+			 BUFADR = pid,
+			 BUFSIZ = 4));
+		status = $GETJPIW (			!Get the pid of the process
+			PRCNAM=value,
+			ITMLST=jpi_list);
+
+		END;				!End of by process name
+
+    IF (.status)				!Got a valid PID?
+    THEN					!Yes,
+	status = LIB$ATTACH(pid);		!Try to attach to it
+
+    STR$FREE1_DX(value);			!Free the descrip set up above
+
+    IF NOT(.status)
+    THEN
+	SIGNAL (.status);
+
+    SS$_NORMAL
+
+END;						!End of do_attach
+
+%SBTTL 'CMD_CHECK'
+GLOBAL ROUTINE CMD_CHECK = 
+BEGIN
+!++
+! FUNCTIONAL DESCRIPTION:
+!
+!   REJMAN CHECK command.
+!
+! RETURNS:  	cond_value, longword (unsigned), write only, by value
+!
+! PROTOTYPE:
+!
+!   CMD_CHECK
+!
+! IMPLICIT INPUTS:  None.
+!
+! IMPLICIT OUTPUTS: None.
+!
+! COMPLETION CODES:
+!
+!   SS$_NORMAL:	    	normal successful completion.
+!
+! SIDE EFFECTS:
+!
+!   None.
+!--
+    LOCAL
+    	sender	    : BLOCK [DSC$K_S_BLN,BYTE],
+    	recipient   : BLOCK [DSC$K_S_BLN,BYTE],
+    	address	    : BLOCK [DSC$K_S_BLN,BYTE],
+    	esp 	    : REF EXTSPAMDEF,
+    	status;
+
+    INIT_DYNDESC (sender, recipient, address);
+    CLI$GET_VALUE (sender_d, sender);
+    IF .sender [DSC$W_LENGTH] NEQ 0 AND
+    	    (CH$RCHAR (.sender [DSC$A_POINTER]) NEQ %C'<' OR
+    	    CH$RCHAR (CH$PLUS (.sender [DSC$A_POINTER], .sender [DSC$W_LENGTH]-1)) NEQ %C'>') THEN
+    	STR$CONCAT (sender, %ASCID'<', sender, %ASCID'>');
+
+    IF CLI$PRESENT (recipient_d) EQL CLI$_PRESENT THEN
+    BEGIN
+    	CLI$GET_VALUE (recipient_d, recipient);
+    	IF .recipient [DSC$W_LENGTH] NEQ 0 AND
+    	    (CH$RCHAR (.recipient [DSC$A_POINTER]) NEQ %C'<' OR
+    	    CH$RCHAR (CH$PLUS (.recipient [DSC$A_POINTER], .recipient [DSC$W_LENGTH]-1)) NEQ %C'>') THEN
+    	STR$CONCAT (recipient, %ASCID'<', recipient, %ASCID'>');
+    END;
+
+    IF CLI$PRESENT (address_d) EQL CLI$_PRESENT THEN
+    	CLI$GET_VALUE (address_d, address);
+
+    esp = espam_match (address, sender, recipient);
+    IF .esp EQLA 0 THEN
+    BEGIN
+    	SIGNAL (REJMAN__CKNOMATCH, 0);
+    	status = REJMAN__CKNOMATCH;
+    END
+    ELSE
+    BEGIN
+    	BIND
+    	    ipm = esp [EXTSPAM_A_IPMATCH] : REF TXTDEF,
+    	    frm	= esp [EXTSPAM_A_FRMATCH] : REF TXTDEF,
+    	    tom = esp [EXTSPAM_A_TOMATCH] : REF TXTDEF,
+    	    rwa = esp [EXTSPAM_A_RWADDR]  : REF TXTDEF;
+
+    	IF .rwa EQLA 0 THEN
+    	BEGIN
+    	    SIGNAL (REJMAN__CKMATCH, 6, .frm [TXT_W_LEN], frm [TXT_T_TEXT],
+    	    	    (IF .tom EQLA 0 THEN 6 ELSE .tom [TXT_W_LEN]),
+    	    	    (IF .tom EQLA 0 THEN UPLIT ('<none>') ELSE tom [TXT_T_TEXT]),
+    	    	    (IF .ipm EQLA 0 THEN 6 ELSE .ipm [TXT_W_LEN]),
+    	    	    (IF .ipm EQLA 0 THEN UPLIT ('<none>') ELSE ipm [TXT_T_TEXT]));
+    	    RETURN REJMAN__CKMATCH;
+    	END;
+
+    	SIGNAL (REJMAN__CKMATCHRW, 6,  .frm [TXT_W_LEN], frm [TXT_T_TEXT],
+    	    	(IF .tom EQLA 0 THEN 6 ELSE .tom [TXT_W_LEN]),
+    	    	(IF .tom EQLA 0 THEN UPLIT ('<none>') ELSE tom [TXT_T_TEXT]),
+    	    	(IF .ipm EQLA 0 THEN 6 ELSE .ipm [TXT_W_LEN]),
+    	    	(IF .ipm EQLA 0 THEN UPLIT ('<none>') ELSE ipm [TXT_T_TEXT]));
+    	status = REJMAN__CKMATCHRW;
+    END;
+
+    .status
+
+END;  ! CMD_CHECK
+
+%SBTTL 'found_header'
+ROUTINE found_header (hdr_a, espam_a_a) = 
+BEGIN
+!++
+! FUNCTIONAL DESCRIPTION:
+!
+!   description
+!
+! RETURNS:  	cond_value, longword (unsigned), write only, by value
+!
+! PROTOTYPE:
+!
+!   x
+!
+! IMPLICIT INPUTS:  None.
+!
+! IMPLICIT OUTPUTS: None.
+!
+! COMPLETION CODES:
+!
+!   SS$_NORMAL:	    	normal successful completion.
+!
+! SIDE EFFECTS:
+!
+!   None.
+!--
+    BIND
+    	hdr 	= .hdr_a    	: TXTDEF,
+    	espam	= .espam_a_a	: REF EXTSPAMDEF;
+
+    LOCAL
+    	e   	: REF EXTSPAMDEF,
+    	hdsc	: BLOCK [DSC$K_S_BLN,BYTE],
+    	edsc	: BLOCK [DSC$K_S_BLN,BYTE];
+
+    e = .ESPAMQUE [QUE_L_HEAD];
+    WHILE .e NEQA ESPAMQUE DO
+    BEGIN
+    	BIND hdm = e [EXTSPAM_A_HDMATCH] : REF TXTDEF;
+    	IF NOT .e [EXTSPAM_V_DELETED] AND .hdm NEQA 0 THEN
+    	BEGIN
+    	    IF .hdr [TXT_W_CODE] EQL .hdm [TXT_W_CODE] THEN
+    	    BEGIN
+    	    	INIT_SDESC (hdsc, .hdr [TXT_W_LEN], hdr [TXT_T_TEXT]);
+    	    	INIT_SDESC (edsc, .hdm [TXT_W_LEN], hdm [TXT_T_TEXT]);
+    	    	IF STR$CASE_BLIND_COMPARE (hdsc, edsc) EQL 0 THEN EXITLOOP;
+    	    END;
+    	END;
+    	e = .e [EXTSPAM_L_FLINK];
+    END;
+
+    IF .e NEQA espamque THEN espam = .e;
+
+    .e NEQA espamque
+
+END;  ! found_header
+
+%SBTTL 'found_spam'
+ROUTINE found_spam (addr_a, sndr_a, rcpt_a, espam_a_a) = 
+BEGIN
+!++
+! FUNCTIONAL DESCRIPTION:
+!
+!   Checks to see if an address/sender/recipient
+!   combination matches a record in the extended
+!   spam queue.
+!
+! RETURNS:  	boolen
+!
+! PROTOTYPE:
+!
+!   FOUND_SPAM  addr, sndr, rcpt, espam
+!
+! IMPLICIT INPUTS:  None.
+!
+! IMPLICIT OUTPUTS: None.
+!
+! COMPLETION CODES:
+!
+! SIDE EFFECTS:
+!
+!   None.
+!--
+    BIND
+    	adsc	= .addr_a   	: BLOCK [,BYTE],
+    	sndr	= .sndr_a   	: BLOCK [,BYTE],
+    	rcpt	= .rcpt_a   	: BLOCK [,BYTE],
+    	espam	= .espam_a_a	: REF EXTSPAMDEF;
+
+    LOCAL
+    	e   	: REF EXTSPAMDEF,
+    	ipdsc	: BLOCK [DSC$K_S_BLN,BYTE],
+    	frdsc	: BLOCK [DSC$K_S_BLN,BYTE],
+    	todsc	: BLOCK [DSC$K_S_BLN,BYTE];
+
+    e = .espamque [QUE_L_HEAD];
+    WHILE .e NEQA espamque DO
+    BEGIN
+    	BIND
+    	    ipm = e [EXTSPAM_A_IPMATCH] : REF TXTDEF,
+    	    frm	= e [EXTSPAM_A_FRMATCH] : REF TXTDEF,
+    	    tom = e [EXTSPAM_A_TOMATCH] : REF TXTDEF;
+    	LOCAL match;
+
+    	if .ipm NEQA 0 THEN INIT_SDESC (ipdsc, .ipm [TXT_W_LEN], ipm [TXT_T_TEXT]);
+    	IF .frm NEQA 0 THEN INIT_SDESC (frdsc, .frm [TXT_W_LEN], frm [TXT_T_TEXT]);
+    	IF .tom NEQA 0 THEN INIT_SDESC (todsc, .tom [TXT_W_LEN], tom [TXT_T_TEXT]);
+
+    	match = NOT .e [EXTSPAM_V_DELETED];
+
+    	IF .match THEN IF .adsc [DSC$W_LENGTH] EQL 0 THEN
+    	    IF .ipm NEQA 0 THEN match = 0
+    	    ELSE match = 1
+    	ELSE
+    	    IF .ipm EQLA 0 THEN match = 0
+    	    ELSE match = STR$CASE_BLIND_COMPARE (adsc, ipdsc) EQL 0;
+
+    	IF .match THEN IF .sndr [DSC$W_LENGTH] EQL 0 THEN
+    	    IF .frm NEQA 0 THEN match = 0
+    	    ELSE match = 1
+    	ELSE
+    	    IF .frm EQLA 0 THEN match = 0
+    	    ELSE match = STR$CASE_BLIND_COMPARE (sndr, frdsc) EQL 0;
+
+    	IF .match THEN IF .rcpt [DSC$W_LENGTH] EQL 0 THEN
+    	    IF .tom NEQA 0 THEN match = 0
+    	    ELSE match = 1
+    	ELSE
+    	    IF .tom EQLA 0 THEN match = 0
+    	    ELSE match = STR$CASE_BLIND_COMPARE (rcpt, todsc) EQL 0;
+
+    	IF .match THEN EXITLOOP;
+
+    	e = .e [EXTSPAM_L_FLINK];
+
+    END;
+
+    IF .e NEQA espamque THEN espam = .e;
+
+    .e NEQA espamque
+    
+END; ! found_spam
+
+%SBTTL 'SHOW_DATABASE'
+ROUTINE SHOW_DATABASE (OUTRTN, OUTCMD) =
+BEGIN
+!++
+! FUNCTIONAL DESCRIPTION:
+!
+!   Displays the name of the config file we are editing.
+!
+! RETURNS:  	cond_value, longword (unsigned), write only, by value
+!
+! PROTOTYPE:
+!
+!   SHOW_DATABASE
+!
+! IMPLICIT INPUTS:  None.
+!
+! IMPLICIT OUTPUTS: None.
+!
+! COMPLETION CODES:
+!
+!   SS$_NORMAL:	    	normal successful completion.
+!
+! SIDE EFFECTS:
+!
+!   None.
+!--
+    LOCAL
+    	STR 	: BLOCK [DSC$K_S_BLN,BYTE];
+
+    $INIT_DYNDESC (STR);
+
+    IF NOT .OUTCMD THEN (.OUTRTN) (null_str);
+
+    IF .OUTCMD THEN
+    	LIB$SYS_FAO (%ASCID'!! Database file: !AS', 0, STR, CFGFILE)
+    ELSE
+    	LIB$SYS_FAO (%ASCID'Database file: !AS', 0, STR, CFGFILE);
+
+    (.OUTRTN) (STR);
+
+    STR$FREE1_DX (STR);
+
+    SS$_NORMAL
+
+END; ! SHOW_DATABASE
+
+%SBTTL 'SHOW_VERSION'
+ROUTINE SHOW_VERSION (OUTRTN, OUTCMD) =
+BEGIN
+!++
+! FUNCTIONAL DESCRIPTION:
+!
+!   Displays the current version of MX.
+!
+! RETURNS:  	cond_value, longword (unsigned), write only, by value
+!
+! PROTOTYPE:
+!
+!   SHOW_VERSION
+!
+! IMPLICIT INPUTS:  None.
+!
+! IMPLICIT OUTPUTS: None.
+!
+! COMPLETION CODES:
+!
+!   SS$_NORMAL:	    	normal successful completion.
+!
+! SIDE EFFECTS:
+!
+!   None.
+!--
+    LOCAL
+    	STR 	: BLOCK [DSC$K_S_BLN,BYTE];
+
+    $INIT_DYNDESC (STR);
+
+    IF NOT .OUTCMD THEN (.OUTRTN) (null_str);
+
+    IF .OUTCMD THEN
+    	LIB$SYS_FAO (%ASCID'!! MX version id: !AS', 0, STR, MX_VERSION ())
+    ELSE
+    	LIB$SYS_FAO (%ASCID'MX version id is: !AS', 0, STR, MX_VERSION ());
+
+    (.OUTRTN) (STR);
+
+    STR$FREE1_DX (STR);
+
+    SS$_NORMAL
+
+END; ! SHOW_VERSION
+
+%SBTTL 'SHOW_REJECTIONS'
+ROUTINE SHOW_REJECTIONS (OUTRTN, OUTCMD, is_show_all) =
+BEGIN
+!++
+! FUNCTIONAL DESCRIPTION:
+!
+!   Displays the list of EXTSPAM records.
+!
+! RETURNS:  	cond_value, longword (unsigned), write only, by value
+!
+! PROTOTYPE:
+!
+!   SHOW_REJECTIONS
+!
+! IMPLICIT INPUTS:  None.
+!
+! IMPLICIT OUTPUTS: None.
+!
+! COMPLETION CODES:
+!
+!   SS$_NORMAL:	    	normal successful completion.
+!
+! SIDE EFFECTS:
+!
+!   None.
+!--
+    LOCAL
+    	str 	: BLOCK [DSC$K_S_BLN,BYTE],
+    	str2	: BLOCK [DSC$K_S_BLN,BYTE],
+    	str3	: BLOCK [DSC$K_S_BLN,BYTE],
+    	txt 	: REF TXTDEF,
+    	e   	: REF EXTSPAMDEF,
+        id      : LONG;
+
+    INIT_DYNDESC (str, str2, str3);
+
+    IF NOT .OUTCMD THEN (.OUTRTN) (null_str);
+
+    id = 0;
+    IF NOT .is_show_all THEN IF CLI$PRESENT (identifier_d) EQL CLI$_PRESENT THEN
+    BEGIN
+        CLI$GET_VALUE (identifier_d, str);
+        IF NOT LIB$CVT_DTB (.str [DSC$W_LENGTH], .str [DSC$A_POINTER], id) THEN
+        BEGIN
+            SIGNAL (REJMAN__INVIDENT, 1, str);
+            FREE_STRINGS (str);
+            return REJMAN__INVIDENT;
+        END;
+    END;
+
+    e = .ESPAMQUE [QUE_L_HEAD];
+    WHILE .e NEQA ESPAMQUE DO
+    BEGIN
+    	BIND
+    	    ipm = e [EXTSPAM_A_IPMATCH] : REF TXTDEF,
+    	    frm	= e [EXTSPAM_A_FRMATCH] : REF TXTDEF,
+    	    tom = e [EXTSPAM_A_TOMATCH] : REF TXTDEF,
+    	    hdm = e [EXTSPAM_A_HDMATCH] : REF TXTDEF,
+    	    rwa = e [EXTSPAM_A_RWADDR]  : REF TXTDEF;
+
+    	IF NOT .e [EXTSPAM_V_DELETED] AND .id EQLU 0 OR .id EQLU .e [EXTSPAM_L_RULEID] THEN
+    	BEGIN
+    	    IF .hdm NEQA 0 THEN
+    	    BEGIN
+    	    	LOCAL hq : QUEDEF;
+    	    	INIT_QUEUE (hq);
+                IF .hdm [TXT_W_CODE] EQLU MX_K_HDR_X_WARNING THEN
+                BEGIN
+                    LIB$SYS_FAO (%ASCID'X-MX-Warning: !AD', 0, str, .hdm [TXT_W_LEN], hdm [TXT_T_TEXT]);
+                    txt = MEM_GETTXT (.str [DSC$W_LENGTH], .str [DSC$A_POINTER]);
+                END
+                ELSE
+                BEGIN
+    	    	    FORMAT_HDR (.hdm, hq, 0, 1);
+    	    	    REMQUE (.hq [QUE_L_HEAD], txt);
+                END;
+    	    	IF .outcmd THEN
+    	    	BEGIN
+                    LIB$SYS_FAO (%ASCID'!! Rule ID: !UL', 0, str, .e [EXTSPAM_L_RULEID]);
+                    (.outrtn) (str);
+    	    	    QUOTE_STRING (str2, .txt [TXT_W_LEN], txt [TXT_T_TEXT]);
+    	    	    IF .rwa NEQA 0 THEN
+    	    	    	QUOTE_STRING (str3, .rwa [TXT_W_LEN], rwa [TXT_T_TEXT]);
+    	    	    LIB$SYS_FAO (%ASCID'ADD REJECTION/HEADER!AS !AS', 0, str,
+                        (IF .e [EXTSPAM_V_REGEX] THEN %ASCID'/REGEX' ELSE null_str), str2,
+			(IF .rwa NEQA 0 OR .e [EXTSPAM_V_ACCEPT] THEN %ASCID'-' ELSE null_str));
+    	    	    IF .e [EXTSPAM_V_ACCEPT] THEN
+    	    	    BEGIN
+			(.outrtn) (str);
+    	    	    	IF .rwa EQLA 0 THEN
+    	    	    	    STR$COPY_DX (str, %ASCID'/ACCEPT')
+    	    	    	ELSE
+    	    	    	BEGIN
+    	    	    	    QUOTE_STRING (str2, .rwa [TXT_W_LEN], rwa [TXT_T_TEXT]);
+    	    	    	    STR$COPY_DX (str, %ASCID'/ACCEPT=REWRITE:');
+    	    	    	    STR$APPEND (str, str2);
+    	    	    	END;
+    	    	    END
+    	    	    ELSE IF .rwa NEQA 0 THEN
+    	    	    BEGIN
+			(.outrtn) (str);
+    	    	    	QUOTE_STRING (str2, .rwa [TXT_W_LEN], rwa [TXT_T_TEXT]);
+    	    	    	STR$COPY_DX (str, %ASCID'/FORWARD_TO=');
+    	    	    	STR$APPEND (str, str2);
+    	    	    END;
+		    (.outrtn) (str);
+    	    	END
+    	    	ELSE
+                BEGIN
+                    LIB$SYS_FAO (%ASCID'Rule ID: !UL!AS', 0, str, .e [EXTSPAM_L_RULEID],
+                        (IF .e [EXTSPAM_V_REGEX] THEN regex_text_d ELSE null_str));
+                    (.outrtn) (str);
+    	    	    LIB$SYS_FAO (%ASCID'    Header: !AD!AS!AD!AS', 0, str,
+                        .txt [TXT_W_LEN], txt [TXT_T_TEXT],
+    	    	    	(IF .rwa EQLA 0 OR .e [EXTSPAM_V_ACCEPT] THEN null_str ELSE %ASCID' (divert to '),
+    	    	    	(IF .rwa EQLA 0 OR .e [EXTSPAM_V_ACCEPT] THEN 0 ELSE .rwa [TXT_W_LEN]),
+    	    	    	(IF .rwa EQLA 0 OR .e [EXTSPAM_V_ACCEPT] THEN .null_str [DSC$A_POINTER] ELSE rwa [TXT_T_TEXT]),
+    	    	    	(IF .rwa EQLA 0 OR .e [EXTSPAM_V_ACCEPT] THEN null_str ELSE %ASCID')'));
+                    (.outrtn) (str);
+    	    	    IF .e [EXTSPAM_V_ACCEPT] THEN
+    	    	    BEGIN
+    	    	    	IF .rwa EQLA 0 THEN
+    	    	    	    (.outrtn) (%ASCID'    Accept messages with these characteristics')
+    	    	    	ELSE
+    	    	    	BEGIN
+    	    	    	    LIB$SYS_FAO (%ASCID'    Rewrite to: !AD', 0, str, .rwa [TXT_W_LEN], rwa [TXT_T_TEXT]);
+    	    	    	    (.outrtn) (str);
+    	    	    	END;
+    	    	    END
+                END;
+    	    	FREETXT (txt);
+    	    END
+    	    ELSE
+    	    BEGIN
+    	    	IF .outcmd THEN
+    	    	BEGIN
+                    LIB$SYS_FAO (%ASCID'!! Rule ID: !UL', 0, str, .e [EXTSPAM_L_RULEID]);
+                    (.outrtn) (str);
+    	    	    IF .frm EQLA 0 THEN
+    	    	    	STR$COPY_DX (str2, %ASCID'""')
+    	    	    ELSE
+    	    	    	QUOTE_STRING (str2, .frm [TXT_W_LEN], frm [TXT_T_TEXT]);
+    	    	    LIB$SYS_FAO (%ASCID'ADD REJECTION!AS !AS', 0, str,
+                                (IF .e [EXTSPAM_V_REGEX] THEN %ASCID'/REGEX' ELSE null_str),
+                                str2);
+    	    	    IF .tom NEQA 0 THEN
+    	    	    BEGIN
+    	    	    	QUOTE_STRING (str2, .tom [TXT_W_LEN], tom [TXT_T_TEXT]);
+    	    	    	STR$APPEND (str, %ASCID' ');
+    	    	    	STR$APPEND (str, str2);
+    	    	    END;
+    	    	    IF .ipm NEQA 0 THEN
+    	    	    BEGIN
+    	    	    	QUOTE_STRING (str2, .ipm [TXT_W_LEN], ipm [TXT_T_TEXT]);
+    	    	    	STR$APPEND (str, %ASCID'/ADDRESS=');
+    	    	    	STR$APPEND (str, str2);
+    	    	    END;
+    	    	    IF .e [EXTSPAM_V_ACCEPT] THEN
+    	    	    BEGIN
+    	    	    	IF .rwa EQLA 0 THEN
+    	    	    	    STR$APPEND (str, %ASCID'/ACCEPT')
+    	    	    	ELSE
+    	    	    	BEGIN
+    	    	    	    QUOTE_STRING (str2, .rwa [TXT_W_LEN], rwa [TXT_T_TEXT]);
+    	    	    	    STR$APPEND (str, %ASCID'/ACCEPT=REWRITE:');
+    	    	    	    STR$APPEND (str, str2);
+    	    	    	END;
+    	    	    END
+    	    	    ELSE IF .rwa NEQA 0 THEN
+    	    	    BEGIN
+    	    	    	QUOTE_STRING (str2, .rwa [TXT_W_LEN], rwa [TXT_T_TEXT]);
+    	    	    	STR$APPEND (str, %ASCID'/MESSAGE=');
+    	    	    	STR$APPEND (str, str2);
+    	    	    END;
+    	    	    (.outrtn) (str);
+    	    	END
+    	    	ELSE
+    	    	BEGIN
+                    LIB$SYS_FAO (%ASCID'Rule ID: !UL!AS', 0, str, .e [EXTSPAM_L_RULEID],
+                        (IF .e [EXTSPAM_V_REGEX] THEN regex_text_d ELSE null_str));
+                    (.outrtn) (str);
+    	    	    IF .frm EQLA 0 THEN
+    	    	    	STR$COPY_DX (str, %ASCID'    Sender: [null string]')
+    	    	    ELSE
+    	    	    	LIB$SYS_FAO (%ASCID'    Sender: !AD', 0, str, .frm [TXT_W_LEN], frm [TXT_T_TEXT]);
+    	    	    (.outrtn)(str);
+    	    	    IF .tom NEQA 0 THEN
+    	    	    BEGIN
+    	    	    	LIB$SYS_FAO (%ASCID'    Recipient:  !AD', 0, str, .tom [TXT_W_LEN], tom [TXT_T_TEXT]);
+    	    	    	(.outrtn) (str);
+    	    	    END;
+    	    	    IF .ipm NEQA 0 THEN
+    	    	    BEGIN
+    	    	    	LIB$SYS_FAO (%ASCID'    Address:    !AD', 0, str, .ipm [TXT_W_LEN], ipm [TXT_T_TEXT]);
+    	    	    	(.outrtn) (str);
+    	    	    END;
+    	    	    IF .e [EXTSPAM_V_ACCEPT] THEN
+    	    	    BEGIN
+    	    	    	IF .rwa EQLA 0 THEN
+    	    	    	    (.outrtn) (%ASCID'    Accept messages with these characteristics')
+    	    	    	ELSE
+    	    	    	BEGIN
+    	    	    	    LIB$SYS_FAO (%ASCID'    Rewrite to: !AD', 0, str, .rwa [TXT_W_LEN], rwa [TXT_T_TEXT]);
+    	    	    	    (.outrtn) (str);
+    	    	    	END;
+    	    	    END
+    	    	    ELSE IF .rwa NEQA 0 THEN
+    	    	    BEGIN
+    	    	    	LIB$SYS_FAO (%ASCID'    Message:    !AD', 0, str, .rwa [TXT_W_LEN], rwa [TXT_T_TEXT]);
+    	    	    	(.outrtn) (str);
+    	    	    END;
+    	    	END;
+    	    END;
+
+    	    IF .e [EXTSPAM_L_REFCNT] EQL 0 OR CH$EQL (8, UPLIT (0,0), 8, e [EXTSPAM_Q_DTREF]) THEN
+    	    	STR$COPY_DX (str2, %ASCID'never referenced')
+    	    ELSE
+    	    	LIB$SYS_FAO (%ASCID'Ref count: !UL, Last ref date: !%D', 0, str2,
+    	    	    	    	    .e [EXTSPAM_L_REFCNT], e [EXTSPAM_Q_DTREF]);
+    	    LIB$SYS_FAO (%ASCID'!AS    Added: !%D, !AS', 0, str,
+    	    	    (IF .outcmd THEN %ASCID'!' ELSE %ASCID''), e [EXTSPAM_Q_DTADD], str2);
+    	    (.outrtn) (str);
+    	    IF NOT .outcmd THEN (.outrtn)(%ASCID'---');
+
+            IF .id NEQU 0 THEN
+                EXITLOOP;
+
+    	END;
+
+    	e = .e [EXTSPAM_L_FLINK];
+
+    END;
+
+    FREE_STRINGS (str, str2, str3);
+
+    IF .id NEQU 0 AND .e EQLA espamque THEN
+    BEGIN
+        SIGNAL (REJMAN__NOMATCH, 1, %ASCID'identifier');
+        REJMAN__NOMATCH
+    END
+    ELSE
+        SS$_NORMAL
+
+END; ! SHOW_REJECTIONS
+
+%SBTTL 'SHOW_HEURISTICS'
+ROUTINE SHOW_HEURISTICS (OUTRTN, OUTCMD) =
+BEGIN
+!++
+! FUNCTIONAL DESCRIPTION:
+!
+!   Displays the heuristics information.
+!
+! RETURNS:  	cond_value, longword (unsigned), write only, by value
+!
+! PROTOTYPE:
+!
+!   SHOW_HEURISTICS
+!
+! IMPLICIT INPUTS:  None.
+!
+! IMPLICIT OUTPUTS: None.
+!
+! COMPLETION CODES:
+!
+!   SS$_NORMAL:	    	normal successful completion.
+!
+! SIDE EFFECTS:
+!
+!   None
+!--
+    LOCAL
+    	str 	: BLOCK [DSC$K_S_BLN,BYTE],
+    	str2	: BLOCK [DSC$K_S_BLN,BYTE],
+    	excl 	: REF TXTDEF;
+
+    INIT_DYNDESC (str, str2);
+
+    IF NOT .OUTCMD THEN
+    BEGIN
+    	BIND
+    	    q = gheur_info [GHEUR_Q_GBLEXCL] : QUEDEF;
+
+    	(.outrtn) (null_str);
+    	(.outrtn) (%ASCID'Heuristic filter settings: ');
+    	LIB$SYS_FAO (%ASCID'  Include reason header:    !AS', 0, str,
+    	    	    	(IF .gheur_info [GHEUR_V_INCLUDE_REASON] THEN %ASCID'YES' ELSE %ASCID'NO'));
+    	(.outrtn) (str);
+    	LIB$SYS_FAO (%ASCID'  Reject action:            !AS!AD', 0, str,
+    	    	    	(IF .gheur_info [GHEUR_W_ACTION] EQL HEUR_K_ACTION_DROP THEN %ASCID'DROP' ELSE %ASCID'FORWARD to '),
+    	    	    	(IF .gheur_info [GHEUR_W_ACTION] EQL HEUR_K_ACTION_DROP THEN 0 ELSE .gheur_info [GHEUR_W_FWDTO]),
+    	    	    	gheur_info [GHEUR_T_FWDTO]);
+    	(.outrtn) (str);
+    	LIB$SYS_FAO (%ASCID'  Accept threshold:         !UL', 0, str, .gheur_info [GHEUR_L_CL_ACCEPT]); (.outrtn) (str);
+    	LIB$SYS_FAO (%ASCID'  Reject threshold:         !UL', 0, str, .gheur_info [GHEUR_L_CL_REJECT]); (.outrtn) (str);
+    	(.outrtn) (null_str);
+    	excl = .q [QUE_L_HEAD];
+    	IF .excl EQLA q [QUE_L_HEAD] THEN
+    	    (.outrtn) (%ASCID'No global heuristic exceptions defined.')
+    	ELSE
+    	BEGIN
+    	    (.outrtn) (%ASCID'Global exceptions to heuristic filters:');
+    	    WHILE .excl NEQA q [QUE_L_HEAD] DO
+    	    BEGIN
+    	    	LIB$SYS_FAO (%ASCID'  !AD', 0, str, .excl [TXT_W_LEN], excl [TXT_T_TEXT]);
+    	    	(.outrtn) (str);
+    	    	excl = .excl [TXT_L_FLINK];
+    	    END;
+    	END;
+    	(.outrtn) (null_str);
+    END
+    ELSE
+    BEGIN
+    	BIND
+    	    q = gheur_info [GHEUR_Q_GBLEXCL] : QUEDEF;
+
+    	LIB$SYS_FAO (%ASCID'SET HEURISTIC/CONFIDENCE_LEVEL=(ACCEPT=!UL,REJECT=!UL)-', 0, str,
+    	    	    	.gheur_info [GHEUR_L_CL_ACCEPT], .gheur_info [GHEUR_L_CL_REJECT]);
+    	(.outrtn)(str);
+    	LIB$SYS_FAO (%ASCID'    /!ASINCLUDE_REASON-', 0, str,
+    	    	(IF .gheur_info [GHEUR_V_INCLUDE_REASON] THEN %ASCID'' ELSE %ASCID'NO'));
+    	(.outrtn)(str);
+    	IF .gheur_info [GHEUR_W_ACTION] EQL HEUR_K_ACTION_FORWARD THEN
+    	BEGIN
+    	    QUOTE_STRING (str2, .gheur_info [GHEUR_W_FWDTO], gheur_info [GHEUR_T_FWDTO]);
+    	    LIB$SYS_FAO (%ASCID'    /REJECT_ACTION=FORWARD=!AS', 0, str, str2);
+    	    (.outrtn) (str);
+    	END
+    	ELSE
+    	    (.outrtn) (%ASCID'    /REJECT_ACTION=DROP');
+    	excl = .q [QUE_L_HEAD];
+    	WHILE .excl NEQA q [QUE_L_HEAD] DO
+    	BEGIN
+    	    QUOTE_STRING (str2, .excl [TXT_W_LEN], excl [TXT_T_TEXT]);
+    	    LIB$SYS_FAO (%ASCID'ADD EXCLUSION !AS', 0, str, str2);
+    	    (.outrtn) (str);
+    	    excl = .excl [TXT_L_FLINK];
+    	END;
+    END;
+
+    INCR i FROM 0 TO HEUR_K_COUNT-1 DO
+    BEGIN
+    	BIND
+    	    q	= heurtbl [.i,HEUR_Q_EXCL]  : QUEDEF;
+
+    	IF .outcmd THEN
+    	BEGIN
+    	    IF .heurtbl [.i, HEUR_V_ENABLED] THEN
+    	    	LIB$SYS_FAO (%ASCID'ENABLE HEURISTIC !AS /CONFIDENCE_LEVEL=!UL', 0, str,
+    	    	    	    .heur_kwd [.i], .heurtbl [.i, HEUR_L_CONFIDENCE])
+    	    ELSE
+    	    	LIB$SYS_FAO (%ASCID'DISABLE HEURISTIC !AS', 0, str, .heur_kwd [.i]);
+    	    (.outrtn) (str);
+    	END
+    	ELSE
+    	BEGIN
+    	    IF .heurtbl [.i,HEUR_V_ENABLED] THEN
+    	    	LIB$SYS_FAO (%ASCID'Heuristic filter !AS: ENABLED, confidence level=!UL', 0, str,
+    	    	    	.heur_kwd [.i], .heurtbl [.i,HEUR_L_CONFIDENCE])
+    	    ELSE
+    	    	LIB$SYS_FAO (%ASCID'Heuristic filter !AS: DISABLED', 0, str, .heur_kwd [.i]);
+    	    (.outrtn) (str);
+    	END;
+    	excl = .q [QUE_L_HEAD];
+    	WHILE .excl NEQA q [QUE_L_HEAD] DO
+    	BEGIN
+    	    QUOTE_STRING (str2, .excl [TXT_W_LEN], excl [TXT_T_TEXT]);
+    	    IF .outcmd THEN
+    	    	LIB$SYS_FAO (%ASCID'ADD EXCLUSION/HEURISTIC=!AS !AS', 0, str, .heur_kwd [.i], str2)
+    	    ELSE
+    	    	LIB$SYS_FAO (%ASCID'    Exclusion: !AS', 0, str, str2);
+    	    (.outrtn) (str);
+    	    excl = .excl [TXT_L_FLINK];
+    	END;
+    END;
+
+    FREE_STRINGS (str, str2);
+
+    SS$_NORMAL
+
+END; ! SHOW_HEURISTICS
+
+%SBTTL 'espam_match'
+ROUTINE espam_match (adsc_a, sndr_a, rcpt_a) = 
+BEGIN
+!++
+! FUNCTIONAL DESCRIPTION:
+!
+!   Checks to see if an address/sender/recipient
+!   combination matches a record in the extended
+!   spam queue.
+!
+! RETURNS:  	EXTSPAMDEF record address
+!
+! PROTOTYPE:
+!
+!   ESPAM_MATCH  addr, sndr, rcpt, out
+!
+! IMPLICIT INPUTS:  None.
+!
+! IMPLICIT OUTPUTS: None.
+!
+! COMPLETION CODES:
+!   
+!
+! SIDE EFFECTS:
+!
+!   None.
+!--
+    BIND
+    	adsc	= .adsc_a   : BLOCK [,BYTE],
+    	sndr	= .sndr_a   : BLOCK [,BYTE],
+    	rcpt	= .rcpt_a   : BLOCK [,BYTE];
+
+    LOCAL
+    	e   	: REF EXTSPAMDEF;
+
+    IF .espamque [QUE_L_HEAD] EQLA espamque THEN RETURN 0;
+
+    e = .espamque [QUE_L_HEAD];
+    WHILE .e NEQA espamque DO
+    BEGIN
+    	BIND
+    	    ipm = e [EXTSPAM_A_IPMATCH] : REF TXTDEF,
+    	    frm	= e [EXTSPAM_A_FRMATCH] : REF TXTDEF,
+    	    tom = e [EXTSPAM_A_TOMATCH] : REF TXTDEF;
+    	LOCAL match;
+
+    	match = .e [EXTSPAM_A_HDMATCH] EQLA 0;
+    	IF .match THEN
+    	    match = (IF .adsc [DSC$W_LENGTH] EQL 0 THEN 1 ELSE
+    	    	     IF .ipm EQLA 0 THEN 1 ELSE
+    	    	     match_wild (adsc, .ipm [TXT_W_LEN], ipm [TXT_T_TEXT]));
+    	IF .match THEN
+    	    match = (IF .frm EQLA 0 THEN 1 ELSE
+                        IF .e [EXTSPAM_V_REGEX] THEN match_regex (.sndr_a, .frm)
+    	    	    	ELSE match_wild (.sndr_a, .frm [TXT_W_LEN], frm [TXT_T_TEXT]));
+    	IF .match THEN
+    	    IF .rcpt_a NEQA 0 THEN IF .rcpt [DSC$W_LENGTH] NEQ 0 THEN
+    	    	match = (IF .tom EQLA 0 THEN 1 ELSE
+                         IF .e [EXTSPAM_V_REGEX] THEN match_regex (.rcpt_a, .tom)
+    	    	    	 ELSE match_wild (.rcpt_a, .tom [TXT_W_LEN], tom [TXT_T_TEXT]))
+    	    ELSE match = .tom EQLA 0;
+
+    	IF .match THEN EXITLOOP;
+
+    	e = .e [EXTSPAM_L_FLINK];
+
+    END;
+
+    IF .e EQLA ESPAMQUE THEN 0 ELSE .e
+
+END; ! espam_match
+
+%SBTTL 'match_wild'
+ROUTINE match_wild (cand_a, plen : WORD, pat) = 
+BEGIN
+!++
+! FUNCTIONAL DESCRIPTION:
+!
+!   Augmented wildcard matching routine that allows the
+!   use of '\' in the pattern for a literal-next function.
+!   Also, comparisons are case-blind.
+!
+! RETURNS:  	boolean
+!
+! PROTOTYPE:
+!
+!   MATCH_WILD   cand, plen, pat
+!
+! IMPLICIT INPUTS:  None.
+!
+! IMPLICIT OUTPUTS: None.
+!
+! COMPLETION CODES:
+!
+!   1: match
+!   0: no match
+!
+! SIDE EFFECTS:
+!
+!   None.
+!--
+    LOCAL
+    	pp,
+    	psave,
+    	cp,
+    	can,
+    	litnext,
+    	clen	: WORD,
+    	pslen	: WORD,
+    	pc  	: BYTE,
+    	cc  	: BYTE,
+    	status;
+
+    status = LIB$ANALYZE_SDESC (.cand_a, clen, can);
+    IF NOT .status THEN RETURN 0;
+
+! Strip off angle brackets if the pattern doesn't have 'em
+
+    IF (.clen GTR 2 AND CH$RCHAR (.can) EQL %C'<' AND
+    	CH$RCHAR (CH$PLUS (.can, .clen-1)) EQL %C'>') AND
+    	(.plen LSS 2 OR CH$RCHAR (.pat) NEQ %C'<') THEN
+    BEGIN
+    	clen = .clen - 2;
+    	can = CH$PLUS (.can, 1);
+    END;
+
+    psave = 0;
+    pslen = 0;
+    pp = .pat;
+    cp = .can;
+
+    litnext = 0;
+    WHILE .plen GTR 0 DO
+    BEGIN
+    	pc = CH$RCHAR (.pp);
+    	IF (.pc GEQ %C'A') AND (.pc LEQ %C'Z') THEN pc = .pc + (%C'a'-%C'A');
+    	IF .clen GTR 0 THEN
+    	BEGIN
+    	    cc = CH$RCHAR (.cp);
+    	    IF (.cc GEQ %C'A') AND (.cc LEQ %C'Z') THEN cc = .cc + (%C'a'-%C'A');
+    	END;
+    	IF .litnext THEN
+    	BEGIN
+    	    litnext = 0;
+    	    IF .clen EQL 0 THEN RETURN 0;
+    	    IF .pc EQL .cc THEN
+    	    BEGIN
+    	    	cp = CH$PLUS (.cp, 1);
+    	    	clen = .clen - 1;
+    	    END
+    	    ELSE IF .psave EQLA 0 THEN RETURN 0
+    	    ELSE
+    	    BEGIN
+    	    	pp = .psave;
+    	    	plen = .pslen;
+    	    	clen = .clen - 1;
+    	    	cp = CH$PLUS (.cp, 1);
+    	    END;
+    	END
+    	ELSE
+    	BEGIN
+    	    SELECTONE .pc OF
+    	    SET
+    	    [%C'\'] :
+    	    	litnext = 1;
+    	    [%C'*'] :
+    	    	BEGIN
+    	    	    IF .plen EQL 1 THEN RETURN 1;
+    	    	    psave = .pp;
+    	    	    pslen = .plen;
+    	    	END;
+    	    [%C'%'] :
+    	    	BEGIN
+    	    	    IF .clen EQL 0 THEN RETURN 0;
+    	    	    clen = .clen - 1;
+    	    	    cp = CH$PLUS (.cp, 1);
+    	    	END;
+    	    [OTHERWISE] :
+    	    	BEGIN
+    	    	    IF .clen EQL 0 THEN RETURN 0;
+    	    	    IF .cc EQL .pc THEN
+    	    	    BEGIN
+    	    	    	clen = .clen - 1;
+    	    	    	cp = CH$PLUS (.cp, 1);
+    	    	    END
+    	    	    ELSE IF .psave EQLA 0 THEN RETURN 0
+    	    	    ELSE
+    	    	    BEGIN
+    	    	    	pp = .psave;
+    	    	    	plen = .pslen;
+    	    	    	clen = .clen - 1;
+    	    	    	cp = CH$PLUS (.cp, 1);
+    	    	    END;
+    	    	END;
+    	    TES;
+    	END;
+
+    	plen = .plen - 1;
+    	pp = CH$PLUS (.pp, 1);
+
+    END; ! WHILE .plen GTR 0
+
+!  If we've exhausted the pattern, there's only a match
+!  if we've also exhausted the candidate (because a pattern
+!  with a final character of '*' is handled in the SELECTONE above).
+
+    .clen EQL 0
+
+END; ! match_wild
+
+
+%SBTTL 'match_regex'
+ROUTINE match_regex (cand_a, pat_a) = 
+BEGIN
+!++
+! FUNCTIONAL DESCRIPTION:
+!
+!   description
+!
+! RETURNS:  	cond_value, longword (unsigned), write only, by value
+!
+! PROTOTYPE:
+!
+!   x
+!
+! IMPLICIT INPUTS:  None.
+!
+! IMPLICIT OUTPUTS: None.
+!
+! COMPLETION CODES:
+!
+!   SS$_NORMAL:	    	normal successful completion.
+!
+! SIDE EFFECTS:	    None.
+!--
+    BIND
+        cand    = .cand_a   : BLOCK [,BYTE],
+        pat     = .pat_a    : TXTDEF;
+
+    LOCAL
+        sdsc    : BLOCK [DSC$K_S_BLN,BYTE],
+        regex   : REGEXDEF,
+        regmat  : REGMATDEF,
+        err;
+
+    INIT_SDESC (sdsc, .pat [TXT_W_LEN], pat [TXT_T_TEXT]);
+    err = MX_REGCOMP (regex, sdsc, REG_M_EXTENDED OR REG_M_ICASE OR REG_M_NOSUB);
+    IF .err NEQ 0 THEN
+        RETURN 0;
+    regmat [REGMAT_L_SO] = 0;
+    regmat [REGMAT_L_EO] = .cand [DSC$W_LENGTH];
+    err = MX_REGEXEC (regex, .cand [DSC$A_POINTER], 0, regmat, REG_M_STARTEND);
+    MX_REGFREE (regex);
+
+    .err EQL 0
+
+END; ! match_regex
+
+END
+ELUDOM

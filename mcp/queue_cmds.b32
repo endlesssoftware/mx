@@ -1,0 +1,2498 @@
+%TITLE 'QUEUE_CMDS'
+MODULE QUEUE_CMDS (IDENT='V3.0',
+    	ADDRESSING_MODE (EXTERNAL=LONG_RELATIVE, NONEXTERNAL=LONG_RELATIVE)) =
+BEGIN
+!++
+! FACILITY: 	    MCP
+!
+! ABSTRACT: 	    Queue manipulation commands for MCP.
+!
+! MODULE DESCRIPTION:
+!
+!   This module contains code for all of the commands that manipulate the
+!   MX system queue, for MCP.
+!
+! AUTHOR:   	    M. Madison
+!
+! Copyright (c) 2008, Matthew Madison.
+! Copyright (c) 2011, Endless Software Solutions.
+! 
+! All rights reserved.
+! 
+! Redistribution and use in source and binary forms, with or without
+! modification, are permitted provided that the following conditions
+! are met:
+! 
+!     * Redistributions of source code must retain the above
+!       copyright notice, this list of conditions and the following
+!       disclaimer.
+!     * Redistributions in binary form must reproduce the above
+!       copyright notice, this list of conditions and the following
+!       disclaimer in the documentation and/or other materials provided
+!       with the distribution.
+!     * Neither the name of the copyright owner nor the names of any
+!       other contributors may be used to endorse or promote products
+!       derived from this software without specific prior written
+!       permission.
+! 
+! THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
+! "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
+! LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
+! A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
+! OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
+! SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
+! LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
+! DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
+! THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
+! (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
+! OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+!
+! CREATION DATE:    16-OCT-1991
+!
+! MODIFICATION HISTORY:
+!
+!   16-OCT-1991	V1.0	Madison	    Initial coding.
+!   18-NOV-1991	V1.0-1	Madison	    Recognize BSMTP source value.
+!   18-FEB-1992	V1.1	Greer	    Add XSMTP support.
+!   14-MAR-1993 V1.2	Goatley     Bug fix: added proper MEM_FREERCPT calls.
+!   15-MAR-1993 V1.2-1	Goatley     Added QUEUE SHOW/BRIEF (like old FLQU).
+!   25-MAR-1993 V1.2-2	Goatley     Fixed message from CONV$RECLAIM.
+!   30-NOV-1993 V1.3	Goatley     Changed SHOW QUEUE Size from 6 to 7 digits.
+!   12-DEC-1993 V1.3-1	Goatley     Added QUEUE SHOW/IN_PROGRESS.
+!   21-DEC-1993 V1.3-2	Goatley     Add QUEUE SYNCHRONIZE, removed RECLAIM.
+!    7-JAN-1994 V1.3-3	Goatley     CANCEL BACKREF ROUTER entry when CANCEL.
+!   11-JAN-1994 V1.3-4	Goatley     Modify SHOW QUEUE for sequential display.
+!   16-FEB-1994 V1.4	Goatley     Remove QUEUE SYNCHRONIZE, remove DIDQ.
+!   16-MAR-1994 V1.4-1	Goatley	    Add /ALL to SHOW QUEUE/BRIEF.
+!   18-MAR-1994 V1.4-2	Goatley     Fix init of didmap.
+!   21-MAR-1994 V1.4-3	Goatley     Add /RESET to QUEUE SYNCH.
+!   23-MAR-1994 V1.4-4	Goatley     Add date stuff to QUEUE SHOW. 
+!   25-MAR-1994 V1.4-5	Goatley     Add agent stuff to QUEUE SHOW.
+!   25-MAR-1994 V1.4-6	Goatley     Fix count of entries shown.
+!   18-APR-1994 V1.5	Altmayer    Request lock to cancel wait on entry
+!    5-MAY-1994 V1.5-1	Altmayer    Add QNPURGED
+!    6-MAY-1994 V1.6	Altmayer    Re-structure lock value block (use IPC)
+!   13-MAY-1994 V1.6-1	Altmayer    Set QENT_V_LOCK = 1 before FLQ_UPDATEs
+!   14-MAY-1994 V1.6-2	Altmayer    Add MXQ_L_LSVREF, MX_K_MX_LSV
+!   15-MAY-1994 V1.6-3	Altmayer    Add MX_LSV agent
+!   22-MAY-1994 V1.6-4	Goatley     Remove PURGE; call FLQ_PURGE instead
+!   15-NOV-1994 V1.7	Burkhead    Add VERIFY.
+!   15-NOV-1995 V1.7-1	Goatley     Modify PURGE to save FIN ROUTER for last.
+!   29-NOV-1995 V1.7-2	Goatley     And check that they're still FIN!
+!    8-DEC-1996 V1.8	Goatley     Restore old PURGE action based on /OLD.
+!   06-JAN-1997	V1.9	Madison	    Eliminate MDMLIB.
+!   29-AUG-1997 V1.10	Goatley	    Fix one wait display (didn't check for RDY).
+!				    Also changed QUEUE HOLD from OHOLD to UHOLD.
+!   29-AUG-1997	V1.11	Madison	    New RCPT structure.
+!   17-SEP-1997 V1.11-1 Goatley     Add missing "." in Xrte check in SHOW.
+!   14-JUL-1998	V2.0	Madison	    Use READ_ENVELOPE.
+!   30-AUG-1998	V2.1	Madison	    Holding queue support.
+!   10-OCT-1998	V2.1-1	Madison	    Fix SIGNAL invocations that had missing arg counts.
+!   20-JUN-1999	V2.1-2	Madison	    Validate queue forward references.
+!   13-NOV-1999	V2.1-3	Madison	    Allow larger message sizes.
+!   30-JAN-2000	V2.1-4	Madison	    More holding queues.
+!   27-NOV-2000	V2.1-5	Madison	    Fix origin problem.
+!   13-JAN-2001	V2.2	Madison	    Sizes, entry counts.
+!   28-JAN-2001 V2.2-1  Madison     Fix off-by-1 error in QUEUE SHOW/SELECT.
+!   23-FEB-2002 V2.3    Madison     QUEUE DUMP.
+!   31-DEC-2004 V2.4    Madison     Remove QUEUE VERIFY.
+!   13-APR-2005 V2.4-1  Madison     FLQ_SEARCH_END.
+!   03-Feb-2008 V3.0    Madison     Obsoleted more interfaces.
+!--
+    LIBRARY 'SYS$LIBRARY:STARLET';
+    LIBRARY 'MX_SRC_COMMON:MX';
+    LIBRARY 'MX_SRC_COMMON:FLQ';
+    LIBRARY 'MX_SRC_COMMON:FIELDS';
+    LIBRARY 'MX_SRC_COMMON:IPC';
+    LIBRARY 'MCP';
+
+    FORWARD ROUTINE
+    	QCMD_CANCEL,
+	CANCEL_ENTRY,
+    	QCMD_READY,
+    	QCMD_PURGE,
+    	QCMD_RECLAIM,
+    	QCMD_SYNCHRONIZE,
+    	QCMD_SHOW,
+    	ALT_SHOW_OUTPUT,
+    	SHOW_ENTRY  	: NOVALUE,
+    	SHOW_ORPHAN 	: NOVALUE,
+	show_entry_brief: NOVALUE,
+	QCMD_HOLD,
+	HOLD_ENTRY,
+        QCMD_DUMP;
+
+    EXTERNAL ROUTINE
+    	G_HAT (READ_ENVELOPE, MEM_FREERCPT, FLQ_SYNCH_BITMAP, FLQ_PURGE,
+		DISPOSE_ENVELOPE, WRITE_ENVELOPE),
+        G_HAT (MX_FILE_OPEN, MX_FILE_READ, MX_FILE_WRITE, MX_FILE_CLOSE, READ_HDRS,
+               OPEN_MSG_TEXT, QUOTE_STRING, FORMAT_HDR),
+    	G_HAT (LIB$CVT_DTB, LIB$DELETE_FILE, LIB$FREE_VM, LIB$DELETE_FILE,
+		LIB$GET_VM_PAGE, LIB$FREE_VM_PAGE, LIB$FILE_SCAN_END,
+		STR$CONCAT, FLQ_SEARCH_END);
+
+    EXTERNAL
+    	que_file    : $BBLOCK [DSC$K_S_BLN];
+
+    EXTERNAL LITERAL
+    	MCP__QCANCEL, MCP__QREADY, MCP__QPURGE, MCP__QNPURGED,
+    	MCP__QOPENERR, MCP__QREADERR, MCP__QUPDTERR,
+    	MCP__NOOPNOUT, MCP__QNOSUPRT, MCP__QSYNBGN, MCP__QSYNCHED,
+	MCP__QSYNCHERR, MCP__QENTRIES, MCP__QHOLD, MCP__QSELERR, MCP__QSELECTED,
+        MCP__INVDUMPSPEC, MCP__DUMPSTATUS, MCP__ENVREADERR, MCP__HDRREADERR,
+        MCP__TXTOPNERR, MCP__DMPOPNERR, MCP__DMPWRTERR, MCP__QSYNCHQUEUE;
+
+    MACRO
+    	ROUTER_ENTRY (QENT) =
+    	    BEGIN
+    	    	BIND _QE = QENT : QENTDEF;
+		FLQ_K_MX_ROUTER EQLU ._qe [QENT_L_DSTPRC]
+    	    END%;
+
+    LITERAL
+    	FWDREF_COUNT = FLQ_K_MX_HOLDQ_BASE + 1;
+
+    $ASSUME (MX_K_PATH_HOLDQ_BASE, EQL, FWDREF_COUNT)
+
+    MACRO BYTENUM (A,B,C,D) = (A)%;
+
+    OWN
+    	FWDREF	    : VECTOR [FWDREF_COUNT,LONG] PSECT ($PLIT$) INITIAL (
+    	    	    	BYTENUM (MXQ_L_SMTPREF),
+    	    	    	BYTENUM (MXQ_L_LOCALREF),
+    	    	    	BYTENUM (MXQ_L_JNETREF),  ! no longer used
+    	    	    	BYTENUM (MXQ_L_UUCPREF),  ! no longer used
+    	    	    	BYTENUM (MXQ_L_MLFREF),
+    	    	    	BYTENUM (MXQ_L_X400REF),  ! never used
+    	    	    	BYTENUM (MXQ_L_SITEREF),
+    	    	    	BYTENUM (MXQ_L_DNSMTPREF),
+    	    	    	BYTENUM (MXQ_L_XSMTPREF), ! no longer used
+			BYTENUM (MXQ_L_LSVREF),   ! no longer used
+			BYTENUM (MXQ_L_HOLDQREF_BASE)),
+    	SHOW_FAB    : $FAB_DECL,
+    	SHOW_RAB    : $RAB_DECL,
+    	SRCVAL	: VECTOR [8,LONG] PSECT ($PLIT$) INITIAL (
+    	    	    MX_K_ORG_LOCAL, MX_K_ORG_SMTP, MX_K_ORG_SITE,
+    	    	    MX_K_ORG_VMSMAIL, MX_K_ORG_DNSMTP),
+    	STAVAL	: VECTOR [6,LONG] PSECT ($PLIT$) INITIAL (
+    	    	    FLQ_K_STRDY, FLQ_K_STUHO, FLQ_K_STOPH, FLQ_K_STINP,
+    	    	    FLQ_K_STFIN, FLQ_K_STCAN),
+    	select_count	    : INITIAL (0),
+    	select_list_size    : INITIAL (0),
+    	select_list 	    : REF VECTOR [,LONG] INITIAL (0);
+
+
+    TABLE (FWDNAM, 'SMTP', 'LOCAL', '*?*', 'UUCP', 'MLIST/FSRV', 'X.400',
+    	    	    'SITE', 'DECNET-SMTP', 'X25-SMTP', 'LSV',
+    	    	    'HOLD!UL');
+    TABLE (FWDNM2, 'SMTP', 'LOCAL', '*?*', 'UUCP', 'MLF', 'X400',
+    	    	    'SITE', 'DNSMTP', 'XSMTP', 'LSV', 'HOLD!UL');
+    TABLE (INFNAM, 'SMTP_INFO', 'LOCAL_INFO', 'UNUSED_INFO', 'UUCP_INFO',
+    	    	   'MLF_INFO', 'X400_INFO', 'SITE_INFO', 'DNSMTP_INFO',
+    	    	   'XSMTP_INFO', 'LSV_INFO', 'HOLD!UL_INFO');
+    TABLE (SRCNAM, 'Local', 'SMTP', 'SITE', 'VMSmail', 'DECnet-SMTP');
+    TABLE (SRCNM2, 'LOCAL', 'SMTP', 'SITE', 'MAIL', 'DNSMTP');
+    TABLE (STANAM, 'READY', 'USERHOLD', 'OPERHOLD', 'IN-PROGRESS',
+    	    	    'FINISHED', 'CANCELLED');
+    TABLE (STANM2, 'READY', 'UHOLD', 'OHOLD', 'INPROG',
+    	    	    'FINISH', 'CANCLD');
+    TABLE (STANM3, 'RDY', 'UHO', 'OPH', 'INP',
+    	    	    'FIN', 'CAN');
+    TABLE (MX_AGENTS,			!Must match definitions in
+	'MX_ROUTER',			!... [MX.FLQ]FLQ_DEFS.R32
+	'MX_LOCAL',
+	'MX_MLF',
+	'MX_SITE',
+	'MX_DNSMTP',
+	'MX_SMTP',
+	'MX_XSMTP',
+	'MX_UUCP_obsolete',
+	'obsolete',
+	'MX_LSV_obsolete',
+    	'MX_HOLD!UL');
+    TABLE (ag_infnam,
+    	'SRC_INFO',
+    	'LOCAL_INFO',
+    	'MLF_INFO',
+    	'SITE_INFO',
+    	'DNSMTP_INFO',
+    	'SMTP_INFO',
+    	'unused_INFO',
+    	'unused_INFO',
+    	'unused_INFO',
+    	'unused_INFO',
+    	'HOLD!UL_INFO');
+
+    BIND
+	all_d		= %ASCID'ALL',
+	before_d	= %ASCID'BEFORE',
+	brief_d		= %ASCID'BRIEF',
+	created_d	= %ASCID'CREATED',
+	date_d		= %ASCID'DATE',
+	delay_d		= %ASCID'DELAY',
+	dest_d		= %ASCID'DESTINATION_AGENT',
+    	dest_hq_d   	= %ASCID'DESTINATION_AGENT.HOLDING_QUEUE',
+    	held_d	    	= %ASCID'HELD',
+	entnum_d	= %ASCID'ENTNUM',
+	expire_d	= %ASCID'EXPIRE',
+	full_d		= %ASCID'FULL',
+	in_progress_d	= %ASCID'IN_PROGRESS',
+	log_d		= %ASCID'LOG',
+	modified_d	= %ASCID'MODIFIED',
+	null_d		= %ASCID'',
+	origin_d	= %ASCID'ORIGIN_AGENT',
+	output_d	= %ASCID'OUTPUT',
+	reset_d		= %ASCID'RESET',
+	since_d		= %ASCID'SINCE',
+	waiting_d	= %ASCID'WAITING',
+	old_d		= %ASCID'OLD';
+
+
+
+%SBTTL 'QCMD_CANCEL'
+GLOBAL ROUTINE QCMD_CANCEL = 
+BEGIN
+!++
+! FUNCTIONAL DESCRIPTION:
+!
+!   QUEUE CANCEL command.
+!
+! RETURNS:  	cond_value, longword (unsigned), write only, by value
+!
+! PROTOTYPE:
+!
+!   QCMD_CANCEL
+!
+! IMPLICIT INPUTS:  None.
+!
+! IMPLICIT OUTPUTS: None.
+!
+! COMPLETION CODES:
+!
+!   SS$_NORMAL:	    	normal successful completion.
+!
+! SIDE EFFECTS:
+!
+!   None.
+!--
+    LOCAL
+    	QENT	: QENTDEF,
+    	STR 	: BLOCK [DSC$K_S_BLN,BYTE],
+	FLQNODE : BLOCK [DSC$K_S_BLN,BYTE],
+    	LNMBUF	: VECTOR [256,BYTE],
+    	LNMLEN	: WORD,
+    	LNMLST	: $ITMLST_DECL (ITEMS=1),
+    	ENTNUM,
+    	have_entnum,
+    	selcur,
+    	qctx,
+    	LOG,
+    	status, rmsstv;
+
+    status = FLQ_OPEN (FLQ__FULL, qctx, que_file, rmsstv);
+    IF NOT .status THEN
+    BEGIN
+    	SIGNAL (MCP__QOPENERR, 0, .status, .rmsstv);
+    	RETURN SS$_NORMAL;
+    END;
+
+    LOG = CLI$PRESENT (log_d) EQL CLI$_PRESENT;
+    have_entnum = CLI$PRESENT (entnum_d) EQL CLI$_PRESENT;
+
+    INIT_DYNDESC (STR);
+
+    $ITMLST_INIT (ITMLST=LNMLST,
+    	(ITMCOD=LNM$_STRING, BUFSIZ=%ALLOCATION (LNMBUF),
+    	 BUFADR=LNMBUF, RETLEN=LNMLEN));
+    $TRNLNM (LOGNAM=%ASCID'MX_FLQ_NODE_NAME', TABNAM=%ASCID'LNM$SYSTEM',
+    	     ACMODE=%REF (PSL$C_EXEC), ITMLST=LNMLST);
+    INIT_SDESC (FLQNODE, .LNMLEN, LNMBUF);
+
+    selcur = 0;
+    WHILE 1 DO
+    BEGIN
+    	IF .have_entnum THEN
+    	BEGIN
+    	    status = CLI$GET_VALUE (entnum_d, str);
+    	    IF NOT .status THEN EXITLOOP;
+    	    LIB$CVT_DTB (.STR [DSC$W_LENGTH], .STR [DSC$A_POINTER], ENTNUM);
+    	END
+    	ELSE
+    	BEGIN
+    	    IF .selcur EQLU .select_count THEN EXITLOOP;
+    	    entnum = .select_list [.selcur];
+    	    selcur = .selcur + 1;
+    	END;
+    	status = FLQ_READ (qctx, .ENTNUM, QENT);
+    	IF NOT .status THEN
+    	    SIGNAL (MCP__QREADERR, 1, .ENTNUM, .status)
+    	ELSE
+	    CANCEL_ENTRY (qent, .qctx, .log);
+    END;
+
+    FLQ_CLOSE (qctx);
+    FREE_STRINGS (STR);
+
+    SS$_NORMAL
+
+END; ! QCMD_CANCEL
+
+%SBTTL 'CANCEL_ENTRY'
+ROUTINE CANCEL_ENTRY (qent_a, qctx, log) = 
+BEGIN
+!++
+! FUNCTIONAL DESCRIPTION:
+!
+!   Cancel a queue entry.
+!
+! RETURNS:  	cond_value, longword (unsigned), write only, by value
+!
+! PROTOTYPE:
+!
+!   QCMD_CANCEL
+!
+! IMPLICIT INPUTS:  None.
+!
+! IMPLICIT OUTPUTS: None.
+!
+! COMPLETION CODES:
+!
+!   SS$_NORMAL:	    	normal successful completion.
+!
+! SIDE EFFECTS:
+!
+!   None.
+!--
+    BIND
+	qent	= .qent_a	: QENTDEF;
+
+    LOCAL
+	status;
+
+    QENT [QENT_L_STATUS] = FLQ_K_STCAN;
+    QENT [QENT_V_LOCK]   = 1;
+    status = FLQ_UPDATE (qctx, QENT);
+    IF NOT .status THEN
+	SIGNAL (MCP__QUPDTERR, 1, .QENT [QENT_L_ENTNUM], .status)
+    ELSE IF .LOG THEN
+	SIGNAL (MCP__QCANCEL, 1, .QENT [QENT_L_ENTNUM]);
+
+    IF ROUTER_ENTRY (QENT) THEN
+    BEGIN
+	LOCAL QE    : QENTDEF;
+	INCR I FROM 0 TO FWDREF_COUNT+MX_K_HOLDQ_MAX-1 DO
+	BEGIN
+    	    LOCAL offset;
+    	    offset = (IF .i LSSU FWDREF_COUNT-1 THEN .fwdref [.i]
+    	    	     ELSE BYTENUM (MXQ_L_HOLDQREF_BASE)+4*(.i-MX_K_PATH_HOLDQ_BASE));
+    	    IF .qent [.offset,0,32,0] NEQ 0 THEN
+	    BEGIN
+    	    	BIND
+    	    	    en = qent [.offset,0,32,0] : LONG;
+	    	status = FLQ_READ (qctx, .EN, QE);
+		!
+		!  If read is successful and this entry does indeed
+		!  point back to the router entry, then CANCEL it too.
+		!
+	    	IF .status AND
+		   (.qe [MXQ_L_BACKREF] EQLU .qent [QENT_L_ENTNUM]) THEN
+	    	BEGIN
+	    	    QE [QENT_L_STATUS] = FLQ_K_STCAN;
+		    QE [QENT_V_LOCK]   = 1;
+	    	    FLQ_UPDATE (qctx, QE);
+	    	END;
+	    END;
+	END;
+    END
+    ELSE
+	!
+	!  If there's a BACKREF pointer and that entry is destined
+	!  for MX_ROUTER, then CANCEL it too.  Otherwise, we'd leave
+	!  an IN-PROGRESS orphan out there.
+	!
+	IF (.qent [MXQ_L_BACKREF] NEQU 0)
+	THEN
+	    BEGIN
+	    status = FLQ_READ (qctx, .qent [MXQ_L_BACKREF], qent);
+	    IF NOT .status
+	    THEN
+		SIGNAL (MCP__QREADERR, 1, .qent [MXQ_L_BACKREF],
+				.status)
+	    ELSE
+		IF ROUTER_ENTRY (qent)
+		THEN
+		    BEGIN
+		    qent [QENT_L_STATUS] = FLQ_K_STCAN;
+		    qent [QENT_V_LOCK]   = 1;
+		    status = FLQ_UPDATE (qctx, QENT);
+		    IF NOT .status
+		    THEN
+			SIGNAL (MCP__QUPDTERR, 1, .QENT [QENT_L_ENTNUM],
+				    .status);
+		    END;
+	    END;
+
+    SS$_NORMAL
+
+END; !CANCEL_ENTRY
+
+%SBTTL 'QCMD_READY'
+GLOBAL ROUTINE QCMD_READY = 
+BEGIN
+!++
+! FUNCTIONAL DESCRIPTION:
+!
+!   QUEUE READY command.
+!
+! RETURNS:  	cond_value, longword (unsigned), write only, by value
+!
+! PROTOTYPE:
+!
+!   QCMD_READY
+!
+! IMPLICIT INPUTS:  None.
+!
+! IMPLICIT OUTPUTS: None.
+!
+! COMPLETION CODES:
+!
+!   SS$_NORMAL:	    	normal successful completion.
+!
+! SIDE EFFECTS:
+!
+!   None.
+!--
+    LOCAL
+    	QENT	: QENTDEF,
+    	STR 	: BLOCK [DSC$K_S_BLN,BYTE],
+	FLQNODE : BLOCK [DSC$K_S_BLN,BYTE],
+    	LNMBUF	: VECTOR [256,BYTE],
+    	LNMLEN	: WORD,
+    	LNMLST	: $ITMLST_DECL (ITEMS=1),
+    	ENTNUM,
+    	have_entnum,
+    	selcur,
+    	qctx,
+    	LOG,
+    	status, rmsstv;
+
+    status = FLQ_OPEN (FLQ__FULL, qctx, que_file, rmsstv);
+    IF NOT .status THEN
+    BEGIN
+    	SIGNAL (MCP__QOPENERR, 0, .status, .rmsstv);
+    	RETURN SS$_NORMAL;
+    END;
+
+    LOG = CLI$PRESENT (log_d) EQL CLI$_PRESENT;
+    have_entnum = CLI$PRESENT (entnum_d) EQL CLI$_PRESENT;
+
+    INIT_DYNDESC (STR);
+
+    $ITMLST_INIT (ITMLST=LNMLST,
+    	(ITMCOD=LNM$_STRING, BUFSIZ=%ALLOCATION (LNMBUF),
+    	 BUFADR=LNMBUF, RETLEN=LNMLEN));
+    $TRNLNM (LOGNAM=%ASCID'MX_FLQ_NODE_NAME', TABNAM=%ASCID'LNM$SYSTEM',
+    	     ACMODE=%REF (PSL$C_EXEC), ITMLST=LNMLST);
+    INIT_SDESC (FLQNODE, .LNMLEN, LNMBUF);
+
+    selcur = 0;
+    WHILE 1 DO 
+    BEGIN
+    	IF .have_entnum THEN
+    	BEGIN
+    	    status = CLI$GET_VALUE (entnum_d, STR);
+    	    IF NOT .status THEN EXITLOOP;
+    	    LIB$CVT_DTB (.STR [DSC$W_LENGTH], .STR [DSC$A_POINTER], ENTNUM);
+    	END
+    	ELSE
+    	BEGIN
+    	    IF .selcur GEQU .select_count THEN EXITLOOP;
+    	    entnum = .select_list [.selcur];
+    	    selcur = .selcur + 1;
+    	END;
+    	status = FLQ_READ (qctx, .ENTNUM, QENT);
+    	IF NOT .status THEN
+    	    SIGNAL (MCP__QREADERR, 1, .ENTNUM, .status)
+    	ELSE
+    	BEGIN
+    	    IF ROUTER_ENTRY (QENT) THEN
+    	    BEGIN
+    	    	LOCAL QE    : QENTDEF;
+    	    	INCR I FROM 0 TO FWDREF_COUNT+MX_K_HOLDQ_MAX-1 DO
+    	    	BEGIN
+    	    	    LOCAL offset;
+    	    	    offset = (IF .i LSSU FWDREF_COUNT-1 THEN .fwdref [.i]
+    	    	     	      ELSE BYTENUM (MXQ_L_HOLDQREF_BASE)+4*(.i-MX_K_PATH_HOLDQ_BASE));
+    	    	    IF .qent [.offset,0,32,0] NEQ 0 THEN
+    	    	    BEGIN
+    	    	    	status = FLQ_READ (qctx, .qent [.offset,0,32,0], QE);
+    	    	    	IF .status THEN
+    	    	    	BEGIN
+    	    	    	    QE [QENT_L_STATUS] = FLQ_K_STCAN;
+			    QE [QENT_V_LOCK]   = 1;
+    	    	    	    FLQ_UPDATE (qctx, QE);
+    	    	    	END;
+    	    	    	qent [.offset,0,32,0] = 0;
+    	    	    END;
+    	    	END;
+    	    END;
+    	    QENT [QENT_L_STATUS] = FLQ_K_STRDY;
+    	    IF CLI$PRESENT (%ASCID'AFTER') EQLU CLI$_PRESENT THEN
+    	    BEGIN
+    	    	CLI$GET_VALUE (%ASCID'AFTER', str);
+    	    	status = LIB$CONVERT_DATE_STRING (str, qent [QENT_Q_DLYDT]);
+    	    	IF NOT .status THEN
+    	    	BEGIN
+    	    	    SIGNAL (MCP__QUPDTERR, 1, .qent [QENT_L_ENTNUM], .status);
+    	    	    FLQ_CLOSE (qctx);
+    	    	    FREE_STRINGS (str);
+    	    	    RETURN SS$_NORMAL;
+    	    	END;
+    	    	qent [QENT_V_LOCK] = 0;
+    	    	qent [QENT_V_DELAY] = 1;
+    	    END
+    	    ELSE
+    	    BEGIN
+	    	QENT [QENT_V_LOCK]  = 1;
+    	    	QENT [QENT_V_DELAY] = 0;
+    	    	CH$MOVE (8, UPLIT (0,0), QENT [QENT_Q_DLYDT]);
+    	    END;
+    	    IF CLI$PRESENT (%ASCID'FINAL') EQL CLI$_PRESENT THEN
+    	    BEGIN
+    	    	LOCAL
+    	    	    infdsc  : BLOCK [DSC$K_S_BLN,BYTE],
+    	    	    envl    : ENVLDEF;
+    	    	BIND_ENVL_FIELDS (envl);
+    	    	CH$FILL (%CHAR (0), ENVL_S_ENVLDEF, envl);
+    	    	INIT_QUEUE (envl [ENVL_Q_RCPTQUE]);
+    	    	INIT_DYNDESC (infdsc);
+    	    	IF .qent [QENT_L_DSTPRC] GEQU FLQ_K_MX_HOLDQ_BASE THEN
+    	    	    LIB$SYS_FAO (.ag_infnam [FLQ_K_MX_HOLDQ_BASE], 0, infdsc,
+    	    	    	    	    1 + .qent [QENT_L_DSTPRC] - FLQ_K_MX_HOLDQ_BASE)
+    	    	ELSE
+    	    	    STR$COPY_DX (infdsc, .ag_infnam [.qent [QENT_L_DSTPRC]]);
+    	    	status = READ_ENVELOPE (qctx, qent, infdsc, envl);
+    	    	IF .status THEN
+    	    	BEGIN
+    	    	    LOCAL rcpt : REF RCPTDEF;
+    	    	    rcpt = .rcptque [QUE_L_HEAD];
+    	    	    WHILE .rcpt NEQA rcptque DO
+    	    	    BEGIN
+    	    	    	rcpt [RCPT_W_CNT1] = 32767;
+    	    	    	rcpt [RCPT_W_CNT2] = 32767;
+    	    	    	rcpt = .rcpt [RCPT_L_FLINK];
+    	    	    END;
+    	    	    WRITE_ENVELOPE (qctx, qent, infdsc, envl);
+    	    	    DISPOSE_ENVELOPE (envl);
+    	    	END;
+    	    	FREE_STRINGS (infdsc);
+    	    END;
+
+    	    status = FLQ_UPDATE (qctx, QENT);
+    	    IF NOT .status THEN
+    	    	SIGNAL (MCP__QUPDTERR, 1, .QENT [QENT_L_ENTNUM], .status)
+    	    ELSE IF .LOG THEN
+    	    	SIGNAL (MCP__QREADY, 1, .QENT [QENT_L_ENTNUM]);
+    	END;
+    END;
+
+    FLQ_CLOSE (qctx);
+    FREE_STRINGS (STR);
+
+    SS$_NORMAL
+
+END; ! QCMD_READY
+
+%SBTTL 'QCMD_PURGE'
+GLOBAL ROUTINE QCMD_PURGE = 
+BEGIN
+!++
+! FUNCTIONAL DESCRIPTION:
+!
+!   QUEUE PURGE command.
+!
+! RETURNS:  	cond_value, longword (unsigned), write only, by value
+!
+! PROTOTYPE:
+!
+!   QCMD_PURGE
+!
+! IMPLICIT INPUTS:  None.
+!
+! IMPLICIT OUTPUTS: None.
+!
+! COMPLETION CODES:
+!
+!   SS$_NORMAL:	    	normal successful completion.
+!
+! SIDE EFFECTS:
+!
+!   None.
+!--
+    LOCAL
+    	qent		: QENTDEF,
+    	flqlst		: _FLQSRCHLST_DECL (ITEMS=1),
+	to_do_map	: REF VECTOR[,LONG],	!Bitmap for ROUTER entries
+    	qctx,
+    	log, old,
+    	srchctx,
+	count,
+    	status, rmsstv;
+
+    status = FLQ_OPEN (FLQ__FULL, qctx, que_file, rmsstv);
+    IF NOT .status
+    THEN
+	BEGIN
+    	SIGNAL (MCP__QOPENERR, 0, .status, .rmsstv);
+    	RETURN SS$_NORMAL;
+	END;
+
+    LOG = CLI$PRESENT (log_d) EQL CLI$_PRESENT;
+
+    old = CLI$PRESENT (old_d) EQL CLI$_PRESENT;
+
+    status = LIB$GET_VM_PAGE (%REF((128*2)/8), to_do_map);
+    CH$FILL(0, 32*512, .to_do_map);	!Zero out bitmap of shown entries
+
+    _FLQSRCHLST_INIT (SRCHLST=FLQLST,
+    	(CODE=FLQS__STATUS, COUNT=2, status=(FLQ_K_STCAN,FLQ_K_STFIN)));
+
+    COUNT = 0;
+    SRCHCTX = 0;
+    WHILE (status = FLQ_SEARCH (qctx, FLQLST, SRCHCTX, QENT)) DO
+	BEGIN
+
+	IF (.old)
+	THEN
+	    BEGIN
+	    FLQ_PURGE (qctx, qent);
+	    IF .log THEN SIGNAL (MCP__QPURGE, 1, .qent [QENT_L_ENTNUM]);
+	    count = .count + 1;
+	    END
+	ELSE
+	BEGIN
+	IF ROUTER_ENTRY (qent)
+	THEN
+	    BEGIN
+	    !
+	    !  We have a FINished ROUTER entry.  We want to delay
+	    !  deleting all ROUTER entries until the end, when we know
+	    !  we've deleted all of the entries that point back to this
+	    !  entry.  If we don't delay and the PURGE is interrupted,
+	    !  we could leave entries that point back to non-existent
+	    !  or re-used entries.  Either case leads to confusion.
+	    !
+	    !  (We can't just delete all forward references at this
+	    !  point, because the ROUTER entry no longer points to
+	    !  all of its forward references.)
+	    !
+	    BIND the_map = .to_do_map	: BITVECTOR [128*1024];
+	    the_map [.qent [QENT_L_ENTNUM] - 1] = 1;
+	    END
+	ELSE
+	    BEGIN
+	    !
+	    !  We have a FIN non-ROUTER entry---just go ahead and delete it.
+	    !
+	    FLQ_PURGE (qctx, qent);
+	    IF .log THEN SIGNAL (MCP__QPURGE, 1, .qent [QENT_L_ENTNUM]);
+	    count = .count + 1;
+	    END;
+	END;
+	END;
+
+    FLQ_SEARCH_END (qctx, srchctx);
+
+    !
+    !  Now we need to step through and PURGE the ROUTER entries that
+    !  were found.
+    !
+IF NOT(.old)
+THEN
+    BEGIN
+    INCR i FROM 0 TO 4095 DO		!(FLQ_K_BMAPSIZE+3)/4-1 DO
+        BEGIN
+        IF (.to_do_map [.i] NEQU 0)
+        THEN
+            BEGIN
+            BIND cell = to_do_map [.i] : BITVECTOR [32];
+            INCR j FROM 0 TO 31 DO
+                IF (.cell [.j] NEQU 0)
+                THEN
+		    BEGIN
+		    status = FLQ_READ (qctx, ((.i*32)+.j)+1, qent);
+		    !
+		    !  If the entry is still there and is FIN or CAN, then
+		    !  purge it.  The check for FIN or CAN is necessary
+		    !  in case somebody else has already purged this entry
+		    !  before we got here and it has been reused.
+		    !
+		    IF (.status) AND ((.qent [QENT_L_STATUS] EQLU FLQ_K_STFIN)
+			OR (.qent [QENT_L_STATUS] EQLU FLQ_K_STCAN))
+		    THEN
+			BEGIN
+			FLQ_PURGE (qctx, qent);
+			IF .log THEN SIGNAL (MCP__QPURGE, 1, .qent [QENT_L_ENTNUM]);
+			count = .count + 1;
+			END;
+		    END;
+            END;
+        END;
+
+    END;
+
+    IF .log THEN SIGNAL (MCP__QNPURGED, 1, .count);
+
+    FLQ_CLOSE (qctx);
+    LIB$FREE_VM_PAGE (%REF((128*2)/8), to_do_map);
+
+    SS$_NORMAL
+
+END; ! QCMD_PURGE
+
+%SBTTL 'QCMD_RECLAIM'
+GLOBAL ROUTINE QCMD_RECLAIM = 
+BEGIN
+!++
+! FUNCTIONAL DESCRIPTION:
+!
+!   QUEUE RECLAIM command.
+!
+! RETURNS:  	cond_value, longword (unsigned), write only, by value
+!
+! PROTOTYPE:
+!
+!   QCMD_RECLAIM
+!
+! IMPLICIT INPUTS:  None.
+!
+! IMPLICIT OUTPUTS: None.
+!
+! COMPLETION CODES:
+!
+!   SS$_NORMAL:	    	normal successful completion.
+!
+! SIDE EFFECTS:
+!
+!   None.
+!--
+    LOCAL
+    	SBLK	: VECTOR [5,LONG],
+    	LOG,
+    	status;
+
+    SIGNAL (MCP__QNOSUPRT, 1, %ASCID'QUEUE RECLAIM');
+    SS$_NORMAL
+
+END; ! QCMD_RECLAIM
+
+
+ROUTINE  show_sync (entnum, oldval, newval) =
+BEGIN
+    SIGNAL (MCP__QSYNCHQUEUE, 2, .entnum,
+            (IF .newval THEN %ASCID'' ELSE %ASCID'in'));
+    SS$_NORMAL
+END;
+
+%SBTTL 'QCMD_SYNCHRONIZE'
+GLOBAL ROUTINE QCMD_SYNCHRONIZE = 
+BEGIN
+!++
+! FUNCTIONAL DESCRIPTION:
+!
+!   QUEUE SYNCHRONIZE command.
+!
+! RETURNS:  	cond_value, longword (unsigned), write only, by value
+!
+! PROTOTYPE:
+!
+!   QCMD_SYNCHRONIZE
+!
+! IMPLICIT INPUTS:  None.
+!
+! IMPLICIT OUTPUTS: None.
+!
+! COMPLETION CODES:
+!
+!   SS$_NORMAL:	    	normal successful completion.
+!
+! SIDE EFFECTS:
+!
+!   None.
+!--
+    LOCAL
+    	qctx,
+    	LOG,
+	reset_maxentno,
+	status, rmsstv;
+
+!    SIGNAL (MCP__QNOSUPRT, 1, %ASCID'QUEUE SYNCHRONIZE');
+    status = FLQ_OPEN (FLQ__FULL, qctx, que_file, rmsstv);
+    IF NOT .status THEN
+    BEGIN
+    	SIGNAL (MCP__QOPENERR, 0, .status, .rmsstv);
+    	RETURN SS$_NORMAL;
+    END;
+
+    LOG = CLI$PRESENT (log_d) EQL CLI$_PRESENT;
+    reset_maxentno = CLI$PRESENT (reset_d) EQL CLI$_PRESENT;
+
+    IF .log THEN SIGNAL (MCP__QSYNBGN, 0);
+    status = FLQ_SYNCH_BITMAP (qctx, .reset_maxentno, show_sync);
+    FLQ_CLOSE (qctx);
+
+    IF NOT(.status)
+    THEN
+	SIGNAL (MCP__QSYNCHERR, 0, .status)
+    ELSE
+	IF .log THEN SIGNAL (MCP__QSYNCHED, 0);
+
+    SS$_NORMAL
+
+END; ! QCMD_SYNCHRONIZE
+
+%SBTTL 'QCMD_SELECT'
+GLOBAL ROUTINE QCMD_SELECT = 
+BEGIN
+!++
+! FUNCTIONAL DESCRIPTION:
+!
+!   QUEUE SELECT command.
+!
+! RETURNS:  	cond_value, longword (unsigned), write only, by value
+!
+! PROTOTYPE:
+!
+!   QCMD_SELECT
+!
+! IMPLICIT INPUTS:  None.
+!
+! IMPLICIT OUTPUTS: None.
+!
+! COMPLETION CODES:
+!
+!   SS$_NORMAL:	    	normal successful completion.
+!
+! SIDE EFFECTS:
+!
+!   None.
+!--
+    LOCAL
+    	str	: $BBLOCK [DSC$K_S_BLN],
+    	flqlst	: _FLQSRCHLST_DECL (ITEMS=6),
+    	qent	: QENTDEF,
+	didmap	: REF $BBLOCK,	!Bitmap for entries shown
+    	outrtn,
+    	full, waiting, in_progress, brief, held,
+	display_count,
+    	message_count,
+    	entnum,
+    	ctx, did1,
+    	qctx, qctx2,
+    	status, rmsstv;
+
+    select_count = did1 = 0;
+    INIT_DYNDESC (str);
+
+    status = FLQ_OPEN (FLQ__RDONLY, qctx, que_file, rmsstv);
+    IF NOT .status THEN
+    BEGIN
+    	SIGNAL (MCP__QOPENERR, 0, .status, .rmsstv);
+    	RETURN SS$_NORMAL;
+    END;
+
+    waiting = CLI$PRESENT (waiting_d) EQL CLI$_PRESENT;
+    in_progress = CLI$PRESENT (in_progress_d) EQL CLI$_PRESENT;
+    held = CLI$PRESENT (held_d) EQL CLI$_PRESENT;
+
+    BEGIN
+	LOCAL
+	    flqlst_ptr	: REF $BBLOCK,
+	    before_date	: $BBLOCK [8],
+	    since_date	: $BBLOCK [8],
+	    have_since,
+	    have_before;
+
+	flqlst_ptr = flqlst;
+	flqlst_ptr [FLQS_L_CODE] = 0;		!By default, no item list (all)
+
+	IF .waiting
+	THEN
+	    BEGIN
+	    flqlst_ptr [FLQS_L_CODE] = FLQS__STATUS;
+	    flqlst_ptr [FLQS_L_COUNT] = 1;
+	    flqlst_ptr [FLQS_L_STATUS] = FLQ_K_STRDY;
+	    END;
+
+	IF .in_progress
+	THEN
+	    BEGIN
+	    flqlst_ptr [FLQS_L_CODE] = FLQS__STATUS;
+	    flqlst_ptr [FLQS_L_COUNT] = 1;
+	    flqlst_ptr [FLQS_L_STATUS] = FLQ_K_STINP;
+	    END
+	ELSE IF .held
+	THEN
+	    BEGIN
+    	    BIND statptr = flqlst_ptr [FLQS_L_STATUS] : BLOCK [,BYTE];
+	    flqlst_ptr [FLQS_L_CODE] = FLQS__STATUS;
+	    flqlst_ptr [FLQS_L_COUNT] = 2;
+    	    statptr [0,0,8,0] = FLQ_K_STUHO;
+    	    statptr [1,0,8,0] = FLQ_K_STOPH;
+	    END;
+
+	IF (.in_progress OR .waiting OR .held)
+	THEN
+	    flqlst_ptr = .flqlst_ptr + FLQS_S_SRCHITM;
+
+	flqlst_ptr [FLQS_L_CODE] = 0;		!Assume no more items
+	flqlst_ptr [FLQS_L_AFTER] = 0;
+	flqlst_ptr [FLQS_L_BEFORE] = 0;
+
+	IF CLI$PRESENT(dest_d)
+	THEN
+	    BEGIN
+    	    IF CLI$PRESENT (dest_hq_d) EQL CLI$_PRESENT THEN
+    	    BEGIN
+    	    	LOCAL hnum;
+    	    	CLI$GET_VALUE (dest_hq_d, str);
+    	    	LIB$CVT_DTB (.str [DSC$W_LENGTH], .str [DSC$A_POINTER], hnum);
+    	    	flqlst_ptr [FLQS_L_DSTPRC] = (IF .hnum LSSU 1 OR .hnum GTRU FLQ_K_MX_HOLDQ_MAX THEN -1
+    	    	    	    	    	      ELSE FLQ_K_MX_HOLDQ_BASE + (.hnum-1));
+    	    END
+    	    ELSE
+    	    BEGIN
+	    	CLI$GET_VALUE (dest_d, str);
+	    	flqlst_ptr [FLQS_L_DSTPRC] = (
+		    SELECTONE CH$RCHAR(.str [DSC$A_POINTER]) OF
+		    	SET
+		    	[%C'R'] : FLQ_K_MX_ROUTER;
+		    	[%C'L'] : FLQ_K_MX_LOCAL;
+		    	[%C'M'] : FLQ_K_MX_MLF;
+		    	[%C'S'] :
+			    (IF (CH$RCHAR(.str [DSC$A_POINTER] + 1) EQLU %C'M')
+			    THEN FLQ_K_MX_SMTP
+			    ELSE FLQ_K_MX_SITE);
+		    	[%C'D'] : FLQ_K_MX_DNSMTP;
+    	    	    	[%C'H'] :
+    	    	    	    IF .str [DSC$W_LENGTH] GEQ 5 THEN
+    	    	    	    	FLQ_K_MX_HOLDQ_BASE + (CH$RCHAR (.str [DSC$A_POINTER]+4) - %C'1')
+    	    	    	    ELSE FLQ_K_MX_HOLDQ_BASE;
+		    	[OTHERWISE] : -1;
+		    	TES);
+    	    END;
+	    IF (.flqlst_ptr [FLQS_L_DSTPRC] NEQU -1)
+	    THEN
+		BEGIN
+		flqlst_ptr [FLQS_L_CODE] = FLQS__DSTPRC;
+		flqlst_ptr [FLQS_L_COUNT] = 1;
+		flqlst_ptr = .flqlst_ptr + FLQS_S_SRCHITM;
+		flqlst_ptr [FLQS_L_CODE] = 0;		!Assume no more items
+		flqlst_ptr [FLQS_L_AFTER] = 0;
+		flqlst_ptr [FLQS_L_BEFORE] = 0;
+		END;
+	    END;
+
+	IF CLI$PRESENT(origin_d)
+	THEN
+	    BEGIN
+	    CLI$GET_VALUE (origin_d, str);
+	    flqlst_ptr [FLQS_L_ORIGIN] = (
+		SELECTONE CH$RCHAR(.str [DSC$A_POINTER]) OF
+		    SET
+		    [%C'L'] : MX_K_ORG_LOCAL;
+		    [%C'M'] : MX_K_ORG_VMSMAIL;
+		    [%C'S'] :
+			(IF (CH$RCHAR(.str [DSC$A_POINTER] + 1) EQLU %C'M')
+			THEN MX_K_ORG_SMTP
+			ELSE MX_K_ORG_SITE);
+		    [%C'D'] : MX_K_ORG_DNSMTP;
+		    [OTHERWISE] : -1;
+		    TES);
+	    IF (.flqlst_ptr [FLQS_L_ORIGIN] NEQU -1)
+	    THEN
+		BEGIN
+		flqlst_ptr [FLQS_L_CODE] = FLQS__ORIGIN;
+		flqlst_ptr [FLQS_L_COUNT] = 1;
+		flqlst_ptr = .flqlst_ptr + FLQS_S_SRCHITM;
+		flqlst_ptr [FLQS_L_CODE] = 0;		!Assume no more items
+		flqlst_ptr [FLQS_L_AFTER] = 0;
+		flqlst_ptr [FLQS_L_BEFORE] = 0;
+		END;
+	    END;
+
+
+	have_before = CLI$PRESENT(before_d);
+	have_since  = CLI$PRESENT(since_d);
+
+	IF (.have_before OR .have_since)
+	THEN
+	    flqlst_ptr [FLQS_L_CODE] = (
+		IF (CLI$PRESENT(created_d) EQLU CLI$_PRESENT) THEN
+		    FLQS__CREDT		!Check for /CREATED
+		ELSE IF (CLI$PRESENT(modified_d) EQLU CLI$_PRESENT) THEN
+		    FLQS__MODDT
+		ELSE IF (CLI$PRESENT(expire_d) EQLU CLI$_PRESENT) THEN
+		    FLQS__EXPDT
+		ELSE IF (CLI$PRESENT(delay_d) EQLU CLI$_PRESENT) THEN
+		    FLQS__DLYDT
+		ELSE
+		    FLQS__CREDT);	!Default is /CREATED
+
+	IF (.have_before)
+	THEN
+	    BEGIN
+	    CLI$GET_VALUE (before_d, str);
+	    $BINTIM (TIMBUF = str, TIMADR = before_date);
+	    flqlst_ptr [FLQS_L_BEFORE] = before_date;
+	    END;
+
+	IF (.have_since)
+	THEN
+	    BEGIN
+	    CLI$GET_VALUE (since_d, str);
+	    $BINTIM (TIMBUF = str, TIMADR = since_date);
+	    flqlst_ptr [FLQS_L_AFTER] = since_date;
+	    END;
+
+	flqlst_ptr = .flqlst_ptr + FLQS_S_SRCHITM;
+	flqlst_ptr [FLQS_L_CODE] = 0;		!No more items
+
+    	ctx = 0;
+    	WHILE FLQ_SEARCH (qctx, flqlst, ctx, qent) DO
+    	BEGIN
+    	    IF .select_count GEQU .select_list_size THEN
+    	    BEGIN
+    	    	LOCAL newsize, newptr : REF VECTOR [,LONG];
+    	    	newsize = .select_list_size * 2;
+    	    	IF .newsize EQLU 0 THEN newsize = 128;
+    	    	status = LIB$GET_VM (%REF (.newsize * 4), newptr);
+    	    	IF NOT .status THEN
+    	    	BEGIN
+    	    	    SIGNAL (MCP__QSELERR, 0, .status);
+    	    	    select_count = 0;
+    	    	    EXITLOOP;
+    	    	END;
+    	    	CH$MOVE (.select_list_size * 4, .select_list, .newptr);
+    	    	LIB$FREE_VM (%REF (.select_list_size * 4), select_list);
+    	    	select_list = .newptr;
+    	    	select_list_size = .newsize;
+    	    END;
+    	    select_list [.select_count] = .qent [QENT_L_ENTNUM];
+    	    select_count = .select_count + 1;
+    	END;
+    END;
+
+    FLQ_CLOSE (qctx);
+
+    SIGNAL (MCP__QSELECTED, 2, .select_count, (IF .select_count EQLU 1 THEN %ASCID'y' ELSE %ASCID'ies'));
+
+    FREE_STRINGS (STR);
+
+    SS$_NORMAL
+
+END; ! QCMD_SELECT
+
+%SBTTL 'QCMD_SHOW'
+GLOBAL ROUTINE QCMD_SHOW = 
+BEGIN
+!++
+! FUNCTIONAL DESCRIPTION:
+!
+!   QUEUE SHOW command.
+!
+! RETURNS:  	cond_value, longword (unsigned), write only, by value
+!
+! PROTOTYPE:
+!
+!   QCMD_SHOW
+!
+! IMPLICIT INPUTS:  None.
+!
+! IMPLICIT OUTPUTS: None.
+!
+! COMPLETION CODES:
+!
+!   SS$_NORMAL:	    	normal successful completion.
+!
+! SIDE EFFECTS:
+!
+!   None.
+!--
+    LOCAL
+    	str	: $BBLOCK [DSC$K_S_BLN],
+    	flqlst	: _FLQSRCHLST_DECL (ITEMS=6),
+    	qent	: QENTDEF,
+	didmap	: REF $BBLOCK,	!Bitmap for entries shown
+    	outrtn,
+    	full, waiting, all, in_progress, date, brief, held,
+	display_count,
+    	message_count,
+    	entnum,
+    	ctx, did1,
+    	qctx, qctx2,
+    	status, rmsstv;
+
+    display_count = did1 = message_count = 0;
+    INIT_DYNDESC (str);
+    outrtn = LIB$PUT_OUTPUT;
+    IF CLI$PRESENT (output_d) EQL CLI$_PRESENT THEN
+    BEGIN
+    	CLI$GET_VALUE (output_d, STR);
+    	$FAB_INIT (FAB=SHOW_FAB, FNA=.STR [DSC$A_POINTER],
+    	    FNS=MIN (.STR [DSC$W_LENGTH], 255),
+    	    DNM='SYS$DISK:[].DAT', FAC=PUT, FOP=SQO, RAT=CR);
+    	status = $CREATE (FAB=SHOW_FAB);
+    	IF .status THEN
+    	BEGIN
+    	    $RAB_INIT (RAB=SHOW_RAB, FAB=SHOW_FAB, ROP=WBH);
+    	    status = $CONNECT (RAB=SHOW_RAB);
+    	    IF .status THEN OUTRTN = ALT_SHOW_OUTPUT
+    	    ELSE
+    	    BEGIN
+    	    	SIGNAL (MCP__NOOPNOUT, 1, STR, .status, .SHOW_RAB [RAB$L_STV]);
+    	    	SHOW_FAB [FAB$V_TMD] = 1;
+    	    	$CLOSE (FAB=SHOW_FAB);
+    	    	RETURN SS$_NORMAL;
+    	    END
+    	END
+    	ELSE
+    	BEGIN
+    	    SIGNAL (MCP__NOOPNOUT, 1, STR, .status, .SHOW_FAB [FAB$L_STV]);
+    	    RETURN SS$_NORMAL;
+    	END;
+    END
+    ELSE status = SS$_NORMAL;
+
+    status = FLQ_OPEN (FLQ__RDONLY, qctx, que_file, rmsstv);
+    IF NOT .status THEN
+    BEGIN
+    	SIGNAL (MCP__QOPENERR, 0, .status, .rmsstv);
+    	RETURN SS$_NORMAL;
+    END;
+
+    full = CLI$PRESENT (full_d) EQL CLI$_PRESENT;
+    all = CLI$PRESENT (all_d) EQL CLI$_PRESENT;
+    waiting = CLI$PRESENT (waiting_d) EQL CLI$_PRESENT;
+    in_progress = CLI$PRESENT (in_progress_d) EQL CLI$_PRESENT;
+    held = CLI$PRESENT (held_d) EQL CLI$_PRESENT;
+    date = CLI$PRESENT (date_d) EQL CLI$_PRESENT;
+
+    brief = CLI$PRESENT (brief_d);		!Was /BRIEF specified
+
+    IF NOT .brief
+    THEN
+	BEGIN
+	!
+	!  Open it again for searches within the search.
+	!
+	status = FLQ_OPEN (FLQ__RDONLY, qctx2, que_file, rmsstv);
+	IF NOT .status
+	THEN
+	    BEGIN
+	    FLQ_CLOSE (qctx);
+	    SIGNAL (MCP__QOPENERR, 0, .status, .rmsstv);
+	    RETURN SS$_NORMAL;
+	    END;
+	END;
+
+    status = LIB$GET_VM_PAGE (%REF((128*2)/8), didmap);
+    CH$FILL(0, 32*512, .didmap);	!Zero out bitmap of shown entries
+
+    IF CLI$PRESENT (%ASCID'SELECTED') EQL CLI$_PRESENT THEN
+    BEGIN
+    	INCR i FROM 0 TO .select_count-1 DO
+    	BEGIN
+    	    entnum = .select_list [.i];
+    	    status = FLQ_READ (qctx, .ENTNUM, QENT);
+    	    IF NOT .status THEN
+    	    	SIGNAL (MCP__QREADERR, 1, .ENTNUM, .status)
+    	    ELSE
+		IF .brief
+		THEN
+		    SHOW_ENTRY_BRIEF (.outrtn, qent, did1, 1, display_count, message_count)
+		ELSE
+		    SHOW_ENTRY (.outrtn, qent, .qctx, .full, 1, .didmap, did1,
+				0, .date, display_count, message_count);
+    	END;
+    END
+    ELSE IF CLI$PRESENT (entnum_d) EQL CLI$_PRESENT THEN
+    BEGIN
+    	WHILE CLI$GET_VALUE (entnum_d, STR) DO
+    	BEGIN
+    	    LIB$CVT_DTB (.STR [DSC$W_LENGTH], .STR [DSC$A_POINTER], ENTNUM);
+    	    status = FLQ_READ (qctx, .ENTNUM, QENT);
+    	    IF NOT .status THEN
+    	    	SIGNAL (MCP__QREADERR, 1, .ENTNUM, .status)
+    	    ELSE
+		IF .brief
+		THEN
+		    SHOW_ENTRY_BRIEF (.outrtn, qent, did1, 1, display_count, message_count)
+		ELSE
+		    SHOW_ENTRY (.outrtn, qent, .qctx, .full, 1, .didmap, did1,
+				0, .date, display_count, message_count);
+    	END;
+    END
+    ELSE
+    BEGIN
+	LOCAL
+	    flqlst_ptr	: REF $BBLOCK,
+	    before_date	: $BBLOCK [8],
+	    since_date	: $BBLOCK [8],
+	    have_since,
+	    have_before;
+
+	flqlst_ptr = flqlst;
+	flqlst_ptr [FLQS_L_CODE] = 0;		!By default, no item list (all)
+
+	IF .waiting
+	THEN
+	    BEGIN
+	    flqlst_ptr [FLQS_L_CODE] = FLQS__STATUS;
+	    flqlst_ptr [FLQS_L_COUNT] = 1;
+	    flqlst_ptr [FLQS_L_STATUS] = FLQ_K_STRDY;
+	    END;
+
+	IF .in_progress
+	THEN
+	    BEGIN
+	    flqlst_ptr [FLQS_L_CODE] = FLQS__STATUS;
+	    flqlst_ptr [FLQS_L_COUNT] = 1;
+	    flqlst_ptr [FLQS_L_STATUS] = FLQ_K_STINP;
+	    END
+	ELSE IF .held
+	THEN
+	    BEGIN
+    	    BIND statptr = flqlst_ptr [FLQS_L_STATUS] : BLOCK [,BYTE];
+	    flqlst_ptr [FLQS_L_CODE] = FLQS__STATUS;
+	    flqlst_ptr [FLQS_L_COUNT] = 2;
+    	    statptr [0,0,8,0] = FLQ_K_STUHO;
+    	    statptr [1,0,8,0] = FLQ_K_STOPH;
+	    END;
+
+	IF (.in_progress OR .waiting OR .held)
+	THEN
+	    flqlst_ptr = .flqlst_ptr + FLQS_S_SRCHITM;
+
+	flqlst_ptr [FLQS_L_CODE] = 0;		!Assume no more items
+	flqlst_ptr [FLQS_L_AFTER] = 0;
+	flqlst_ptr [FLQS_L_BEFORE] = 0;
+
+	IF CLI$PRESENT(dest_d)
+	THEN
+	    BEGIN
+    	    IF CLI$PRESENT (dest_hq_d) EQL CLI$_PRESENT THEN
+    	    BEGIN
+    	    	LOCAL hnum;
+    	    	CLI$GET_VALUE (dest_hq_d, str);
+    	    	LIB$CVT_DTB (.str [DSC$W_LENGTH], .str [DSC$A_POINTER], hnum);
+    	    	flqlst_ptr [FLQS_L_DSTPRC] = (IF .hnum LSSU 1 OR .hnum GTRU FLQ_K_MX_HOLDQ_MAX THEN -1
+    	    	    	    	    	      ELSE FLQ_K_MX_HOLDQ_BASE + (.hnum-1));
+    	    END
+    	    ELSE
+    	    BEGIN
+	    	CLI$GET_VALUE (dest_d, str);
+	    	flqlst_ptr [FLQS_L_DSTPRC] = (
+		    SELECTONE CH$RCHAR(.str [DSC$A_POINTER]) OF
+		    	SET
+		    	[%C'R'] : FLQ_K_MX_ROUTER;
+		    	[%C'L'] : FLQ_K_MX_LOCAL;
+		    	[%C'M'] : FLQ_K_MX_MLF;
+		    	[%C'S'] :
+			    (IF (CH$RCHAR(.str [DSC$A_POINTER] + 1) EQLU %C'M')
+			    THEN FLQ_K_MX_SMTP
+			    ELSE FLQ_K_MX_SITE);
+		    	[%C'D'] : FLQ_K_MX_DNSMTP;
+    	    	    	[%C'H'] :
+    	    	    	    IF .str [DSC$W_LENGTH] GEQ 5 THEN
+    	    	    	    	FLQ_K_MX_HOLDQ_BASE + (CH$RCHAR (.str [DSC$A_POINTER]+4) - %C'1')
+    	    	    	    ELSE FLQ_K_MX_HOLDQ_BASE;
+		    	[OTHERWISE] : -1;
+		    	TES);
+    	    END;
+	    IF (.flqlst_ptr [FLQS_L_DSTPRC] NEQU -1)
+	    THEN
+		BEGIN
+		flqlst_ptr [FLQS_L_CODE] = FLQS__DSTPRC;
+		flqlst_ptr [FLQS_L_COUNT] = 1;
+		flqlst_ptr = .flqlst_ptr + FLQS_S_SRCHITM;
+		flqlst_ptr [FLQS_L_CODE] = 0;		!Assume no more items
+		flqlst_ptr [FLQS_L_AFTER] = 0;
+		flqlst_ptr [FLQS_L_BEFORE] = 0;
+		END;
+	    END;
+
+	IF CLI$PRESENT(origin_d)
+	THEN
+	    BEGIN
+	    CLI$GET_VALUE (origin_d, str);
+	    flqlst_ptr [FLQS_L_ORIGIN] = (
+		SELECTONE CH$RCHAR(.str [DSC$A_POINTER]) OF
+		    SET
+		    [%C'L'] : MX_K_ORG_LOCAL;
+		    [%C'M'] : MX_K_ORG_VMSMAIL;
+		    [%C'S'] :
+			(IF (CH$RCHAR(.str [DSC$A_POINTER] + 1) EQLU %C'M')
+			THEN MX_K_ORG_SMTP
+			ELSE MX_K_ORG_SITE);
+		    [%C'D'] : MX_K_ORG_DNSMTP;
+		    [OTHERWISE] : -1;
+		    TES);
+	    IF (.flqlst_ptr [FLQS_L_ORIGIN] NEQU -1)
+	    THEN
+		BEGIN
+		flqlst_ptr [FLQS_L_CODE] = FLQS__ORIGIN;
+		flqlst_ptr [FLQS_L_COUNT] = 1;
+		flqlst_ptr = .flqlst_ptr + FLQS_S_SRCHITM;
+		flqlst_ptr [FLQS_L_CODE] = 0;		!Assume no more items
+		flqlst_ptr [FLQS_L_AFTER] = 0;
+		flqlst_ptr [FLQS_L_BEFORE] = 0;
+		END;
+	    END;
+
+
+	have_before = CLI$PRESENT(before_d);
+	have_since  = CLI$PRESENT(since_d);
+
+	IF (.have_before OR .have_since)
+	THEN
+	    flqlst_ptr [FLQS_L_CODE] = (
+		IF (CLI$PRESENT(created_d) EQLU CLI$_PRESENT) THEN
+		    FLQS__CREDT		!Check for /CREATED
+		ELSE IF (CLI$PRESENT(modified_d) EQLU CLI$_PRESENT) THEN
+		    FLQS__MODDT
+		ELSE IF (CLI$PRESENT(expire_d) EQLU CLI$_PRESENT) THEN
+		    FLQS__EXPDT
+		ELSE IF (CLI$PRESENT(delay_d) EQLU CLI$_PRESENT) THEN
+		    FLQS__DLYDT
+		ELSE
+		    FLQS__CREDT);	!Default is /CREATED
+
+	IF (.have_before)
+	THEN
+	    BEGIN
+	    CLI$GET_VALUE (before_d, str);
+	    $BINTIM (TIMBUF = str, TIMADR = before_date);
+	    flqlst_ptr [FLQS_L_BEFORE] = before_date;
+	    END;
+
+	IF (.have_since)
+	THEN
+	    BEGIN
+	    CLI$GET_VALUE (since_d, str);
+	    $BINTIM (TIMBUF = str, TIMADR = since_date);
+	    flqlst_ptr [FLQS_L_AFTER] = since_date;
+	    END;
+
+	flqlst_ptr = .flqlst_ptr + FLQS_S_SRCHITM;
+	flqlst_ptr [FLQS_L_CODE] = 0;		!No more items
+
+    	ctx = 0;
+    	WHILE FLQ_SEARCH (qctx, flqlst, ctx, qent) DO
+	    IF .brief
+	    THEN
+		SHOW_ENTRY_BRIEF (.outrtn, qent, did1, .all OR .held, display_count, message_count)
+	    ELSE
+		SHOW_ENTRY (.outrtn, qent, .qctx2, .full, .all OR .held, .didmap,
+				did1, 1, .date, display_count, message_count);
+    END;
+
+    LIB$FREE_VM_PAGE (%REF((128*2)/8), didmap);
+    FLQ_CLOSE (qctx);
+    IF NOT .brief THEN FLQ_CLOSE (qctx2);
+
+    IF (.display_count NEQU 0) AND (.outrtn NEQA ALT_SHOW_OUTPUT)
+    THEN
+	(.outrtn) (null_d);
+
+    SIGNAL (MCP__QENTRIES, 2, .display_count, .message_count);
+
+    IF .OUTRTN EQLA ALT_SHOW_OUTPUT THEN
+    BEGIN
+    	$DISCONNECT (RAB=SHOW_RAB);
+    	$CLOSE (FAB=SHOW_FAB);
+    END;
+
+    FREE_STRINGS (STR);
+
+    SS$_NORMAL
+
+END; ! QCMD_SHOW
+
+%SBTTL 'ALT_SHOW_OUTPUT'
+ROUTINE ALT_SHOW_OUTPUT (STR_A) =
+BEGIN
+!++
+! FUNCTIONAL DESCRIPTION:
+!
+!   Alternate output routine for SHOW commands.  Used only when
+!   output is redirected via the /OUTPUT qualifier.
+!
+! RETURNS:  	cond_value, longword (unsigned), write only, by value
+!
+! PROTOTYPE:
+!
+!   ALT_SHOW_OUTPUT
+!
+! IMPLICIT INPUTS:  None.
+!
+! IMPLICIT OUTPUTS: None.
+!
+! COMPLETION CODES:
+!
+!   RMS$_NORMAL:    	normal successful completion.
+!
+! SIDE EFFECTS:
+!
+!   None.
+!--
+    BIND
+    	STR = .STR_A : BLOCK [,BYTE];
+
+    SHOW_RAB [RAB$L_RBF] = .STR [DSC$A_POINTER];
+    SHOW_RAB [RAB$W_RSZ] = .STR [DSC$W_LENGTH];
+
+    $PUT (RAB=SHOW_RAB)
+
+END; ! ALT_SHOW_OUTPUT
+
+%SBTTL 'SHOW_ENTRY'
+ROUTINE SHOW_ENTRY (OUTRTN, QENT_A, qctx, FULL, ALL, DIDMAP_A, DID1_A, WILD,
+	date, count_a, msgcount_a) : NOVALUE = 
+BEGIN
+!++
+! FUNCTIONAL DESCRIPTION:
+!
+!   Displays a queue entry (or collection of them).
+!
+! RETURNS:  	cond_value, longword (unsigned), write only, by value
+!
+! PROTOTYPE:
+!
+!   SHOW_ENTRY  outrtn, qent, qctx, full, all, didq
+!
+! IMPLICIT INPUTS:  None.
+!
+! IMPLICIT OUTPUTS: None.
+!
+! COMPLETION CODES:
+!
+!   SS$_NORMAL:	    	normal successful completion.
+!
+! SIDE EFFECTS:
+!
+!   None.
+!--
+    BIND
+    	QENT	= .QENT_A   	: QENTDEF,
+    	didmap	= .DIDMAP_A   	: BITVECTOR[128*1024],
+    	DID1	= .DID1_A,
+	count	= .count_a,
+    	msgcount = .msgcount_a;
+
+    LOCAL
+    	envl	: ENVLDEF,
+    	fwdenv	: ENVLDEF,
+    	QE  	: REF QENTDEF,
+    	QE2 	: QENTDEF,
+    	QE3 	: QENTDEF,
+    	STR 	: BLOCK [DSC$K_S_BLN,BYTE],
+    	STR2	: BLOCK [DSC$K_S_BLN,BYTE],
+    	RCPT	: REF RCPTDEF,
+    	DID_FWD,
+    	RCPNO,
+    	SRC, STAT,
+    	status;
+
+    INIT_DYNDESC (STR, STR2);
+
+    !
+    !  If there's a BACKREF, then skip this one---it'll be handled later
+    !  when the router entry is found.  This keeps our left-hand numbers
+    !  in sequential order in the SHOW QUEUE display.
+    !
+!    IF (.wild AND (.QENT [MXQ_L_BACKREF] NEQ 0)) THEN RETURN;
+
+    IF .QENT [MXQ_L_BACKREF] NEQ 0 THEN
+    BEGIN
+    	status = FLQ_READ (qctx, .QENT [MXQ_L_BACKREF], QE2);
+    	IF NOT .status THEN
+    	BEGIN
+    	    SHOW_ORPHAN (.OUTRTN, QENT, .FULL);
+    	    count = .count + 1;
+    	    RETURN;
+    	END;
+    	QE = QE2;
+    END
+    ELSE QE = QENT;
+
+    IF (.didmap [.qe [QENT_L_ENTNUM] - 1])	!If this entry has already
+    THEN					!... been shown, then just
+	RETURN;					!... return
+
+    didmap [.qe [QENT_L_ENTNUM] - 1] = 1;	!Set it in the bitmap
+
+    IF NOT .ALL THEN
+    	IF .QE [QENT_L_STATUS] NEQ FLQ_K_STRDY AND
+    	    .QE [QENT_L_STATUS] NEQ FLQ_K_STINP THEN RETURN;
+
+    count = .count + 1;
+    msgcount = .msgcount + 1;
+
+    IF .FULL THEN
+    BEGIN
+    	LOCAL origin;
+    	BIND_ENVL_FIELDS (envl);
+    	(.OUTRTN) (null_d);
+    	CH$FILL (%CHAR (0), ENVL_S_ENVLDEF, envl);
+    	INIT_QUEUE (envl [ENVL_Q_RCPTQUE]);
+    	status = READ_ENVELOPE (qctx, .QE, %ASCID'SRC_INFO', envl);
+    	IF .status AND .envl [ENVL_V_ORIGIN] THEN
+    	    origin = .envl [ENVL_L_ORIGIN]
+    	ELSE
+    	    origin = .qe [QENT_L_ORIGIN];
+
+    	 IF (INCR I FROM 0 TO SRCNAM_COUNT-1 DO
+    	    	IF .SRCVAL [.I] EQL .origin THEN
+    	    	BEGIN
+    	    	    STR$COPY_DX (STR2, .SRCNAM [.I]);
+    	    	    EXITLOOP .I;
+    	    	END) LSS 0 THEN LIB$SYS_FAO (%ASCID'code=!UL', 0, STR2, .origin);
+    	 LIB$SYS_FAO (%ASCID'Entry: !UL, Origin: [!AS] !AD', 0, STR,
+    	    	    	    .QE [QENT_L_ENTNUM], STR2,
+    	    	    	    (IF .fromadr EQLA 0 THEN 0 ELSE .fromadr [TXT_W_LEN]),
+    	    	    	    (IF .fromadr EQLA 0 THEN .str2 [DSC$A_POINTER] ELSE fromadr [TXT_T_TEXT]));
+    	(.OUTRTN) (STR);
+
+
+    	IF (INCR I FROM 0 TO STANAM_COUNT-1 DO
+    	    IF .STAVAL [.I] EQL .QE [QENT_L_STATUS] THEN
+    	    BEGIN
+    	    	LIB$SYS_FAO (%ASCID'  Status: !AS, size: !UL byte!%S, recipients: !UL', 0, STR,
+    	    	    .STANAM [.I], .QE [QENT_L_SIZE] / MAXU (.envl [ENVL_L_RCPTCOUNT], 1),
+    	    	    .envl [ENVL_L_RCPTCOUNT]);
+    	    	EXITLOOP .I;
+    	    END) LSS 0 THEN LIB$SYS_FAO (%ASCID %STRING ('  Status: code=!UL,',
+    	    	    ' size: !UL byte!%S, recipients: !UL'), 0, STR, .QE [QENT_L_STATUS],
+    	    	    .QE [QENT_L_SIZE] / MAXU (.envl [ENVL_L_RCPTCOUNT], 1),
+    	    	    .envl [ENVL_L_RCPTCOUNT]);
+    	IF .QE [QENT_V_DELAY] AND .QE [QENT_L_STATUS] EQL FLQ_K_STRDY THEN
+    	BEGIN
+    	    LIB$SYS_FAO (%ASCID', waiting until !%D', 0,
+    	    	    	    STR2, QE [QENT_Q_DLYDT]);
+    	    STR$APPEND (STR, STR2);
+    	END;
+    	(.OUTRTN) (STR);
+
+    	LIB$SYS_FAO (%ASCID'  Created: !%D, expires !%D', 0, STR,
+    	    	QE [QENT_Q_CREDT], QE [QENT_Q_EXPDT]);
+    	(.OUTRTN) (STR);
+    	LIB$SYS_FAO (%ASCID'  Last modified !%D', 0, STR, QE [QENT_Q_MODDT]);
+    	(.OUTRTN) (STR);
+
+    	DID_FWD = 0;
+
+    	INCR I FROM 0 TO FWDREF_COUNT+MX_K_HOLDQ_MAX-1 DO
+    	BEGIN
+    	    LOCAL
+    	    	offset,
+    	    	fnptr	: REF BLOCK [,BYTE],
+    	    	inptr	: REF BLOCK [,BYTE],
+    	    	fndsc	: BLOCK [DSC$K_S_BLN,BYTE],
+    	    	indsc	: BLOCK [DSC$K_S_BLN,BYTE],
+    	    	fnbuf	: VECTOR [16,BYTE],
+    	    	inbuf	: VECTOR [16,BYTE];
+    	    	
+    	    offset = (IF .i LSSU FWDREF_COUNT-1 THEN .fwdref [.i]
+    	    	     ELSE BYTENUM (MXQ_L_HOLDQREF_BASE)+4*(.i-MX_K_PATH_HOLDQ_BASE));
+    	    IF .qe [.offset,0,32,0] NEQ 0 THEN
+    	    BEGIN
+    	    	BIND
+    	    	    EN = QE [.offset,0,32,0] : LONG;
+    	    	LOCAL
+    	    	    envstatus;
+
+    	    	IF .i LSSU FWDREF_COUNT-1 THEN
+    	    	BEGIN
+    	    	    fnptr = .fwdnam [.i];
+    	    	    inptr = .infnam [.i];
+    	    	END
+    	    	ELSE
+    	    	BEGIN
+    	    	    INIT_SDESC (fndsc, %ALLOCATION (fnbuf), fnbuf);
+    	    	    $FAO (.fwdnam [FWDREF_COUNT-1], fndsc, fndsc,
+    	    	    	  .i - FWDREF_COUNT + 1);
+    	    	    fnptr = fndsc;
+    	    	    INIT_SDESC (indsc, %ALLOCATION (inbuf), inbuf);
+    	    	    $FAO (.infnam [FWDREF_COUNT-1], indsc, indsc,
+    	    	    	  .i - FWDREF_COUNT + 1);
+    	    	    inptr = indsc;
+    	    	END;
+    	    	DID_FWD = 1;
+    	    	CH$FILL (%CHAR (0), ENVL_S_ENVLDEF, fwdenv);
+    	    	INIT_QUEUE (fwdenv [ENVL_Q_RCPTQUE]);
+    	    	status = FLQ_READ (qctx, .EN, QE3);
+    	    	IF .status THEN
+    	    	    envstatus = READ_ENVELOPE (qctx, QE3, .inptr, fwdenv)
+    	    	ELSE
+    	    	    envstatus = 0;
+    	    	IF .status THEN
+    	    	BEGIN
+    	    	    LOCAL msgsize;
+    	    	    msgsize = .qe3 [QENT_L_SIZE] / MAXU (.fwdenv [ENVL_L_RCPTCOUNT], 1);
+    	    	    IF (INCR J FROM 0 TO STANAM_COUNT-1 DO
+    	    	    	IF .STAVAL [.J] EQL .QE3 [QENT_L_STATUS] THEN
+    	    	    	BEGIN
+    	    	    	    LIB$SYS_FAO (%ASCID %STRING ('  !AS entry #!UL,',
+    	    	    	    	' status: !AS, size: !UL byte!%S, recipients: !UL'), 0, STR,
+    	    	    	    	.fnptr, .QE3 [QENT_L_ENTNUM],
+    	    	    	    	.STANAM [.J], .msgsize, (IF .envstatus THEN .fwdenv [ENVL_L_RCPTCOUNT] ELSE 0));
+    	    	    	    EXITLOOP .J;
+    	       	    	END) LSS 0 THEN LIB$SYS_FAO (%ASCID
+    	    	    	    	%STRING ('  !AS entry #!UL, status: code=!UL',
+    	    	    	    	', size: !UL byte!%S, recipients: !UL'),
+    	    	    	    	0, STR, .fnptr, .QE3 [QENT_L_ENTNUM],
+    	    	    	    	.QE3 [QENT_L_STATUS], .msgsize,
+    	    	    	    	(IF .envstatus THEN .fwdenv [ENVL_L_RCPTCOUNT] ELSE 0));
+    	    	    IF .QE3 [QENT_V_DELAY] AND .QE3 [QENT_L_STATUS]
+    	    	    	    EQL FLQ_K_STRDY THEN
+    	    	    BEGIN
+    	    	    	LIB$SYS_FAO (%ASCID', waiting for retry until !%D', 0,
+    	    	    	    	STR2, QE3 [QENT_Q_DLYDT]);
+    	    	    	STR$APPEND (STR, STR2);
+    	    	    END;
+    	    	    (.OUTRTN) (STR);
+    	    	    LIB$SYS_FAO (%ASCID'    Created: !%D, expires !%D', 0, STR,
+    	    	    	QE3 [QENT_Q_CREDT], QE3 [QENT_Q_EXPDT]);
+    	    	    (.OUTRTN) (STR);
+    	    	    LIB$SYS_FAO (%ASCID'    Last modified !%D', 0, STR,
+    	    	    	QE3 [QENT_Q_MODDT]);
+    	    	    (.OUTRTN) (STR);
+    	    	    IF .envstatus THEN
+    	    	    BEGIN
+    	    	    	RCPNO = 0;
+    	    	    	WHILE NOT REMQUE_HEAD (fwdenv [ENVL_Q_RCPTQUE], RCPT) DO
+    	    	    	BEGIN
+    	    	    	    BIND
+    	    	    	    	Xaddr = RCPT [RCPT_A_ADDR]  : REF TXTDEF,
+    	    	    	    	Xrte  = RCPT [RCPT_A_ROUTE] : REF TXTDEF;
+    	    	    	    RCPNO = .RCPNO + 1;
+    	    	    	    LIB$SYS_FAO (%ASCID %STRING ('      Recipient #!UL:',
+    	    	    	    	' !AD'), 0, STR, .RCPNO, .Xaddr [TXT_W_LEN], Xaddr [TXT_T_TEXT]);
+    	    	    	    IF .Xrte NEQA 0 THEN
+    	    	    	    BEGIN
+    	    	    	    	LOCAL DSC : BLOCK [DSC$K_S_BLN,BYTE];
+    	    	    	    	INIT_SDESC (DSC, .Xrte [TXT_W_LEN], Xrte [TXT_T_TEXT]);
+    	    	    	    	STR$APPEND (STR, %ASCID', Route=');
+    	    	    	    	STR$APPEND (STR, DSC);
+    	    	    	    END;
+    	    	    	    (.OUTRTN) (STR);
+    	    	    	    FREE_STRINGS (STR);
+    	    	    	    IF .RCPT [RCPT_W_CNT1] GTR 0 THEN
+    	    	    	    BEGIN
+    	    	    	    	LIB$SYS_FAO (%ASCID'      Error count=!UL',
+    	    	    	    	    0, STR2, .RCPT [RCPT_W_CNT1]);
+    	    	    	    	STR$APPEND (STR, STR2);
+    	    	    	    END;
+    	    	    	    IF .RCPT [RCPT_W_CNT2] GTR 0 THEN
+    	    	    	    BEGIN
+    	    	    	    	IF .STR [DSC$W_LENGTH] EQL 0 THEN
+    	    	    	    	    LIB$SYS_FAO (%ASCID'      DNS errors=!UL',
+    	    	    	    	    	0, STR, .RCPT [RCPT_W_CNT2])
+    	    	    	    	ELSE
+    	    	    	    	BEGIN
+    	    	    	    	    LIB$SYS_FAO (%ASCID', DNS errors=!UL',
+    	    	    	    	    	0, STR2, .RCPT [RCPT_W_CNT2]);
+    	    	    	    	    STR$APPEND (STR, STR2);
+    	    	    	    	END;
+    	    	    	    END;
+    	    	    	    IF .STR [DSC$W_LENGTH] GTR 0 THEN
+    	    	    	    BEGIN
+    	    	    	    	LOCAL
+    	    	    	    	    MSGDSC  : BLOCK [DSC$K_S_BLN,BYTE],
+    	    	    	    	    MSGBUF  : VECTOR [1024,BYTE];
+    	    	    	    	(.OUTRTN) (STR);
+    	    	    	    	INIT_SDESC (MSGDSC, 1024, MSGBUF);
+    	    	    	    	$GETMSG (MSGID=.RCPT [RCPT_L_LASTERR],
+    	    	    	    	    MSGLEN=MSGDSC [DSC$W_LENGTH],
+    	    	    	    	    BUFADR=MSGDSC, FLAGS=15);
+    	    	    	    	STR$CONCAT (STR, %ASCID'      Last error: ',
+    	    	    	    	    MSGDSC);
+    	    	    	    	(.OUTRTN) (STR);
+    	    	    	    END;
+    	    	    	    MEM_FREERCPT (RCPT);
+    	    	    	END;
+    	    	    	DISPOSE_ENVELOPE (fwdenv);
+    	    	    END
+    	    	    ELSE
+    	    	    BEGIN
+    	    	    	LIB$SYS_FAO (%ASCID'      [no !AS file for this entry]',
+    	    	    	    0, STR, .inptr);
+    	    	    	(.OUTRTN) (STR);
+    	    	    END;
+    	    	END;
+    	    END;
+    	END;
+
+    	IF NOT .DID_FWD THEN
+    	BEGIN
+    	    RCPNO = 0;
+    	    WHILE NOT REMQUE_HEAD (envl [ENVL_Q_RCPTQUE], RCPT) DO
+    	    BEGIN
+    	    	BIND
+    	    	    Xaddr = RCPT [RCPT_A_ADDR]  : REF TXTDEF;
+
+    	    	RCPNO = .RCPNO + 1;
+    	    	LIB$SYS_FAO (%ASCID'    Recipient #!UL: !AD', 0, STR,
+    	    	    	.RCPNO,  .Xaddr [TXT_W_LEN], Xaddr [TXT_T_TEXT]);
+    	    	(.OUTRTN) (STR);
+    	    	MEM_FREERCPT (RCPT);
+    	    END;
+    	END;
+
+    	DISPOSE_ENVELOPE (envl);
+
+    END
+    ELSE
+    BEGIN
+    	IF NOT .DID1 THEN
+    	BEGIN
+	    IF (.outrtn NEQA ALT_SHOW_OUTPUT)
+	    THEN
+		(.outrtn) (null_d);
+    	    (.OUTRTN) (%ASCID'Entry# Status EntSize Source  Agent  Entry# Status EntSize');
+    	    (.OUTRTN) (%ASCID'------ ------ ------- ------ ------- ------ ------ -------');
+    	    DID1 = 1;
+    	END;
+	src = (INCR i FROM 0 TO SRCNAM_COUNT-1 DO
+    	    	IF .srcval [.i] EQLU .qent [QENT_L_ORIGIN] THEN EXITLOOP .i);
+    	STAT = (INCR I FROM 0 TO STANAM_COUNT-1 DO
+    	    IF .STAVAL [.I] EQL .QE [QENT_L_STATUS] THEN EXITLOOP .I);
+    	IF .qe [qent_l_size] GEQU 100000 THEN
+    	    LIB$SYS_FAO (%ASCID'!6UL !6AS !6ULK !6AS !AD', 0, STR,
+    	    	.QE [QENT_L_ENTNUM], (IF .STAT LSS 0 THEN %ASCID'unknwn' ELSE
+    	    	.STANM2 [.STAT]), .QE [QENT_L_SIZE] / 1024,
+    	    	(IF .SRC LSS 0 THEN %ASCID'unknwn' ELSE
+    	    	.SRCNM2 [.SRC]),
+		(IF (.qent [QENT_W_ORGADR] GTRU 50)
+		    THEN 50 ELSE .qent [QENT_W_ORGADR]), qent [QENT_T_ORGADR])
+    	ELSE
+    	    LIB$SYS_FAO (%ASCID'!6UL !6AS !7UL !6AS !AD', 0, STR,
+    	    	.QE [QENT_L_ENTNUM], (IF .STAT LSS 0 THEN %ASCID'unknwn' ELSE
+    	    	.STANM2 [.STAT]), .QE [QENT_L_SIZE],
+    	    	(IF .SRC LSS 0 THEN %ASCID'unknwn' ELSE
+    	    	.SRCNM2 [.SRC]),
+		(IF (.qent [QENT_W_ORGADR] GTRU 50)
+		    THEN 50 ELSE .qent [QENT_W_ORGADR]), qent [QENT_T_ORGADR]);
+    	(.OUTRTN) (STR);
+
+    	IF .QE [QENT_V_DELAY] AND .QE [QENT_L_STATUS] EQL FLQ_K_STRDY THEN
+    	BEGIN
+    	    LIB$SYS_FAO (%ASCID'       (Waiting until !%D)', 0,
+    	    	    	    STR, QE [QENT_Q_DLYDT]);
+    	    (.OUTRTN) (STR);
+    	END;
+
+	IF (.date)
+	THEN
+	    BEGIN
+	    LIB$SYS_FAO (%ASCID'       Created:  !%D', 0, str,
+			QE [QENT_Q_CREDT]);
+	    (.outrtn) (str);
+	    LIB$SYS_FAO (%ASCID'       Modified: !%D', 0, str,
+			QE [QENT_Q_MODDT]);
+	    (.outrtn) (str);
+	    END;
+
+    	INCR I FROM 0 TO FWDREF_COUNT+MX_K_HOLDQ_MAX-1 DO
+    	BEGIN
+    	    LOCAL
+    	    	offset,
+    	    	fnptr	: REF BLOCK [,BYTE],
+    	    	fndsc	: BLOCK [DSC$K_S_BLN,BYTE],
+    	    	fnbuf	: VECTOR [16,BYTE];
+    	    	
+    	    offset = (IF .i LSSU FWDREF_COUNT-1 THEN .fwdref [.i]
+    	    	     ELSE BYTENUM (MXQ_L_HOLDQREF_BASE)+4*(.i-MX_K_PATH_HOLDQ_BASE));
+    	    IF .qe [.offset,0,32,0] NEQ 0 THEN
+    	    BEGIN
+    	    	BIND
+    	    	    EN = QE [.offset,0,32,0] : LONG;
+
+    	    	IF .i LSSU FWDREF_COUNT-1 THEN
+    	    	    fnptr = .fwdnm2 [.i]
+    	    	ELSE
+    	    	BEGIN
+    	    	    INIT_SDESC (fndsc, %ALLOCATION (fnbuf), fnbuf);
+    	    	    $FAO (.fwdnm2 [FWDREF_COUNT-1], fndsc, fndsc,
+    	    	    	  .i - FWDREF_COUNT + 1);
+    	    	    fnptr = fndsc;
+    	    	END;
+    	    	status = FLQ_READ (qctx, .EN, QE3);
+    	    	! make sure backref points back to the entry we're viewing
+    	    	IF .status AND .qe3 [MXQ_L_BACKREF] EQLU .qe [QENT_L_ENTNUM] THEN
+    	    	BEGIN
+    	    	    STAT = (INCR J FROM 0 TO STANAM_COUNT-1 DO
+    	    	    	IF .STAVAL [.J] EQL .QE3 [QENT_L_STATUS] THEN
+    	    	    	    EXITLOOP .J);
+    	    	    IF .qe3 [QENT_L_SIZE] GEQU 100000 THEN
+    	    	    	LIB$SYS_FAO (%ASCID'!29<!>!7AS !6UL !6AS !6ULK', 0, STR,
+    	    	    	    .fnptr, .QE3 [QENT_L_ENTNUM],
+    	    	    	    (IF .STAT LSS 0 THEN %ASCID'unknwn' ELSE
+    	    	    	    .STANM2 [.STAT]), .QE3 [QENT_L_SIZE] / 1024)
+    	    	    ELSE
+    	    	    	LIB$SYS_FAO (%ASCID'!29<!>!7AS !6UL !6AS !7UL', 0, STR,
+    	    	    	    .fnptr, .QE3 [QENT_L_ENTNUM],
+    	    	    	    (IF .STAT LSS 0 THEN %ASCID'unknwn' ELSE
+    	    	    	    .STANM2 [.STAT]), .QE3 [QENT_L_SIZE]);
+    	    	    (.OUTRTN) (STR);
+    	    	    IF .QE3 [QENT_V_DELAY] AND .QE3 [QENT_L_STATUS] EQL FLQ_K_STRDY THEN
+    	    	    BEGIN
+    	    	    	LIB$SYS_FAO (%ASCID'!37<!>(waiting until !%D)', 0, STR,
+    	    	    	    QE3 [QENT_Q_DLYDT]);
+            	    	(.OUTRTN) (STR);
+			IF (.date)
+			THEN
+			BEGIN
+			    LIB$SYS_FAO (%ASCID'!37<!>Created:  !%D', 0, str,
+					QE3 [QENT_Q_CREDT]);
+			    (.outrtn) (str);
+			    LIB$SYS_FAO (%ASCID'!37<!>Modified: !%D', 0, str,
+					QE3 [QENT_Q_MODDT]);
+			    (.outrtn) (str);
+			    END;
+    	    	    END;
+    	    	END;
+    	    END;
+    	END;
+    END;
+
+    FREE_STRINGS (STR, STR2);
+
+    SS$_NORMAL
+
+END; ! SHOW_ENTRY
+
+%SBTTL 'SHOW_ORPHAN'
+ROUTINE SHOW_ORPHAN (OUTRTN, QENT_A, FULL) : NOVALUE = 
+BEGIN
+!++
+! FUNCTIONAL DESCRIPTION:
+!
+!   Displays an orphaned queue entry (no ROUTER parent).
+!
+! RETURNS:  	cond_value, longword (unsigned), write only, by value
+!
+! PROTOTYPE:
+!
+!   SHOW_ORPHAN  outrtn, qent, full
+!
+! IMPLICIT INPUTS:  None.
+!
+! IMPLICIT OUTPUTS: None.
+!
+! COMPLETION CODES:
+!
+!   SS$_NORMAL:	    	normal successful completion.
+!
+! SIDE EFFECTS:
+!
+!   None.
+!--
+    BIND
+    	QE	= QENT_A   	: REF QENTDEF;
+
+    LOCAL
+    	STR 	: BLOCK [DSC$K_S_BLN,BYTE],
+    	STR2	: BLOCK [DSC$K_S_BLN,BYTE],
+    	status;
+
+    INIT_DYNDESC (STR, STR2);
+
+    IF .FULL THEN
+    BEGIN
+!    	STR$COPY_DX (%ASCID'Entry: !UL, >>> Orphaned !AD entry <<<', 0, STR,
+!    	    	.QE [QENT_L_ENTNUM], .QE [QENT_W_DSTPRC]-3,
+!    	    	QE [QENT_T_DSTPRC]+3);
+!    	(.OUTRTN) (STR);
+
+    	IF (INCR I FROM 0 TO STANAM_COUNT-1 DO
+    	    IF .STAVAL [.I] EQL .QE [QENT_L_STATUS] THEN
+    	    BEGIN
+    	    	LIB$SYS_FAO (%ASCID'  Status: !AS, size: !UL recipient-byte!%S', 0, STR,
+    	    	    	.STANAM [.I], .QE [QENT_L_SIZE]);
+    	    	EXITLOOP .I;
+    	    END) LSS 0 THEN LIB$SYS_FAO (%ASCID %STRING ('  Status: ',
+    	    	    	'code=!UL, size: !UL recipient-byte!%S'), 0, STR,
+    	    	    	.QE [QENT_L_STATUS], .QE [QENT_L_SIZE]);
+    	IF .QE [QENT_V_DELAY] AND .QE [QENT_L_STATUS] EQL FLQ_K_STRDY THEN
+    	BEGIN
+    	    LIB$SYS_FAO (%ASCID', waiting for retry until !%D', 0,
+    	    	    	    STR2, QE [QENT_Q_DLYDT]);
+    	    STR$APPEND (STR, STR2);
+    	END;
+    	(.OUTRTN) (STR);
+
+    END;
+
+    FREE_STRINGS (STR, STR2);
+
+    SS$_NORMAL
+
+END; ! SHOW_ORPHAN
+
+
+%SBTTL 'SHOW_ENTRY_BRIEF'
+ROUTINE SHOW_ENTRY_BRIEF (OUTRTN, QENT_A, DID1_A, ALL, count_a, msgcount_a) : NOVALUE = 
+BEGIN
+!++
+! FUNCTIONAL DESCRIPTION:
+!
+!   Displays a queue entry like the old FLQU did.
+!
+! RETURNS:  	cond_value, longword (unsigned), write only, by value
+!
+! PROTOTYPE:
+!
+!   SHOW_ENTRY  outrtn, qent, did1
+!
+! IMPLICIT INPUTS:  None.
+!
+! IMPLICIT OUTPUTS: None.
+!
+! COMPLETION CODES:
+!
+!   SS$_NORMAL:	    	normal successful completion.
+!
+! SIDE EFFECTS:
+!
+!   None.
+!--
+    BIND
+    	QENT	= .QENT_A   	: QENTDEF,
+    	DID1	= .DID1_A,
+	count	= .count_a,
+    	msgcount = .msgcount_a;
+
+    LOCAL
+    	str 	: BLOCK [DSC$K_S_BLN,BYTE],
+    	orgstr	: BLOCK [DSC$K_S_BLN,BYTE],
+    	dststr	: BLOCK [DSC$K_S_BLN,BYTE],
+    	agent_name : BLOCK [DSC$K_S_BLN,BYTE],
+    	stat,
+    	status;
+
+    INIT_DYNDESC (str, orgstr, dststr, agent_name);
+
+    IF NOT .all
+    THEN
+    	IF .qent [QENT_L_STATUS] NEQ FLQ_K_STRDY AND
+    	    .qent [QENT_L_STATUS] NEQ FLQ_K_STINP
+	THEN
+	    RETURN;
+
+    IF NOT .did1
+    THEN
+	BEGIN
+	IF (.outrtn NEQA ALT_SHOW_OUTPUT)
+	THEN
+	    (.outrtn) (null_d);
+	(.OUTRTN) (%ASCID %STRING ('Entry# Sts EntSz  Origin ',
+		'                                       Dest Proc'));
+	(.OUTRTN) (%ASCID %STRING ('------ --- ------ -------',
+		'-------------------------------------- ---------'));
+	did1 = 1;
+	END;
+
+    IF .qent [QENT_L_DSTPRC] GEQU FLQ_K_MX_HOLDQ_BASE THEN
+    	LIB$SYS_FAO (.mx_agents [FLQ_K_MX_HOLDQ_BASE], 0, agent_name,
+    	    	    	1+.qent [QENT_L_DSTPRC]-FLQ_K_MX_HOLDQ_BASE)
+    ELSE
+    	STR$COPY_DX (agent_name, .mx_agents [.qent [QENT_L_DSTPRC]]);
+
+    stat = (INCR i FROM 0 TO stanam_count-1 DO
+	IF .staval [.i] EQL .qent [QENT_L_STATUS] THEN EXITLOOP .i);
+    LIB$SYS_FAO (%ASCID'!AD', 0, orgstr,
+		.qent [QENT_W_ORGADR], qent [QENT_T_ORGADR]);
+    IF .qent [QENT_L_SIZE] GEQU 1000000 THEN
+    	LIB$SYS_FAO (%ASCID'!6UL !3AS !5ULM !45AS !13AS', 0, str,
+    	    	.qent [QENT_L_ENTNUM],
+		(IF .stat LSS 0 THEN %ASCID'unknwn' ELSE .stanm3 [.stat]),
+		.qent [QENT_L_SIZE] / (1024 * 1024), orgstr, agent_name)
+    ELSE IF .qent [QENT_L_SIZE] GEQU 100000 THEN
+    	LIB$SYS_FAO (%ASCID'!6UL !3AS !5ULK !45AS !13AS', 0, str,
+    	    	.qent [QENT_L_ENTNUM],
+		(IF .stat LSS 0 THEN %ASCID'unknwn' ELSE .stanm3 [.stat]),
+		.qent [QENT_L_SIZE] / 1024, orgstr, agent_name)
+    ELSE
+    	LIB$SYS_FAO (%ASCID'!6UL !3AS !6UL !45AS !13AS', 0, str,
+    	    	.qent [QENT_L_ENTNUM],
+		(IF .stat LSS 0 THEN %ASCID'unknwn' ELSE .stanm3 [.stat]),
+		.qent [QENT_L_SIZE], orgstr, agent_name);
+    (.OUTRTN) (STR);
+
+    count = .count + 1;
+
+    IF .qent [MXQ_L_BACKREF] EQLA 0 AND ROUTER_ENTRY (qent) THEN
+    	msgcount = .msgcount + 1;
+
+    FREE_STRINGS (str, orgstr, dststr, agent_name);
+
+END;
+
+
+%SBTTL 'QCMD_HOLD'
+GLOBAL ROUTINE QCMD_HOLD = 
+BEGIN
+!++
+! FUNCTIONAL DESCRIPTION:
+!
+!   QUEUE HOLD command.
+!
+! RETURNS:  	cond_value, longword (unsigned), write only, by value
+!
+! PROTOTYPE:
+!
+!   QCMD_HOLD
+!
+! IMPLICIT INPUTS:  None.
+!
+! IMPLICIT OUTPUTS: None.
+!
+! COMPLETION CODES:
+!
+!   SS$_NORMAL:	    	normal successful completion.
+!
+! SIDE EFFECTS:
+!
+!   None.
+!--
+    LOCAL
+    	QENT	: QENTDEF,
+    	STR 	: BLOCK [DSC$K_S_BLN,BYTE],
+	FLQNODE : BLOCK [DSC$K_S_BLN,BYTE],
+    	LNMBUF	: VECTOR [256,BYTE],
+    	LNMLEN	: WORD,
+    	LNMLST	: $ITMLST_DECL (ITEMS=1),
+    	ENTNUM,
+    	have_entnum,
+    	selcur,
+    	qctx,
+    	LOG,
+    	status, rmsstv;
+
+    status = FLQ_OPEN (FLQ__FULL, qctx, que_file, rmsstv);
+    IF NOT .status THEN
+    BEGIN
+    	SIGNAL (MCP__QOPENERR, 0, .status, .rmsstv);
+    	RETURN SS$_NORMAL;
+    END;
+
+    LOG = CLI$PRESENT (log_d) EQL CLI$_PRESENT;
+    have_entnum = CLI$PRESENT (entnum_d) EQL CLI$_PRESENT;
+
+    INIT_DYNDESC (STR);
+
+    $ITMLST_INIT (ITMLST=LNMLST,
+    	(ITMCOD=LNM$_STRING, BUFSIZ=%ALLOCATION (LNMBUF),
+    	 BUFADR=LNMBUF, RETLEN=LNMLEN));
+    $TRNLNM (LOGNAM=%ASCID'MX_FLQ_NODE_NAME', TABNAM=%ASCID'LNM$SYSTEM',
+    	     ACMODE=%REF (PSL$C_EXEC), ITMLST=LNMLST);
+    INIT_SDESC (FLQNODE, .LNMLEN, LNMBUF);
+
+    selcur = 0;
+    WHILE 1 DO
+    BEGIN
+    	IF .have_entnum THEN
+    	BEGIN
+    	    status = CLI$GET_VALUE (entnum_d, STR);
+    	    IF NOT .status THEN EXITLOOP;
+    	    LIB$CVT_DTB (.STR [DSC$W_LENGTH], .STR [DSC$A_POINTER], ENTNUM);
+    	END
+    	ELSE
+    	BEGIN
+    	    IF .selcur GEQU .select_count THEN EXITLOOP;
+    	    entnum = .select_list [.selcur];
+    	    selcur = .selcur + 1;
+    	END;
+    	status = FLQ_READ (qctx, .ENTNUM, QENT);
+    	IF NOT .status THEN
+    	    SIGNAL (MCP__QREADERR, 1, .ENTNUM, .status)
+    	ELSE
+	    HOLD_ENTRY (qent, .qctx, .log);
+    END;
+
+    FLQ_CLOSE (qctx);
+    FREE_STRINGS (STR);
+
+    SS$_NORMAL
+
+END; ! QCMD_HOLD
+
+
+%SBTTL 'HOLD_ENTRY'
+ROUTINE HOLD_ENTRY (qent_a, qctx, log) = 
+BEGIN
+!++
+! FUNCTIONAL DESCRIPTION:
+!
+!   Hold a queue entry.
+!
+! RETURNS:  	cond_value, longword (unsigned), write only, by value
+!
+! PROTOTYPE:
+!
+!   HOLD_ENTRY
+!
+! IMPLICIT INPUTS:  None.
+!
+! IMPLICIT OUTPUTS: None.
+!
+! COMPLETION CODES:
+!
+!   SS$_NORMAL:	    	normal successful completion.
+!
+! SIDE EFFECTS:
+!
+!   None.
+!--
+    BIND
+	qent	= .qent_a	: QENTDEF;
+
+    LOCAL
+	status;
+
+    QENT [QENT_L_STATUS] = FLQ_K_STUHO;
+    QENT [QENT_V_LOCK]   = 1;
+    status = FLQ_UPDATE (qctx, QENT);
+    IF NOT .status THEN
+	SIGNAL (MCP__QUPDTERR, 1, .QENT [QENT_L_ENTNUM], .status)
+    ELSE IF .LOG THEN
+	SIGNAL (MCP__QHOLD, 1, .QENT [QENT_L_ENTNUM]);
+
+    IF ROUTER_ENTRY (QENT) THEN
+    BEGIN
+	LOCAL QE    : QENTDEF;
+	INCR I FROM 0 TO FWDREF_COUNT+MX_K_HOLDQ_MAX-1 DO
+	BEGIN
+    	    LOCAL offset;
+    	    offset = (IF .i LSSU FWDREF_COUNT-1 THEN .fwdref [.i]
+    	    	     ELSE BYTENUM (MXQ_L_HOLDQREF_BASE)+4*(.i-MX_K_PATH_HOLDQ_BASE));
+    	    IF .qe [.offset,0,32,0] NEQ 0 THEN
+	    BEGIN
+	    	BIND EN = QENT [.offset,0,32,0]   : LONG;
+	    	status = FLQ_READ (qctx, .EN, QE);
+		!
+		!  If read is successful and this entry does indeed
+		!  point back to the router entry, then UHOLD it too.
+		!
+	    	IF .status AND
+		   (.qe [MXQ_L_BACKREF] EQLU .qent [QENT_L_ENTNUM]) THEN
+	    	BEGIN
+	    	    QE [QENT_L_STATUS] = FLQ_K_STUHO;
+		    QE [QENT_V_LOCK]   = 1;
+	    	    FLQ_UPDATE (qctx, QE);
+	    	END;
+	    END;
+	END;
+    END;
+
+    SS$_NORMAL
+
+END; !HOLD_ENTRY
+
+%SBTTL 'QCMD_DUMP'
+GLOBAL ROUTINE QCMD_DUMP = 
+BEGIN
+!++
+! FUNCTIONAL DESCRIPTION:
+!
+!   description
+!
+! RETURNS:  	cond_value, longword (unsigned), write only, by value
+!
+! PROTOTYPE:
+!
+!   x
+!
+! IMPLICIT INPUTS:  None.
+!
+! IMPLICIT OUTPUTS: None.
+!
+! COMPLETION CODES:
+!
+!   SS$_NORMAL:	    	normal successful completion.
+!
+! SIDE EFFECTS:	    None.
+!--
+    LOCAL
+        fspec   : BLOCK [DSC$K_S_BLN,BYTE],
+        defspec : BLOCK [DSC$K_S_BLN,BYTE],
+        rspec   : BLOCK [DSC$K_S_BLN,BYTE],
+        mspec   : BLOCK [DSC$K_S_BLN,BYTE],
+        cspec   : BLOCK [DSC$K_S_BLN,BYTE],
+        str     : BLOCK [DSC$K_S_BLN,BYTE],
+        sender  : BLOCK [DSC$K_S_BLN,BYTE],
+        sdsc    : BLOCK [DSC$K_S_BLN,BYTE],
+        hdrq    : QUEDEF,
+        qent    : QENTDEF,
+        refent  : QENTDEF,
+        rcpt    : REF RCPTDEF,
+        envl    : ENVLDEF,
+        hdr     : REF TXTDEF,
+        unit,
+        munit,
+        use_refent,
+        have_defspec,
+        entnum,
+        qctx,
+        status,
+        rmsstv;
+
+    INIT_DYNDESC (defspec);
+    have_defspec = 0;
+    IF CLI$PRESENT (%ASCID'OUTPUT') EQL CLI$_PRESENT THEN
+    BEGIN
+        LOCAL   fscn : BLOCK [FSCN$S_FLDFLAGS,BYTE];
+        CLI$GET_VALUE (%ASCID'OUTPUT', defspec);
+        status = $FILESCAN (SRCSTR=defspec, VALUELST=%REF (0), FLDFLAGS=fscn);
+        IF NOT .status OR .fscn [FSCN$V_TYPE] OR .fscn [FSCN$V_VERSION] THEN
+        BEGIN
+            SIGNAL (MCP__INVDUMPSPEC, 1, defspec);
+            RETURN SS$_NORMAL;
+        END;
+        have_defspec = 1;
+    END;
+
+    status = FLQ_OPEN (FLQ__FULL, qctx, que_file, rmsstv);
+    IF NOT .status THEN
+    BEGIN
+        SIGNAL (MCP__QOPENERR, 0, .status, .rmsstv);
+        FREE_STRINGS (defspec);
+        RETURN SS$_NORMAL;
+    END;
+
+    INIT_DYNDESC (str);
+    CLI$GET_VALUE (entnum_d, str);
+    entnum = 0;
+    LIB$CVT_DTB (.str [DSC$W_LENGTH], .str [DSC$A_POINTER], entnum);
+    status = FLQ_READ (qctx, .entnum, qent);
+    IF NOT .status THEN
+    BEGIN
+        SIGNAL (MCP__QREADERR, 1, .entnum, .status);
+        FLQ_CLOSE (qctx);
+        FREE_STRINGS (str, defspec);
+        RETURN SS$_NORMAL;
+    END;
+    IF .qent [QENT_L_STATUS] NEQ FLQ_K_STRDY AND
+            .qent [QENT_L_STATUS] NEQ FLQ_K_STINP THEN
+    BEGIN
+        SIGNAL (MCP__DUMPSTATUS, 1, .entnum);
+        FLQ_CLOSE (qctx);
+        FREE_STRINGS (str, defspec);
+        RETURN SS$_NORMAL;
+    END;
+    use_refent = 0;
+    IF .qent [MXQ_L_BACKREF] NEQ 0 THEN
+    BEGIN
+        status = FLQ_READ (qctx, .qent [MXQ_L_BACKREF], refent);
+        IF NOT .status THEN
+        BEGIN
+            SIGNAL (MCP__QREADERR, 1, .qent [MXQ_L_BACKREF], .status);
+            FLQ_CLOSE (qctx);
+            FREE_STRINGS (str, defspec);
+            RETURN SS$_NORMAL;
+        END;
+        use_refent = 1;
+    END;
+    IF .qent [QENT_L_DSTPRC] GEQU FLQ_K_MX_HOLDQ_BASE THEN
+        LIB$SYS_FAO (.ag_infnam [FLQ_K_MX_HOLDQ_BASE], 0, str,
+                        1 + .qent [QENT_L_DSTPRC] - FLQ_K_MX_HOLDQ_BASE)
+    ELSE
+        STR$COPY_DX (str, .ag_infnam [.qent [QENT_L_DSTPRC]]);
+    CH$FILL (%CHAR (0), %ALLOCATION (envl), envl);
+    status = READ_ENVELOPE (qctx, qent, str, envl);
+    IF NOT .status THEN
+    BEGIN
+        SIGNAL (MCP__ENVREADERR, 1, .qent [QENT_L_ENTNUM], .status);
+        FLQ_CLOSE (qctx);
+        FREE_STRINGS (str, defspec);
+        RETURN SS$_NORMAL;
+    END;
+
+    INIT_QUEUE (hdrq);
+    status = READ_HDRS (qctx, (IF .use_refent THEN refent ELSE qent), %ASCID'HDR_INFO', hdrq);
+    IF NOT .status THEN
+    BEGIN
+        SIGNAL (MCP__HDRREADERR, 1, (IF .use_refent THEN .refent [QENT_L_ENTNUM] ELSE
+                                   .qent [QENT_L_ENTNUM]), .status);
+        DISPOSE_ENVELOPE (envl);
+        FLQ_CLOSE (qctx);
+        FREE_STRINGS (str, defspec);
+        RETURN SS$_NORMAL;
+    END;
+
+    status = OPEN_MSG_TEXT ((IF .use_refent THEN refent ELSE qent), MX__FILE_READ, munit);
+    IF NOT .status THEN
+    BEGIN
+        SIGNAL (MCP__TXTOPNERR, 1, (IF .use_refent THEN .refent [QENT_L_ENTNUM] ELSE
+                                   .qent [QENT_L_ENTNUM]), .status);
+        DISPOSE_ENVELOPE (envl);
+        FLQ_CLOSE (qctx);
+        WHILE NOT REMQUE (.hdrq [QUE_L_HEAD], hdr) DO FREETXT (hdr);
+        FREE_STRINGS (str, defspec);
+        RETURN SS$_NORMAL;
+    END;
+ 
+   LIB$SYS_FAO (%ASCID'SYS$DISK:[]ENTRY_!UL.RECIPIENTS', 0, str, .qent [QENT_L_ENTNUM]);
+    IF NOT .have_defspec THEN
+        STR$COPY_DX (defspec, str);
+    INIT_DYNDESC (rspec);
+    status = MX_FILE_OPEN (MX__FILE_WRITE, defspec, unit, str, rspec);
+    IF NOT .status THEN
+    BEGIN
+        SIGNAL (MCP__DMPOPNERR, 1, %ASCID'recipients', .status);
+        DISPOSE_ENVELOPE (envl);
+        FLQ_CLOSE (qctx);
+        MX_FILE_CLOSE (.munit);
+        WHILE NOT REMQUE (.hdrq [QUE_L_HEAD], hdr) DO FREETXT (hdr);
+        FREE_STRINGS (str, defspec, rspec);
+        RETURN SS$_NORMAL;
+    END;
+
+    INIT_DYNDESC (sender);
+    BEGIN
+        BIND_ENVL_FIELDS (envl);
+        rcpt = .rcptque [QUE_L_HEAD];
+        WHILE .rcpt NEQA rcptque DO
+        BEGIN
+            BIND_RCPT_FIELDS (rcpt);
+            INIT_SDESC (sdsc, .addr [TXT_W_LEN], addr [TXT_T_TEXT]);
+            status = MX_FILE_WRITE (.unit, sdsc);
+            IF NOT .status THEN EXITLOOP;
+            rcpt = .rcpt [RCPT_L_FLINK];
+        END;
+        QUOTE_STRING (sender, .fromadr [TXT_W_LEN], fromadr [TXT_T_TEXT]);
+    END;
+
+    IF NOT .status THEN
+    BEGIN
+        SIGNAL (MCP__DMPWRTERR, 1, rspec, .status);
+        MX_FILE_CLOSE (.unit, 1);
+        DISPOSE_ENVELOPE (envl);
+        FLQ_CLOSE (qctx);
+        MX_FILE_CLOSE (.munit);
+        WHILE NOT REMQUE (.hdrq [QUE_L_HEAD], hdr) DO FREETXT (hdr);
+        FREE_STRINGS (str, defspec, rspec, sender);
+        RETURN SS$_NORMAL;
+    END;
+    MX_FILE_CLOSE (.unit);
+    DISPOSE_ENVELOPE (envl);
+
+    LIB$SYS_FAO (%ASCID'SYS$DISK:[]ENTRY_!UL.MSG_TEXT', 0, str, .qent [QENT_L_ENTNUM]);
+    IF NOT .have_defspec THEN
+        STR$COPY_DX (defspec, str);
+    INIT_DYNDESC (mspec);
+    status = MX_FILE_OPEN (MX__FILE_WRITE, defspec, unit, str, mspec);
+    IF NOT .status THEN
+    BEGIN
+        SIGNAL (MCP__DMPOPNERR, 1, %ASCID'message text', .status);
+        FLQ_CLOSE (qctx);
+        LIB$DELETE_FILE (rspec);
+        FREE_STRINGS (str, defspec, rspec, mspec, sender);
+        MX_FILE_CLOSE (.munit);
+        WHILE NOT REMQUE (.hdrq [QUE_L_HEAD], hdr) DO FREETXT (hdr);
+        RETURN SS$_NORMAL;
+    END;
+
+    WHILE NOT REMQUE (.hdrq [QUE_L_HEAD], hdr) DO
+    BEGIN
+        LOCAL
+            txtq    : QUEDEF,
+            txt     : REF TXTDEF;
+        IF .status THEN
+        BEGIN
+            INIT_QUEUE (txtq);
+            FORMAT_HDR (.hdr, txtq, 100, 1);
+            WHILE NOT REMQUE (.txtq [QUE_L_HEAD], txt) DO
+            BEGIN
+                IF .status THEN
+                BEGIN
+                    INIT_SDESC (sdsc, .txt [TXT_W_LEN], txt [TXT_T_TEXT]);
+                    status = MX_FILE_WRITE (.unit, sdsc);
+                END;
+                FREETXT (txt);
+            END;
+        END;
+        FREETXT (hdr);
+    END;
+
+    IF .status THEN
+    BEGIN
+        FREE_STRINGS (str);
+        DO
+        BEGIN
+            status = MX_FILE_WRITE (.unit, str);
+            IF NOT .status THEN EXITLOOP;
+        END WHILE (status = MX_FILE_READ (.munit, str));
+    END;
+    MX_FILE_CLOSE (.munit);
+    IF NOT .status AND .status NEQ RMS$_EOF THEN
+    BEGIN
+        SIGNAL (MCP__DMPWRTERR, 1, mspec, .status);
+        MX_FILE_CLOSE (.unit, 1);
+        FLQ_CLOSE (qctx);
+        LIB$DELETE_FILE (rspec);
+        FREE_STRINGS (str, defspec, rspec, mspec, sender);
+        RETURN SS$_NORMAL;
+    END;
+    MX_FILE_CLOSE (.unit);
+
+    LIB$SYS_FAO (%ASCID'SYS$DISK:[]REQUEUE_!UL.COM', 0, str, .qent [QENT_L_ENTNUM]);
+    IF NOT .have_defspec THEN
+        STR$COPY_DX (defspec, str);
+    INIT_DYNDESC (cspec);
+    status = MX_FILE_OPEN (MX__FILE_WRITE, defspec, unit, str, cspec);
+    IF NOT .status THEN
+    BEGIN
+        SIGNAL (MCP__DMPOPNERR, 1, %ASCID'requeue command procedure', .status);
+        FLQ_CLOSE (qctx);
+        LIB$DELETE_FILE (rspec);
+        LIB$DELETE_FILE (mspec);
+        FREE_STRINGS (str, defspec, rspec, mspec, cspec, sender);
+        RETURN SS$_NORMAL;
+    END;
+    status = MX_FILE_WRITE (.unit, %ASCID'$ sitein := $MX_EXE:MX_SITE_IN');
+    IF .status THEN
+    BEGIN
+        status = LIB$SYS_FAO (%ASCID'$ sitein !AS !AS !AS', 0, str, mspec, rspec, sender);
+        IF .status THEN
+            status = MX_FILE_WRITE (.unit, str);
+    END;
+    IF NOT .status THEN
+    BEGIN
+        SIGNAL (MCP__DMPWRTERR, 1, cspec, .status);
+        MX_FILE_CLOSE (.unit, 1);
+        FLQ_CLOSE (qctx);
+        LIB$DELETE_FILE (rspec);
+        LIB$DELETE_FILE (mspec);
+        FREE_STRINGS (str, defspec, rspec, mspec, cspec, sender);
+        RETURN SS$_NORMAL;
+    END;
+    MX_FILE_CLOSE (.unit);
+
+    IF CLI$PRESENT (%ASCID'CANCEL') NEQ CLI$_NEGATED THEN
+    BEGIN
+        FLQ_READ (qctx, .qent [QENT_L_ENTNUM], qent);
+        CANCEL_ENTRY (qent, .qctx, 1);
+    END;
+
+    FLQ_CLOSE (qctx);
+    FREE_STRINGS (str, defspec, rspec, mspec, cspec, sender);
+
+    SS$_NORMAL
+
+END; ! QCMD_DUMP
+
+END
+ELUDOM

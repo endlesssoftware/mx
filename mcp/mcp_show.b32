@@ -1,0 +1,2452 @@
+%TITLE 'MCP_SHOW'
+MODULE MCP_SHOW (IDENT='V3.1',
+    	ADDRESSING_MODE (EXTERNAL=LONG_RELATIVE, NONEXTERNAL=LONG_RELATIVE)) =
+BEGIN
+!++
+! FACILITY: 	    MCP - MX Mailer Control Program
+!
+! ABSTRACT: 	    Support routines for MCP SHOW command
+!
+! MODULE DESCRIPTION:
+!
+!   This module contains all the routines that display information
+!   for the MCP SHOW command.
+!
+! AUTHOR:   	    M. Madison
+!
+! Copyright (c) 2008, Matthew Madison.
+! Copyright (c) 2011, Endless Software Solutions.
+! 
+! All rights reserved.
+! 
+! Redistribution and use in source and binary forms, with or without
+! modification, are permitted provided that the following conditions
+! are met:
+! 
+!     * Redistributions of source code must retain the above
+!       copyright notice, this list of conditions and the following
+!       disclaimer.
+!     * Redistributions in binary form must reproduce the above
+!       copyright notice, this list of conditions and the following
+!       disclaimer in the documentation and/or other materials provided
+!       with the distribution.
+!     * Neither the name of the copyright owner nor the names of any
+!       other contributors may be used to endorse or promote products
+!       derived from this software without specific prior written
+!       permission.
+! 
+! THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
+! "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
+! LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
+! A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
+! OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
+! SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
+! LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
+! DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
+! THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
+! (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
+! OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+!
+! CREATION DATE:    13-DEC-1989
+!
+! MODIFICATION HISTORY:
+!
+!   13-DEC-1989	V1.0	Madison	    Initial coding.
+!   01-JAN-1990	V1.0-1	Madison	    Added master fields to MLST.
+!   10-JAN-1990	V1.1-2	Madison	    FILESERV support, wildcards on SHOW,
+!   	    	    	    	    	remove unsupported peer/master stuff.
+!   12-JAN-1990	V1.1-3	Madison	    More FILESERV changes.
+!   24-JAN-1990	V1.1-4	Madison	    Minor bug fixes.
+!   06-FEB-1990	V1.2-5	Madison	    UUCP support.
+!   25-SEP-1990	V1.3	Madison	    FS changes, SMTP, ROUTER, LOCAL.
+!   04-OCT-1990	V1.3-1	Madison	    More FS changes.
+!   23-OCT-1990	V1.3-2	Madison	    Make sure we know thresh=-1->/NODELAY.
+!   09-NOV-1990	V1.3-3	Madison	    Wasn't handling SITE path.
+!   05-DEC-1990	V1.4	Madison	    Add SHOW_JNET.
+!   10-DEC-1990	V1.5	Madison	    Modify SHOW LIST.
+!   12-DEC-1990	V1.5-1	Madison	    Modify SHOW LIST.
+!   07-FEB-1991	V1.5-2	Madison	    Modify SHOW_JNET.
+!   11-FEB-1991	V1.6	Madison	    JNET, LOCAL, SMTP changes.
+!   13-FEB-1991	V1.6-1	Madison	    Make header display neater.
+!   22-FEB-1991	V1.6-2	Madison	    Add reply-to display to SHOW LIST.
+!   16-OCT-1991	V1.7	Madison	    DNSMTP, etc.
+!   28-OCT-1991	V1.7-1	Madison	    SITE.
+!   11-NOV-1991	V1.7-2	Madison	    JNET update.
+!   05-DEC-1991	V1.7-3	Madison	    SHOW VERSION.
+!   14-FEB-1992	V1.8	Madison	    SHOW JNET update.
+!   18-FEB-1992	V1.9	Greer	    SHOW X25_SMTP.
+!   13-JAN-1993 V1.10	Goatley     DEFINE LIST /RETURN and DEFINE FILE /DESC.
+!   16-JAN-1993 V1.10-1	Goatley     Add support for /STRIP in SHOW LIST.
+!   20-FEB-1993 V1.10-2	Goatley     Fix cont. problem with /STRIP_HEADER.
+!   18-MAR-1993 V1.11	Goatley     Add support for DEFINE LIST/PRIVATE.
+!   15-APR-1993 V1.11-1	Goatley     Add support SET LOCAL/MULTIPLE_FROM.
+!   29-AUG-1993 V1.12	Goatley	    Add support SET LOCAL/MM_DELIVER.
+!   14-DEC-1993 V1.12-1	Goatley     Add other to /STRIP_HEADER.
+!   17-DEC-1993	V1.12-2	Goatley	    Add support for SET LOCAL/CC_POSTMASTER.
+!   10-JAN-1994 V1.12-3	Goatley     Add support for DEFINE LIST/CASE_SENSITIVE.
+!   20-JAN-1994 V1.12-4	Goatley     Add support for SET ROUTER/OMIT_VMSMAIL...
+!   24-JAN-1994 V1.12-5	Goatley     Fix V1.12-4.
+!   12-SEP-1995 V1.13	Goatley     Add DEFINE LIST/DIGEST.
+!   14-JAN-1997	V1.14	Madison	    Add MLF.
+!   17-FEB-1997	V1.15	Madison	    Add spam.
+!   02-APR-1997	V1.16	Madison	    Add lcldoms.
+!   13-APR-1997	V1.17	Madison	    Improve clarity of spam, lcldom, SMTP output.
+!    1-MAY-1997 V1.17-1	Goatley	    Add new fields for SHOW LIST.
+!    8-SEP-1997 V1.17-2 Goatley     Allow multiple alias addresses.
+!    2-OCT-1997 V1.17-3	Goatley	    SHOW_MLISTS /CC_POST_ERRORS, /SUBJECT_PREFIX
+!   05-OCT-1997	V1.18	Madison	    Add VALIDATE_SENDER_DOMAIN to SHOW SMTP.
+!   31-OCT-1997 V1.18-1	Goatley     Fix /LIST_HEADER output (INFO -> HELP).
+!   21-NOV-1997 V1.18-2	Goatley	    Add QP_DECODE to SHOW LOCAL.
+!   19-APR-1998	V1.19	Madison	    Add SET LOCAL/DISABLE_EXQUOTA.
+!   24-APR-1998	V2.0	Madison	    Added router accounting, SMTP RBL check setting.
+!   17-MAY-1998	V2.1	Madison	    Removed rejection stuff.
+!   09-JUN-1998	V2.2	Madison	    Add SMTP relay stuff.
+!   15-JUN-1998	V2.2-1	Madison	    RELAY kwd -> INSIDE_NETWORK_ADDRESS.
+!   26-JUN-1998	V2.2-2	Madison	    RELAY_ALLOWED on inside network address.
+!   27-AUG-1998	V2.3	Madison	    Holding queues.
+!   13-NOV-1999	V2.3-1	Madison	    Fix /[NO]DISABLE_EXQUOTA output.
+!   29-MAY-2000	V2.4	Madison	    More holding queues.
+!   08-DEC-2000	V2.4-1	Madison	    Missing a slash before [NO]OMIT_RESENT_HEADERS.
+!   22-DEC-2000	V2.5	Madison	    SHOW LIST/BRIEF
+!   14-FEB-2002 V2.6    Madison     SMTP/NOPERCENT, regex.
+!   03-Feb-2008 V3.0    Madison     Remove XSMTP support.
+!   12-Mar-2012 V3.1	Sneddon	    Add TLS.
+!--
+    LIBRARY 'SYS$LIBRARY:STARLET';
+    LIBRARY 'MX_SRC_COMMON:MX';
+    LIBRARY 'MX_SRC_COMMON:MX_LCLDEFS';
+    LIBRARY 'MCP';
+
+    FORWARD ROUTINE
+    	SHOW_RWRULES,
+    	SHOW_ALIASES,
+    	SHOW_PATHS,
+    	SHOW_MLISTS,
+    	SHOW_SYSUSERS,
+    	SHOW_FSUSER,
+    	SHOW_FILE,
+    	SHOW_SMTP,
+    	SHOW_LOCAL,
+    	SHOW_ROUTER,
+    	SHOW_DNSMTP,
+    	SHOW_SITE,
+    	SHOW_MLF,
+    	SHOW_LCLDOMS,
+    	SHOW_RELAYS,
+    	SHOW_VERSION,
+    	SHOW_USERS;
+
+    EXTERNAL ROUTINE
+    	G_HAT (QUOTE_STRING, MX_VERSION),
+    	G_HAT (USERAUTH_USER_ENUM),
+    	G_HAT (STR$CONCAT, STR$UPCASE, STR$COPY_R, STR$MATCH_WILD,
+    	    LIB$ADD_TIMES);
+
+    EXTERNAL LITERAL
+    	MCP__NOMATCH;
+
+    EXTERNAL
+    	RWRULES	    	: QUEDEF,
+    	PATHLIST    	: QUEDEF,
+    	ALIASES	    	: QUEDEF,
+    	MLISTS	    	: QUEDEF,
+    	SYSUSERS    	: QUEDEF,
+    	FSRVQUE	    	: QUEDEF,
+    	LCLDOMS	    	: QUEDEF,
+    	RELAYQUE    	: QUEDEF,
+    	SMTP_INFO   	: SMTPDEF,
+    	ROUTER_INFO 	: ROUTERDEF,
+    	LOCAL_INFO  	: LOCALDEF,
+    	DNSMTP_INFO 	: DNSMTPDEF,
+    	SITE_INFO   	: SITEDEF,
+    	MLF_INFO    	: MLFDEF,
+    	CFGFILE	    	: BLOCK [,BYTE];
+
+    BIND
+	ascid_no	= %ASCID'No',
+	ascid_yes	= %ASCID'Yes',
+	ascid_colon	= %ASCID':',
+	ascid_comma	= %ASCID',',
+	null_str	= %ASCID'',
+	no_str		= %ASCID'NO',
+	not_str		= %ASCID'not ',
+	commadash_str	= %ASCID',-',
+        enabled_d       = %ASCID'enabled',
+        disabled_d      = %ASCID'disabled';
+
+
+%SBTTL 'SHOW_RWRULES'
+GLOBAL ROUTINE SHOW_RWRULES (OUTRTN, OUTCMD, PAT_A, SUPPRESS) =
+BEGIN
+!++
+! FUNCTIONAL DESCRIPTION:
+!
+!   Displays the current list of address-rewriting rules.
+!
+! RETURNS:  	cond_value, longword (unsigned), write only, by value
+!
+! PROTOTYPE:
+!
+!   SHOW_RWRULES
+!
+! IMPLICIT INPUTS:  None.
+!
+! IMPLICIT OUTPUTS: None.
+!
+! COMPLETION CODES:
+!
+!   SS$_NORMAL:	    	normal successful completion.
+!
+! SIDE EFFECTS:
+!
+!   None.
+!--
+    LOCAL
+    	STR 	: BLOCK [DSC$K_S_BLN,BYTE],
+    	STR2	: BLOCK [DSC$K_S_BLN,BYTE],
+    	STR3	: BLOCK [DSC$K_S_BLN,BYTE],
+        sdsc    : BLOCK [DSC$K_S_BLN,BYTE],
+    	R   	: REF RULEDEF,
+    	DID1RULE,
+    	DID_ONE;
+
+    INIT_DYNDESC (STR, STR2, STR3);
+
+    DID1RULE = 0;
+    R = .RWRULES [QUE_L_HEAD];
+    WHILE .R NEQA RWRULES [QUE_L_HEAD] DO
+    BEGIN
+        BIND
+            lhs     = r [RULE_A_LHS]    : REF TXTDEF,
+            rhs     = r [RULE_A_RHS]    : REF TXTDEF;
+
+        INIT_SDESC (sdsc, .lhs [TXT_W_LEN], lhs [TXT_T_TEXT]);
+    	STR$UPCASE (STR, SDSC);
+    	IF STR$MATCH_WILD (STR, .PAT_A) THEN
+    	BEGIN
+    	    IF NOT .OUTCMD AND NOT .DID1RULE THEN
+    	    BEGIN
+    	    	(.OUTRTN) (null_str);
+    	    	(.OUTRTN) (%ASCID'Address-rewriting rules:');
+    	    END;
+    	    DID1RULE = 1;
+
+    	    QUOTE_STRING (STR2, .lhs [TXT_W_LEN], lhs [TXT_T_TEXT]);
+    	    QUOTE_STRING (STR3, .rhs [TXT_W_LEN], rhs [TXT_T_TEXT]);
+    	    IF .OUTCMD THEN
+    	    BEGIN
+                LIB$SYS_FAO (%ASCID'DEFINE REWRITE_RULE!AS -', 0, str,
+                            (IF .r [RULE_V_REGEX] THEN %ASCID'/REGEX' ELSE null_str));
+    	    	(.OUTRTN) (str);
+    	    	STR$CONCAT (STR, %ASCID'    ', STR2, %ASCID' -');
+    	    	(.OUTRTN) (STR);
+    	    	STR$CONCAT (STR, %ASCID'    ', STR3);
+    	    	(.OUTRTN) (STR);
+    	    END
+    	    ELSE
+    	    BEGIN
+    	    	LIB$SYS_FAO (%ASCID'  Rewrite !AS => !AS!AS', 0, STR, STR2, STR3,
+                                (IF .r [RULE_V_REGEX] THEN %ASCID' (regex)' ELSE null_str));
+    	    	(.OUTRTN) (STR);
+    	    END;
+    	END;
+
+    	R = .R [RULE_L_FLINK];
+
+    END; ! WHILE R
+
+    IF NOT .DID1RULE AND NOT .OUTCMD AND NOT .SUPPRESS THEN
+    	SIGNAL (MCP__NOMATCH, 1, %ASCID'rule');
+
+    FREE_STRINGS (STR, STR2, STR3);
+
+    SS$_NORMAL
+
+END; ! SHOW_RWRULES
+
+%SBTTL 'SHOW_ALIASES'
+GLOBAL ROUTINE SHOW_ALIASES (OUTRTN, OUTCMD, PAT_A, SUPPRESS) =
+BEGIN
+!++
+! FUNCTIONAL DESCRIPTION:
+!
+!   Displays the current list of aliases.
+!
+! RETURNS:  	cond_value, longword (unsigned), write only, by value
+!
+! PROTOTYPE:
+!
+!   SHOW_ALIASES
+!
+! IMPLICIT INPUTS:  None.
+!
+! IMPLICIT OUTPUTS: None.
+!
+! COMPLETION CODES:
+!
+!   SS$_NORMAL:	    	normal successful completion.
+!
+! SIDE EFFECTS:
+!
+!   None.
+!--
+    LOCAL
+    	STR 	: BLOCK [DSC$K_S_BLN,BYTE],
+    	STR2	: BLOCK [DSC$K_S_BLN,BYTE],
+    	STR3	: BLOCK [DSC$K_S_BLN,BYTE],
+    	R   	: REF RULEPRE53DEF,
+    	DID1ALIAS,
+    	DID_ONE;
+
+    INIT_DYNDESC (STR, STR2, STR3);
+
+    DID1ALIAS = 0;
+    R = .ALIASES [QUE_L_HEAD];
+    WHILE .R NEQA ALIASES [QUE_L_HEAD] DO
+    BEGIN
+    	STR$COPY_R (STR2, R [RULEPRE53_W_LHS], R [RULEPRE53_T_LHS]);
+    	STR$UPCASE (STR, STR2);
+    	IF STR$MATCH_WILD (STR, .PAT_A) THEN
+    	BEGIN
+    	    IF NOT .OUTCMD AND NOT .DID1ALIAS THEN
+    	    BEGIN
+    	    	(.OUTRTN) (null_str);
+    	    	(.OUTRTN) (%ASCID'Aliases:');
+    	    END;
+    	    DID1ALIAS = 1;
+
+    	    QUOTE_STRING (STR2, .R [RULEPRE53_W_LHS], R [RULEPRE53_T_LHS]);
+!    	    QUOTE_STRING (STR3, .R [RULEPRE53_W_RHS], R [RULEPRE53_T_RHS]);
+	    BEGIN
+		!
+		!  Multiple addresses may be separated by NULL characters,
+		!  so split them out into multiple quoted strings.
+		!
+		LOCAL ptr : REF $BBLOCK, offset, length, first;
+		first = 1;
+		length = .r [RULEPRE53_W_RHS];
+		ptr = r [RULEPRE53_T_RHS];
+		WHILE 1 DO
+		    BEGIN
+		    offset = CH$FIND_CH (.length, .ptr, %CHAR(0));
+		    IF (.offset NEQA 0)			!Found a null
+		    THEN
+			BEGIN
+			LOCAL x;
+			x = CH$DIFF (.offset, .ptr);
+			QUOTE_STRING (str3, .x, .ptr);	!Quote first part
+			length = .length - .x - 1;	!Then update ptrs
+			ptr = .ptr + .x + 1;
+			END
+		    ELSE
+			BEGIN
+			QUOTE_STRING (str3, .length, .ptr);
+			length = 0;
+			END;
+
+	    	    IF .OUTCMD THEN
+	    	    BEGIN
+			IF (.first)
+			THEN
+			    LIB$SYS_FAO (%ASCID'DEFINE ALIAS !AS !AS!AS',
+				      0, STR, STR2, STR3,
+				      (IF (.length NEQU 0)
+					THEN commadash_str ELSE null_str))
+			ELSE
+			    LIB$SYS_FAO (%ASCID'                 !AS!AS',
+				      0, STR, STR3,
+				      (IF (.length NEQU 0)
+					THEN commadash_str ELSE null_str));
+	    	    	(.OUTRTN) (STR);
+	    	    END
+	    	    ELSE
+	    	    BEGIN
+			IF (.first)
+			THEN
+			    LIB$SYS_FAO (%ASCID'  LocalName=!AS, Address=!AS',
+				      0, STR, STR2, STR3)
+			ELSE
+			    LIB$SYS_FAO (%ASCID'                 Address=!AS',
+				      0, STR, STR3);
+	    	    	(.OUTRTN) (STR);
+	    	    END;
+		    first = 0;
+		    IF (.length EQLU 0) THEN EXITLOOP;
+		    END;
+	    END;
+    	END;
+
+    	R = .R [RULEPRE53_L_FLINK];
+
+    END; ! WHILE R
+    IF NOT .DID1ALIAS AND NOT .OUTCMD AND NOT .SUPPRESS THEN
+    	SIGNAL (MCP__NOMATCH, 1, %ASCID'alias');
+
+    FREE_STRINGS (STR, STR2, STR3);
+
+    SS$_NORMAL
+
+END; ! SHOW_ALIASES
+
+%SBTTL 'SHOW_PATHS'
+GLOBAL ROUTINE SHOW_PATHS (OUTRTN, OUTCMD, PAT_A, SUPPRESS) =
+BEGIN
+!++
+! FUNCTIONAL DESCRIPTION:
+!
+!   Displays the current list of domain-path definitions.
+!
+! RETURNS:  	cond_value, longword (unsigned), write only, by value
+!
+! PROTOTYPE:
+!
+!   SHOW_PATHS
+!
+! IMPLICIT INPUTS:  None.
+!
+! IMPLICIT OUTPUTS: None.
+!
+! COMPLETION CODES:
+!
+!   SS$_NORMAL:	    	normal successful completion.
+!
+! SIDE EFFECTS:
+!
+!   None.
+!--
+
+! N.B.: The indices of this table MUST correspond to the MX_K_PATH_x numbers.
+
+    TABLE (PATHNAME, '', 'Local', 'SMTP', '', 'UUCP', 'MLF', 'X400',
+    	    	'Site', 'DECnet_SMTP', 'X25_SMTP', 'ListServ');
+
+    LOCAL
+    	STR 	: BLOCK [DSC$K_S_BLN,BYTE],
+    	STR2	: BLOCK [DSC$K_S_BLN,BYTE],
+    	STR3	: BLOCK [DSC$K_S_BLN,BYTE],
+    	PATHSTR	: BLOCK [DSC$K_S_BLN,BYTE],
+    	R   	: REF PATHDEF,
+    	DID1PATH;
+
+    INIT_DYNDESC (STR, STR2, STR3, pathstr);
+
+    DID1PATH = 0;
+    R = .PATHLIST [QUE_L_HEAD];
+    WHILE .R NEQA PATHLIST [QUE_L_HEAD] DO
+    BEGIN
+    	STR$COPY_R (STR2, R [PATH_W_DOMAIN], R [PATH_T_DOMAIN]);
+    	STR$UPCASE (STR, STR2);
+    	IF STR$MATCH_WILD (STR, .PAT_A) THEN
+    	BEGIN
+    	    IF NOT .OUTCMD AND NOT .DID1PATH THEN
+    	    BEGIN
+    	    	(.OUTRTN) (null_str);
+    	    	(.OUTRTN) (%ASCID'Domain-to-path mappings:');
+    	    END;
+    	    DID1PATH = 1;
+
+    	    IF .r [PATH_W_PATH] GEQU MX_K_PATH_HOLDQ_BASE THEN
+    	    	LIB$SYS_FAO (%ASCID'HOLDING_QUEUE=!UL', 0, pathstr,
+    	    	    	    .r [PATH_W_PATH] - MX_K_PATH_HOLDQ_BASE + 1)
+    	    ELSE
+    	    	STR$COPY_DX (pathstr, .pathname [.r [PATH_W_PATH]]);
+
+    	    QUOTE_STRING (STR2, .R [PATH_W_DOMAIN], R [PATH_T_DOMAIN]);
+    	    IF .OUTCMD THEN
+    	    BEGIN
+    	    	LIB$SYS_FAO (%ASCID'DEFINE PATH !AS !AS', 0, STR, STR2, pathstr);
+    	    	IF .R [PATH_W_PARAM] NEQ 0 THEN
+    	    	BEGIN
+    	    	    QUOTE_STRING (STR3, .R [PATH_W_PARAM], R [PATH_T_PARAM]);
+    	    	    LIB$SYS_FAO (%ASCID' /ROUTE=!AS', 0, STR2, STR3);
+    	    	    STR$APPEND (STR, STR2);
+    	    	END;
+    	    	(.OUTRTN) (STR);
+    	    END
+    	    ELSE
+    	    BEGIN
+    	    	LIB$SYS_FAO (%ASCID'  Domain=!AS, Path=!AS', 0, STR, STR2, pathstr);
+    	    	IF .R [PATH_W_PARAM] NEQ 0 THEN
+    	    	BEGIN
+    	    	    QUOTE_STRING (STR3, .R [PATH_W_PARAM], R [PATH_T_PARAM]);
+    	    	    LIB$SYS_FAO (%ASCID', Route=!AS', 0, STR2, STR3);
+    	    	    STR$APPEND (STR, STR2);
+    	    	END;
+    	    	(.OUTRTN) (STR);
+    	    END;
+    	END;
+
+    	R = .R [PATH_L_FLINK];
+
+    END; ! WHILE R
+    IF NOT .DID1PATH AND NOT .OUTCMD AND NOT .SUPPRESS THEN
+    	SIGNAL (MCP__NOMATCH, 1, %ASCID'path');
+
+    FREE_STRINGS (STR, STR2, STR3, pathstr);
+
+    SS$_NORMAL
+
+END; ! SHOW_PATHS
+
+%SBTTL 'SHOW_LCLDOMS'
+GLOBAL ROUTINE SHOW_LCLDOMS (OUTRTN, OUTCMD) =
+BEGIN
+!++
+! FUNCTIONAL DESCRIPTION:
+!
+!   Displays the current list of "local" domains.
+!
+! RETURNS:  	cond_value, longword (unsigned), write only, by value
+!
+! PROTOTYPE:
+!
+!   SHOW_LCLDOMS
+!
+! IMPLICIT INPUTS:  None.
+!
+! IMPLICIT OUTPUTS: None.
+!
+! COMPLETION CODES:
+!
+!   SS$_NORMAL:	    	normal successful completion.
+!
+! SIDE EFFECTS:
+!
+!   None.
+!--
+    LOCAL
+    	STR 	: BLOCK [DSC$K_S_BLN,BYTE],
+    	STR3	: BLOCK [DSC$K_S_BLN,BYTE],
+    	S   	: REF LCLDOMDEF,
+    	DID_ONE;
+
+    INIT_DYNDESC (STR, STR3);
+
+    DID_ONE = 0;
+    S = .LCLDOMS [QUE_L_HEAD];
+    WHILE .S NEQA LCLDOMS [QUE_L_HEAD] DO
+    BEGIN
+    	IF NOT .OUTCMD AND NOT .DID_ONE THEN
+    	BEGIN
+    	    (.OUTRTN) (null_str);
+    	    (.OUTRTN) (%ASCID'Local domain patterns for SMTP relay checks:');
+    	END;
+    	DID_ONE = 1;
+    	IF .OUTCMD THEN
+    	BEGIN
+    	    QUOTE_STRING (STR, .S [LCLDOM_W_HOSTLEN], S [LCLDOM_T_HOST]);
+    	    LIB$SYS_FAO (%ASCID'DEFINE LOCAL_DOMAIN !AS', 0, STR3, STR);
+    	    (.OUTRTN)(STR3);
+    	END
+    	ELSE
+    	BEGIN
+    	    LIB$SYS_FAO (%ASCID'    !AD', 0, STR3, .S [LCLDOM_W_HOSTLEN], S [LCLDOM_T_HOST]);
+    	    (.OUTRTN) (STR3);
+    	END;
+
+    	S = .S [LCLDOM_L_FLINK];
+
+    END; ! WHILE S
+
+    IF NOT .DID_ONE AND NOT .OUTCMD THEN
+    BEGIN
+    	(.OUTRTN) (null_str);
+    	(.OUTRTN) (%ASCID'No local domains defined.');
+    END;
+
+    FREE_STRINGS (STR, STR3);
+
+    SS$_NORMAL
+
+END; ! SHOW_LCLDOMS
+
+%SBTTL 'SHOW_RELAYS'
+GLOBAL ROUTINE SHOW_RELAYS (OUTRTN, OUTCMD) =
+BEGIN
+!++
+! FUNCTIONAL DESCRIPTION:
+!
+!   Displays the current list of allowed SMTP relays.
+!
+! RETURNS:  	cond_value, longword (unsigned), write only, by value
+!
+! PROTOTYPE:
+!
+!   SHOW_RELAYS
+!
+! IMPLICIT INPUTS:  None.
+!
+! IMPLICIT OUTPUTS: None.
+!
+! COMPLETION CODES:
+!
+!   SS$_NORMAL:	    	normal successful completion.
+!
+! SIDE EFFECTS:
+!
+!   None.
+!--
+    LOCAL
+    	STR 	: BLOCK [DSC$K_S_BLN,BYTE],
+    	S   	: REF RELAYDEF,
+    	DID_ONE;
+
+    INIT_DYNDESC (STR);
+
+    DID_ONE = 0;
+    S = .RELAYQUE [QUE_L_HEAD];
+    WHILE .S NEQA RELAYQUE [QUE_L_HEAD] DO
+    BEGIN
+    	BIND
+    	    a	= s [RELAY_L_ADDRESS]  	: VECTOR [4,BYTE],
+    	    n	= s [RELAY_L_NETMASK]	: VECTOR [4,BYTE];
+
+    	IF NOT .OUTCMD AND NOT .DID_ONE THEN
+    	BEGIN
+    	    (.OUTRTN) (null_str);
+    	    (.OUTRTN) (%ASCID'Inside IP networks/hosts:');
+    	END;
+    	DID_ONE = 1;
+    	IF .OUTCMD THEN
+    	    LIB$SYS_FAO (%ASCID'DEFINE INSIDE_NETWORK_ADDRESS !UB.!UB.!UB.!UB /NETMASK=!UB.!UB.!UB.!UB!AS!AS', 0, STR,
+    	    	    	    .a [0], .a [1], .a [2], .a [3],
+    	    	    	    .n [0], .n [1], .n [2], .n [3],
+    	    	    	    (IF .s [RELAY_V_REJECT] THEN %ASCID' /REJECT' ELSE null_str),
+    	    	    	    (IF .s [RELAY_V_RELAY] THEN %ASCID' /RELAY_ALLOWED' ELSE null_str))
+
+    	ELSE
+    	    LIB$SYS_FAO (%ASCID'    !15<!UB.!UB.!UB.!UB!>  !23<netmask !UB.!UB.!UB.!UB!>!AS!AS', 0, STR,
+    	    	    	    .a [0], .a [1], .a [2], .a [3],
+    	    	    	    .n [0], .n [1], .n [2], .n [3],
+    	    	    	    (IF .s [RELAY_V_REJECT] THEN %ASCID' (REJECT)' ELSE null_str),
+    	    	    	    (IF .s [RELAY_V_RELAY] THEN %ASCID' (Relay allowed)' ELSE null_str));
+    	(.OUTRTN) (STR);
+
+    	S = .S [RELAY_L_FLINK];
+
+    END; ! WHILE S
+
+    IF NOT .DID_ONE AND NOT .OUTCMD THEN
+    BEGIN
+    	(.OUTRTN) (null_str);
+    	(.OUTRTN) (%ASCID'No inside networks/hosts defined.');
+    END;
+
+    FREE_STRINGS (STR);
+
+    SS$_NORMAL
+
+END; ! SHOW_RELAYS
+
+%SBTTL 'SHOW_MLISTS'
+GLOBAL ROUTINE SHOW_MLISTS (OUTRTN, OUTCMD, PAT_A, SUPPRESS, BRIEF) =
+BEGIN
+!++
+! FUNCTIONAL DESCRIPTION:
+!
+!   Displays the current list of mailing list definitions.
+!
+! RETURNS:  	cond_value, longword (unsigned), write only, by value
+!
+! PROTOTYPE:
+!
+!   SHOW_MLISTS
+!
+! IMPLICIT INPUTS:  None.
+!
+! IMPLICIT OUTPUTS: None.
+!
+! COMPLETION CODES:
+!
+!   SS$_NORMAL:	    	normal successful completion.
+!
+! SIDE EFFECTS:
+!
+!   None.
+!--
+
+    TABLE (CLNAME, 'WORLD', 'GROUP', 'OWNER', 'SYSTEM');
+
+    LOCAL
+    	STR 	: BLOCK [DSC$K_S_BLN,BYTE],
+    	STR2	: BLOCK [DSC$K_S_BLN,BYTE],
+    	R   	: REF MLSTDEF,
+    	T   	: REF TXTDEF,
+    	DID1ML,
+    	DID_ONE;
+
+    INIT_DYNDESC (STR, STR2);
+
+    DID1ML = 0;
+    R = .MLISTS [QUE_L_HEAD];
+    WHILE .R NEQA MLISTS [QUE_L_HEAD] DO
+    BEGIN
+    	BIND
+    	    OWNQ    = R [MLST_Q_OWNQ]	: QUEDEF,
+    	    MODQ    = R [MLST_Q_MODQ]	: QUEDEF,
+	    hdrq    = r [MLST_Q_HDRQ]	: QUEDEF;
+
+    	STR$COPY_R (STR2, R [MLST_W_NAME], R [MLST_T_NAME]);
+    	STR$UPCASE (STR, STR2);
+    	IF STR$MATCH_WILD (STR, .PAT_A) THEN
+    	BEGIN
+    	    IF NOT .OUTCMD AND NOT .DID1ML THEN
+    	    BEGIN
+    	    	(.OUTRTN) (null_str);
+    	    	(.OUTRTN) (%ASCID'Mailing lists:');
+    	    END;
+    	    DID1ML = 1;
+
+    	    IF .OUTCMD THEN
+    	    BEGIN
+    	    	LIB$SYS_FAO (%ASCID'DEFINE LIST "!AD" -', 0, STR,
+    	    	    .R [MLST_W_NAME], R [MLST_T_NAME]);
+    	    	(.OUTRTN) (STR);
+
+    	    	STR$COPY_DX (STR, %ASCID'  /OWNER=(');
+    	    END
+    	    ELSE IF .brief THEN
+    	    BEGIN
+    	    	IF .r [MLST_W_HOSTNAME] EQLU 0 THEN
+    	    	    LIB$SYS_FAO (%ASCID'  !AD', 0, str, .r [MLST_W_NAME], r [MLST_T_NAME])
+    	    	ELSE
+    	    	    LIB$SYS_FAO (%ASCID'  !AD@!AD', 0, str,
+    	    	    	.r [MLST_W_NAME], r [MLST_T_NAME],
+    	    	    	.r [MLST_W_HOSTNAME], r [MLST_T_HOSTNAME]);
+    	    	(.OUTRTN) (str);
+    	    END
+    	    ELSE
+    	    BEGIN
+    	    	LIB$SYS_FAO (%ASCID'  Name: !AD', 0, STR,
+    	    	    .R [MLST_W_NAME], R [MLST_T_NAME]);
+    	    	(.OUTRTN) (STR);
+    	    	STR$COPY_DX (STR, %ASCID'  Owner: ');
+    	    END;
+
+!+++indentation!!+++!
+         IF NOT .brief THEN
+    	 BEGIN
+    	    T = .OWNQ [QUE_L_HEAD];
+    	    WHILE .T NEQA OWNQ [QUE_L_HEAD] DO
+    	    BEGIN
+    	    	QUOTE_STRING (STR2, .T [TXT_W_LEN], T [TXT_T_TEXT]);
+    	    	STR$APPEND (STR, STR2);
+    	    	IF .OUTCMD THEN
+    	    	    IF .T NEQA .OWNQ [QUE_L_TAIL] THEN
+    	    	    	STR$APPEND (STR, commadash_str)
+    	    	    ELSE
+    	    	    	STR$APPEND (STR, %ASCID')-');
+    	    	(.OUTRTN) (STR);
+    	    	STR$COPY_DX (STR, %ASCID'         ');
+    	    	T = .T [TXT_L_FLINK];
+    	    END;
+
+    	    SELECTONE .R [MLST_L_MAXFWD] OF
+    	    SET
+    	    	[-1] :
+    	    	    IF .OUTCMD THEN (.OUTRTN) (%ASCID'  /RECIPIENT_MAXIMUM=DEFAULT-')
+    	    	    ELSE (.OUTRTN) (%ASCID'  Maximum recipients per single message taken from MLF setting.');
+    	    	[0] :
+    	    	    IF .OUTCMD THEN (.OUTRTN) (%ASCID'  /NORECIPIENT_MAXIMUM-')
+    	    	    ELSE (.OUTRTN) (%ASCID'  No limit on number of recipients per single message.');
+    	    	[OTHERWISE] :
+    	    	    IF .OUTCMD THEN
+    	    	    BEGIN
+    	    	    	LIB$SYS_FAO (%ASCID'  /RECIPIENT_MAXIMUM=!UL-', 0, STR, .R [MLST_L_MAXFWD]);
+    	    	    	(.OUTRTN) (STR);
+    	    	    END
+    	    	    ELSE
+    	    	    BEGIN
+    	    	    	LIB$SYS_FAO (%ASCID'  Maximum recipients per single message: !UL', 0, STR,
+    	    	    	    	    .R [MLST_L_MAXFWD]);
+    	    	    	(.OUTRTN) (STR);
+    	    	    END;
+    	    TES;
+
+    	    IF .MODQ [QUE_L_HEAD] EQLA MODQ [QUE_L_HEAD] THEN
+    	    BEGIN
+    	    	IF .OUTCMD THEN
+    	    	    (.OUTRTN) (%ASCID'  /NOMODERATOR-');
+    	    END
+    	    ELSE
+    	    BEGIN
+    	    	IF .OUTCMD THEN
+    	    	    STR$COPY_DX (STR, %ASCID'  /MODERATOR=(')
+    	    	ELSE
+    	    	BEGIN
+    	    	    (.OUTRTN) (%ASCID'  Moderator(s):');
+    	    	    STR$COPY_DX (STR, %ASCID'          ');
+    	    	END;
+    	    	T = .MODQ [QUE_L_HEAD];
+    	    	WHILE .T NEQA MODQ [QUE_L_HEAD] DO
+    	    	BEGIN
+    	    	    QUOTE_STRING (STR2, .T [TXT_W_LEN], T [TXT_T_TEXT]);
+    	    	    STR$APPEND (STR, STR2);
+    	    	    IF .OUTCMD THEN
+    	    	    	IF .T NEQA .MODQ [QUE_L_TAIL] THEN
+    	    	    	    STR$APPEND (STR, commadash_str)
+    	    	    	ELSE
+    	    	    	    STR$APPEND (STR, %ASCID')');
+    	    	    (.OUTRTN) (STR);
+    	    	    STR$COPY_DX (STR, %ASCID'          ');
+    	    	    T = .T [TXT_L_FLINK];
+    	    	END;
+    	    END;
+
+    	    IF .OUTCMD THEN
+    	    	LIB$SYS_FAO (%ASCID'  /REPLY_TO=(!ASLIST,!ASSENDER)-', 0,
+    	    	    STR, (IF .R [MLST_V_RTOLIST] THEN null_str ELSE no_str),
+    	    	    (IF .R [MLST_V_RTOSNDR] THEN null_str ELSE no_str))
+    	    ELSE LIB$SYS_FAO (%ASCID'  Reply-to: !ASList, !ASSender', 0, STR,
+    	    	    (IF .R [MLST_V_RTOLIST] THEN null_str ELSE no_str),
+    	    	    (IF .R [MLST_V_RTOSNDR] THEN null_str ELSE no_str));
+    	    (.OUTRTN) (STR);
+
+    	    IF .R [MLST_W_ARCHIVE] GTR 0 THEN
+    	    	IF .OUTCMD THEN
+    	    	BEGIN
+    	    	    LIB$SYS_FAO (%ASCID'  /ARCHIVE=!AD', 0, STR,
+    	    	    	.R [MLST_W_ARCHIVE], R [MLST_T_ARCHIVE]);
+    	       	    (.OUTRTN) (STR);
+    	    	END
+    	    	ELSE
+    	    	BEGIN
+    	    	    LIB$SYS_FAO (%ASCID'  Archive: !AD', 0, STR,
+    	    	    	.R [MLST_W_ARCHIVE], R [MLST_T_ARCHIVE]);
+    	    	    (.OUTRTN) (STR);
+    	    	END
+    	    ELSE IF .OUTCMD THEN (.OUTRTN) (%ASCID'  /NOARCHIVE');
+
+            IF .outcmd THEN
+            BEGIN
+    	    	LIB$SYS_FAO (%ASCID'MODIFY LIST "!AD" -', 0, STR, .R [MLST_W_NAME], R [MLST_T_NAME]);
+    	    	(.OUTRTN) (STR);
+            END;
+
+    	    IF .R [MLST_W_ADDMSG] GTR 0 THEN
+    	    	IF .OUTCMD THEN
+    	    	BEGIN
+    	    	    LIB$SYS_FAO (%ASCID'  /ADD_MESSAGE=!AD -', 0, STR,
+    	    	    	.R [MLST_W_ADDMSG], R [MLST_T_ADDMSG]);
+    	       	    (.OUTRTN) (STR);
+    	    	END
+    	    	ELSE
+    	    	BEGIN
+    	    	    LIB$SYS_FAO (%ASCID'  Add message: !AD', 0, STR,
+    	    	    	.R [MLST_W_ADDMSG], R [MLST_T_ADDMSG]);
+    	    	    (.OUTRTN) (STR);
+    	    	END
+    	    ELSE IF .OUTCMD THEN (.OUTRTN) (%ASCID'  /NOADD_MESSAGE -');
+
+    	    IF .R [MLST_W_REMMSG] GTR 0 THEN
+    	    	IF .OUTCMD THEN
+    	    	BEGIN
+    	    	    LIB$SYS_FAO (%ASCID'  /REMOVE_MESSAGE=!AD -', 0, STR,
+    	    	    	.R [MLST_W_REMMSG], R [MLST_T_REMMSG]);
+    	       	    (.OUTRTN) (STR);
+    	    	END
+    	    	ELSE
+    	    	BEGIN
+    	    	    LIB$SYS_FAO (%ASCID'  Remove message: !AD', 0, STR,
+    	    	    	.R [MLST_W_REMMSG], R [MLST_T_REMMSG]);
+    	    	    (.OUTRTN) (STR);
+    	    	END
+    	    ELSE IF .OUTCMD THEN (.OUTRTN) (%ASCID'  /NOREMOVE_MESSAGE -');
+
+    	    IF .R [MLST_W_FWDMSG] GTR 0 THEN
+    	    	IF .OUTCMD THEN
+    	    	BEGIN
+    	    	    LIB$SYS_FAO (%ASCID'  /FORWARD_MESSAGE=!AD -', 0, STR,
+    	    	    	.R [MLST_W_FWDMSG], R [MLST_T_FWDMSG]);
+    	       	    (.OUTRTN) (STR);
+    	    	END
+    	    	ELSE
+    	    	BEGIN
+    	    	    LIB$SYS_FAO (%ASCID'  Forwarded-to-owner message: !AD', 0,
+    	    	    	STR, .R [MLST_W_FWDMSG], R [MLST_T_FWDMSG]);
+    	    	    (.OUTRTN) (STR);
+    	    	END
+    	    ELSE IF .OUTCMD THEN (.OUTRTN) (%ASCID'  /NOFORWARD_MESSAGE -');
+
+    	    IF .R [MLST_W_CNFMSG] GTR 0 THEN
+    	    	IF .OUTCMD THEN
+    	    	BEGIN
+    	    	    LIB$SYS_FAO (%ASCID'  /CONFIRMATION_MESSAGE=!AD', 0, STR,
+    	    	    	.R [MLST_W_CNFMSG], R [MLST_T_CNFMSG]);
+    	       	    (.OUTRTN) (STR);
+    	    	END
+    	    	ELSE
+    	    	BEGIN
+    	    	    LIB$SYS_FAO (%ASCID'  Subscription conf. message: !AD', 0,
+    	    	    	STR, .R [MLST_W_CNFMSG], R [MLST_T_CNFMSG]);
+    	    	    (.OUTRTN) (STR);
+    	    	END
+    	    ELSE IF .OUTCMD THEN (.OUTRTN) (%ASCID'  /NOCONFIRMATION_MESSAGE');
+
+            IF .outcmd THEN
+            BEGIN
+    	    	LIB$SYS_FAO (%ASCID'MODIFY LIST "!AD" -', 0, STR, .R [MLST_W_NAME], R [MLST_T_NAME]);
+    	    	(.OUTRTN) (STR);
+            END;
+
+    	    IF .R [MLST_W_DESC] GTR 0 THEN
+    	    	IF .OUTCMD THEN
+    	    	BEGIN
+    	    	    QUOTE_STRING (STR2, .R [MLST_W_DESC], R [MLST_T_DESC]);
+    	    	    LIB$SYS_FAO (%ASCID'  /DESCRIPTION=!AS -', 0, STR, STR2);
+    	    	    (.OUTRTN) (STR);
+    	    	END
+    	    	ELSE
+    	    	BEGIN
+    	    	    LIB$SYS_FAO (%ASCID'  Description: !AD', 0, STR,
+    	    	    	.R [MLST_W_DESC], R [MLST_T_DESC]);
+    	    	    (.OUTRTN) (STR);
+    	    	END;
+
+    	    QUOTE_STRING (STR2, .R [MLST_W_ERRSTO], R [MLST_T_ERRSTO]);
+    	    IF .OUTCMD THEN
+    	    	LIB$SYS_FAO (%ASCID'  /ERRORS_TO=!AS -', 0, STR, STR2)
+    	    ELSE
+    	    	LIB$SYS_FAO (%ASCID'  Errors-to: !AD', 0, STR,
+    	    	    .R [MLST_W_ERRSTO], R [MLST_T_ERRSTO]);
+    	    (.OUTRTN) (STR);
+
+	    IF .R[MLST_W_RTNADR] NEQU 0		!If there's a return address,
+	    THEN				!... then include it in display
+		BEGIN
+		QUOTE_STRING (STR2, .R [MLST_W_RTNADR], R [MLST_T_RTNADR]);
+		IF .OUTCMD THEN
+    	    	    LIB$SYS_FAO (%ASCID'  /RETURN_ADDRESS=!AS -', 0, STR, STR2)
+    		ELSE
+    	    	    LIB$SYS_FAO (%ASCID'  Return address: !AD', 0, STR,
+    	    			    .R [MLST_W_RTNADR], R [MLST_T_RTNADR]);
+		(.OUTRTN) (STR);
+		END;
+
+	    IF .r[MLST_W_HOSTNAME] NEQU 0	!If there's a hostname,
+	    THEN				!... then include it in display
+		BEGIN
+		QUOTE_STRING (str2, .r [MLST_W_HOSTNAME], r [MLST_T_HOSTNAME]);
+		IF .OUTCMD THEN
+    	    	    LIB$SYS_FAO (%ASCID'  /HOSTNAME=!AS -', 0, STR, STR2)
+    		ELSE
+    	    	    LIB$SYS_FAO (%ASCID'  Host name: !AD', 0, STR,
+    	    			    .r [MLST_W_HOSTNAME], R [MLST_T_HOSTNAME]);
+		(.OUTRTN) (STR);
+		END;
+
+    	    IF .OUTCMD THEN
+    	    	LIB$SYS_FAO (%ASCID'  /STRIP_HEADER=(!ASRECEIVED,!ASOTHER)', 0,
+    	    	    STR, (IF .R [MLST_V_REMRCVD] THEN null_str ELSE no_str),
+    	    	    (IF .R [MLST_V_REMOTHER] THEN null_str ELSE no_str))
+    	    ELSE LIB$SYS_FAO (%ASCID'  Strip header: !ASReceived, !ASOther',
+			0, STR,
+    	    	    (IF .R [MLST_V_REMRCVD] THEN null_str ELSE no_str),
+    	    	    (IF .R [MLST_V_REMOTHER] THEN null_str ELSE no_str));
+    	    (.OUTRTN) (STR);
+
+            IF .outcmd THEN
+            BEGIN
+    	    	LIB$SYS_FAO (%ASCID'MODIFY LIST "!AD" -', 0, STR, .R [MLST_W_NAME], R [MLST_T_NAME]);
+    	    	(.OUTRTN) (STR);
+            END;
+
+    	    IF .OUTCMD THEN
+    	    	LIB$SYS_FAO (%ASCID'  /!ASPRIVATE-', 0,
+    	    	    STR, (IF .R [MLST_V_PRIVATE] THEN null_str ELSE no_str))
+    	    ELSE LIB$SYS_FAO (%ASCID'  Private list: !AS', 0, STR,
+    	    	    (IF .R [MLST_V_PRIVATE] THEN ascid_yes ELSE ascid_no));
+    	    (.OUTRTN) (STR);
+
+    	    IF .OUTCMD THEN
+    	    	LIB$SYS_FAO (%ASCID'  /!ASCASE_SENSITIVE-', 0,
+    	    	    STR, (IF .R [MLST_V_NOCASE] THEN no_str ELSE null_str))
+    	    ELSE LIB$SYS_FAO (%ASCID'  Case sensitive: !AS', 0, STR,
+    	    	    (IF .R [MLST_V_NOCASE] THEN ascid_no ELSE ascid_yes));
+    	    (.OUTRTN) (STR);
+
+	    IF .outcmd
+	    THEN
+		LIB$SYS_FAO (%ASCID'  /!ASDIGEST-', 0, str,
+		    (IF .r [MLST_V_DIGEST] THEN null_str ELSE no_str))
+	    ELSE
+		LIB$SYS_FAO (%ASCID'  Digest support: !AS', 0, str,
+		   (IF .r [MLST_V_DIGEST] THEN ascid_yes ELSE ascid_no));
+	    (.outrtn) (str);
+
+	    IF .outcmd
+	    THEN
+		LIB$SYS_FAO (%ASCID'  /!ASHIDE_ERRORS_TO-', 0, str,
+		    (IF .r [MLST_V_NOHIDE] THEN no_str ELSE null_str))
+	    ELSE
+		LIB$SYS_FAO (%ASCID'  Hide /ERRORS_TO address: !AS', 0, str,
+		   (IF .r [MLST_V_NOHIDE] THEN ascid_no ELSE ascid_yes));
+	    (.outrtn) (str);
+
+	    IF .outcmd
+	    THEN
+		LIB$SYS_FAO (%ASCID'  /!ASCC_POST_ERRORS-', 0, str,
+		    (IF .r [MLST_V_CC_POSTERR] THEN null_str ELSE no_str))
+	    ELSE
+		LIB$SYS_FAO (%ASCID'  Copy post errors to /ERRORS_TO address: !AS', 0, str,
+		   (IF .r [MLST_V_CC_POSTERR] THEN ascid_yes ELSE ascid_no));
+	    (.outrtn) (str);
+
+	    IF .outcmd THEN
+            BEGIN
+		LIB$SYS_FAO (%ASCID'  /!ASREQUEST_CONFIRMATION', 0, str,
+		    (IF .r [MLST_V_SUBCNFRM] THEN null_str ELSE no_str));
+                IF .r [MLST_V_SUBCNFRM] AND CH$NEQ (8, UPLIT (0,0), 8, r [MLST_Q_CONFTIME]) THEN
+                BEGIN
+                    LIB$SYS_FAO (%ASCID'=INTERVAL="!%D"-', 0, str2, r [MLST_Q_CONFTIME]);
+                    STR$APPEND (str, str2);
+                END
+                ELSE
+                    STR$APPEND (str, %ASCID'-');
+            END
+	    ELSE
+            BEGIN
+		LIB$SYS_FAO (%ASCID'  Request subscription confirmations: !AS', 0, str,
+		   (IF .r [MLST_V_SUBCNFRM] THEN ascid_yes ELSE ascid_no));
+                IF .r [MLST_V_SUBCNFRM] AND CH$NEQ (8, UPLIT (0,0), 8, r [MLST_Q_CONFTIME]) THEN
+                BEGIN
+                    LIB$SYS_FAO (%ASCID' (interval !%D)', 0, str2, r [MLST_Q_CONFTIME]);
+                    STR$APPEND (str, str2);
+                END;
+            END;
+	    (.outrtn) (str);
+
+            IF .r [MLST_V_NOTIFY] EQL 0 THEN
+                IF .outcmd THEN
+                    STR$COPY_DX (str, %ASCID'  /NONOTIFY-')
+                ELSE
+                    STR$COPY_DX (str, %ASCID'  No owner notifications.')
+            ELSE
+            BEGIN
+                IF .outcmd THEN
+                    STR$COPY_DX (str, %ASCID'  /NOTIFY=')
+                ELSE
+                    STR$COPY_DX (str, %ASCID'  Owner notification for: ');
+                IF .r [MLST_V_NTFYADD] THEN
+                    STR$COPY_DX (str2, %ASCID'ADD')
+                ELSE
+                    FREE_STRINGS (str2);
+                IF .r [MLST_V_NTFYREM] THEN
+                    STR$CONCAT (str2, str2,
+                        (IF .str2 [DSC$W_LENGTH] EQL 0 THEN null_str ELSE ascid_comma),
+                        %ASCID'REMOVE');
+                IF .r [MLST_V_NTFYREQ] THEN
+                    STR$CONCAT (str2, str2,
+                        (IF .str2 [DSC$W_LENGTH] EQL 0 THEN null_str ELSE ascid_comma),
+                        %ASCID'REQUEST');
+                IF .r [MLST_V_NTFYCHG] THEN
+                    STR$CONCAT (str2, str2,
+                        (IF .str2 [DSC$W_LENGTH] EQL 0 THEN null_str ELSE ascid_comma),
+                        %ASCID'SET');
+                IF .outcmd THEN
+                    STR$CONCAT (str, str, %ASCID'(', str2, %ASCID')-')
+                ELSE
+                    STR$APPEND (str, str2);
+            END;
+            (.outrtn) (str);
+
+	    IF .outcmd
+	    THEN
+		LIB$SYS_FAO (%ASCID'  /!ASTEXT_ONLY-', 0, str,
+		    (IF .r [MLST_V_TEXTONLY] THEN null_str ELSE no_str))
+	    ELSE
+		LIB$SYS_FAO (%ASCID'  Allow only plain-text postings: !AS', 0, str,
+		   (IF .r [MLST_V_TEXTONLY] THEN ascid_yes ELSE ascid_no));
+	    (.outrtn) (str);
+
+    	    IF .outcmd THEN
+    	    BEGIN
+    	    	IF .r [MLST_L_MSGSZLIM] NEQU 0 THEN
+    	    	    LIB$SYS_FAO (%ASCID'  /MAXIMUM_MESSAGE_SIZE=!UL-', 0, str,
+    	    	    	    	    .r [MLST_L_MSGSZLIM])
+    	    	ELSE
+    	    	    STR$COPY_DX (str, %ASCID'  /NOMAXIMUM_MESSAGE_SIZE-');
+    	    END
+    	    ELSE
+    	    	IF .r [MLST_L_MSGSZLIM] NEQU 0 THEN
+    	    	    LIB$SYS_FAO (%ASCID'  Maximum message size for postings: !UL Kbyte!%S', 0, str,
+    	    	    	    	    .r [MLST_L_MSGSZLIM])
+    	    	ELSE
+    	    	    STR$COPY_DX (str, %ASCID'  No limit on message size for postings to list.');
+    	    (.outrtn) (str);
+
+    	    STR$COPY_DX (STR2, %ASCID'(');
+    	    BEGIN
+    	    	BIND P = R [MLST_L_PROT] : BLOCKVECTOR [4,1,BYTE];
+    	    	DECR I FROM 3 TO 0 DO
+    	    	BEGIN
+    	    	    STR$APPEND (STR2, .CLNAME [.I]);
+    	    	    DID_ONE = 0;
+    	    	    IF .P [.I,PROT_V_READ] THEN
+    	    	    BEGIN
+    	    	    	STR$APPEND (STR2, %ASCID':R');
+    	    	    	DID_ONE = 1;
+    	    	    END;
+    	    	    IF .P [.I,PROT_V_WRITE] THEN
+    	    	    BEGIN
+    	    	    	IF NOT .DID_ONE THEN STR$APPEND (STR2, ascid_colon);
+    	    	    	DID_ONE = 1;
+    	    	    	STR$APPEND (STR2, %ASCID'W');
+    	    	    END;
+    	    	    IF .P [.I,PROT_V_EXECUTE] THEN
+    	    	    BEGIN
+    	    	    	IF NOT .DID_ONE THEN STR$APPEND (STR2, ascid_colon);
+    	    	    	DID_ONE = 1;
+    	    	    	STR$APPEND (STR2, %ASCID'E');
+    	    	    END;
+    	    	    IF .P [.I,PROT_V_DELETE] THEN
+    	    	    BEGIN
+    	    	    	IF NOT .DID_ONE THEN STR$APPEND (STR2, ascid_colon);
+    	    	    	DID_ONE = 1;
+    	    	    	STR$APPEND (STR2, %ASCID'D');
+    	    	    END;
+    	    	    IF .I NEQ 0 THEN STR$APPEND (STR2, ascid_comma);
+    	    	END;
+    	    END;
+    	    STR$APPEND (STR2, %ASCID')');
+    	    IF .OUTCMD THEN
+    	    	STR$CONCAT (STR, %ASCID'  /PROTECTION=', STR2)
+    	    ELSE
+    	    	STR$CONCAT (STR, %ASCID'  Protection: ', STR2);
+    	    (.OUTRTN) (STR);
+
+	    IF (.outcmd)
+	    THEN
+		BEGIN
+		LIB$SYS_FAO (%ASCID'MODIFY LIST "!AD" -', 0, str,
+	    	    	    .r [MLST_W_NAME], r [MLST_T_NAME]);
+		(.outrtn) (str);
+		END;
+
+	    IF (.r [MLST_L_LHDRFLAGS] EQLU 0)
+	    THEN
+		BEGIN
+		IF (.outcmd)
+		THEN
+		    (.outrtn) (%ASCID'  /NOLIST_HEADERS')
+		ELSE
+		    (.outrtn) (%ASCID'  No List-* headers');
+		END
+	    ELSE
+		BEGIN
+		IF .outcmd
+		THEN
+		    (.outrtn) (%ASCID'  /LIST_HEADERS=(-')
+		ELSE
+		    (.outrtn) (%ASCID'  List-* Headers: ');
+
+		IF (.r [MLST_V_LSUB])
+		THEN
+		    BEGIN
+		    IF (.r [MLST_W_LSUB] EQLU 0)
+		    THEN
+			BEGIN
+			IF (.outcmd)
+			THEN
+			    STR$COPY_DX (str, %ASCID'    SUBSCRIBE,-')
+			ELSE
+			    STR$COPY_DX (str, %ASCID'    List-Subscribe: Filled in at run-time');
+			END
+		    ELSE
+			BEGIN
+			IF (.outcmd)
+			THEN
+			    LIB$SYS_FAO (%ASCID'    SUBSCRIBE="!AD",-', 0, str,
+					.r [MLST_W_LSUB], r [MLST_T_LSUB])
+			ELSE
+			    LIB$SYS_FAO (%ASCID'    List-Subscribe: "!AD"',
+				0, str, .r [MLST_W_LSUB], r [MLST_T_LSUB]);
+			END;
+		    (.outrtn) (str);			
+		    END
+		ELSE
+		    IF (.outcmd) THEN (.outrtn) (%ASCID'    NOSUBSCRIBE,-');
+
+		IF (.r [MLST_V_LUNSUB])
+		THEN
+		    BEGIN
+		    IF (.r [MLST_W_LUNSUB] EQLU 0)
+		    THEN
+			BEGIN
+			IF (.outcmd)
+			THEN
+			    STR$COPY_DX (str, %ASCID'    UNSUBSCRIBE,-')
+			ELSE
+			    STR$COPY_DX (str, %ASCID'    List-Unsubscribe: Filled in at run-time');
+			END
+		    ELSE
+			BEGIN
+			IF (.outcmd)
+			THEN
+			    LIB$SYS_FAO (%ASCID'    UNSUBSCRIBE="!AD",-', 0, str,
+					.r [MLST_W_LUNSUB], r [MLST_T_LUNSUB])
+			ELSE
+			    LIB$SYS_FAO (%ASCID'    List-Unsubscribe: "!AD"',
+				0, str, .r [MLST_W_LUNSUB], r [MLST_T_LUNSUB]);
+			END;
+		    (.outrtn) (str);			
+		    END
+		ELSE
+		    IF (.outcmd) THEN (.outrtn) (%ASCID'    NOUNSUBSCRIBE,-');
+
+		IF (.r [MLST_V_LHELP])
+		THEN
+		    BEGIN
+		    IF (.outcmd)
+		    THEN
+			LIB$SYS_FAO (%ASCID'    HELP="!AD")', 0, str,
+					.r [MLST_W_LHELP], r [MLST_T_LHELP])
+		    ELSE
+			LIB$SYS_FAO (%ASCID'    List-Help: "!AD"',
+				0, str, .r [MLST_W_LHELP], r [MLST_T_LHELP]);
+		    (.outrtn) (str);			
+		    END
+		ELSE
+		    IF (.outcmd) THEN (.outrtn) (%ASCID'    NOHELP)');
+
+		END;
+
+	    IF (.outcmd)
+	    THEN
+		BEGIN
+		LIB$SYS_FAO (%ASCID'MODIFY LIST "!AD" -', 0, str,
+	    	    	    .r [MLST_W_NAME], r [MLST_T_NAME]);
+		(.outrtn) (str);
+		END;
+
+    	    IF (.hdrq [QUE_L_HEAD] EQLA hdrq [QUE_L_HEAD])
+	    THEN
+		BEGIN
+    	    	IF (.outcmd)
+		THEN
+    	    	    (.outrtn) (%ASCID'  /NOXHEADERS');
+		END
+	    ELSE
+		BEGIN
+    	    	IF (.outcmd)
+		THEN
+    	    	    (.outrtn) (%ASCID'  /XHEADERS=(-')
+    	    	ELSE
+		    (.outrtn) (%ASCID'  X-Headers:');
+		STR$COPY_DX (str, %ASCID'          ');
+    	    	t = .hdrq [QUE_L_HEAD];
+    	    	WHILE (.t NEQA hdrq [QUE_L_HEAD]) DO
+		    BEGIN
+    	    	    QUOTE_STRING (str2, .t [TXT_W_LEN], t [TXT_T_TEXT]);
+    	    	    STR$APPEND (str, str2);
+    	    	    IF .outcmd
+		    THEN
+    	    	    	IF .t NEQA .hdrq [QUE_L_TAIL] THEN
+    	    	    	    STR$APPEND (str, commadash_str)
+    	    	    	ELSE
+    	    	    	    STR$APPEND (str, %ASCID')');
+    	    	    (.outrtn) (str);
+    	    	    STR$COPY_DX (str, %ASCID'          ');
+    	    	    t = .t [TXT_L_FLINK];
+    	    	END;
+    	    END;
+
+	    IF (.outcmd)
+	    THEN
+		BEGIN
+		LIB$SYS_FAO (%ASCID'MODIFY LIST "!AD" -', 0, str,
+	    	    	    .r [MLST_W_NAME], r [MLST_T_NAME]);
+		(.outrtn) (str);
+		END;
+
+	    IF .r [MLST_W_SPREFIX] NEQU 0	!If there's a subject prefix,
+	    THEN				!... then include it in display
+		BEGIN
+		QUOTE_STRING (str2, .r [MLST_W_SPREFIX], r [MLST_T_SPREFIX]);
+		IF .outcmd THEN
+    	    	    LIB$SYS_FAO (%ASCID'  /SUBJECT_PREFIX=!AS -', 0, str, str2)
+    		ELSE
+    	    	    LIB$SYS_FAO (%ASCID'  Subject prefix: !AD', 0, str,
+    	    			    .r [MLST_W_SPREFIX], R [MLST_T_SPREFIX]);
+		(.outrtn) (str);
+		END;
+
+	    LIB$SYS_FAO (%ASCID'!AS,!AS,!AS,!AS,!AS', 0, str,
+		(IF .r [MLST_V_SS_NOMAIL] THEN %ASCID'NOMAIL' ELSE %ASCID'MAIL'),
+		(IF .r [MLST_V_SS_NOREPRO] THEN %ASCID'NOREPRO' ELSE %ASCID'REPRO'),
+		(IF .r [MLST_V_SS_CONCEAL] THEN %ASCID'CONCEAL' ELSE %ASCID'NOCONCEAL'),
+		(IF .r [MLST_V_SS_DIGEST] THEN %ASCID'DIGEST' ELSE %ASCID'NODIGEST'),
+		(IF .r [MLST_V_SS_NOPOST] THEN %ASCID'NOPOST' ELSE
+		%ASCID'POST'));
+
+	    IF (.outcmd)
+	    THEN
+		STR$CONCAT (str, %ASCID'  /SETTINGS=(', str, %ASCID')-')
+	    ELSE
+		STR$PREFIX (str, %ASCID'  Default settings: ');
+	    (.outrtn) (str);
+
+    	    IF .r [MLST_V_RQLSTADR] OR .r [MLST_V_NOSPAMHI] THEN
+    	    BEGIN
+    	    	IF .outcmd THEN
+    	    	BEGIN
+    	    	    STR$COPY_DX (str, %ASCID'  /IGNORE=(');
+    	    	    IF .r [MLST_V_RQLSTADR] THEN
+    	    	    BEGIN
+    	    	    	STR$APPEND (str, %ASCID'MISSING_LIST_ADDRESS');
+    	    	    	IF .r [MLST_V_NOSPAMHI] THEN
+    	    	    	    STR$APPEND (str, %ASCID',');
+    	    	    END;
+    	    	    IF .r [MLST_V_NOSPAMHI] THEN
+    	    	    BEGIN
+    	    	    	STR$APPEND (str, %ASCID'JUNK_MAIL=');
+    	    	    	STR$APPEND (str, 
+    	    	    	    (IF .r [MLST_V_NOSPAMLO] THEN %ASCID'LOW' ELSE
+    	    	    	    IF .r [MLST_V_NOSPAMMD] THEN %ASCID'MEDIUM' ELSE %ASCID'HIGH'));
+    	    	    END;
+    	    	    STR$APPEND (str, %ASCID')');
+    	    	    (.outrtn)(str);
+    	    	END
+    	    	ELSE
+    	    	BEGIN
+    	    	    IF .r [MLST_V_RQLSTADR] THEN
+    	    	    	(.outrtn) (%ASCID'  Messages not containing the list address in the To or CC header will be ignored.');
+    	    	    IF .r [MLST_V_NOSPAMHI] THEN
+    	    	    BEGIN
+    	    	    	STR$CONCAT (str, %ASCID'  Messages with X-Junk-Mail-Rating: ', 
+    	    	    	    (IF .r [MLST_V_NOSPAMLO] THEN %ASCID'LOW or higher' ELSE
+    	    	    	    IF .r [MLST_V_NOSPAMMD] THEN %ASCID'MEDIUM or higher' ELSE %ASCID'HIGH'),
+    	    	    	    %ASCID' will be ignored.');
+    	    	    	(.outrtn)(str);
+    	    	    END;
+    	    	END;
+    	    END
+    	    ELSE IF .outcmd THEN
+    	    	(.outrtn)(%ASCID'  /NOIGNORE');
+
+    	    IF NOT .OUTCMD THEN (.OUTRTN) (null_str);
+
+    	END;
+
+      END;  ! NOT brief --- indentation!! --- !
+
+    	R = .R [MLST_L_FLINK];
+
+    END; ! WHILE R
+    IF NOT .DID1ML AND NOT .OUTCMD AND NOT .SUPPRESS THEN
+    	SIGNAL (MCP__NOMATCH, 1, %ASCID'mailing list');
+
+    FREE_STRINGS (STR, STR2);
+
+    SS$_NORMAL
+
+END; ! SHOW_MLISTS
+
+%SBTTL 'SHOW_SYSUSERS'
+GLOBAL ROUTINE SHOW_SYSUSERS (OUTRTN, OUTCMD) =
+BEGIN
+!++
+! FUNCTIONAL DESCRIPTION:
+!
+!   Displays the current list of "system" (privileged) users.
+!
+! RETURNS:  	cond_value, longword (unsigned), write only, by value
+!
+! PROTOTYPE:
+!
+!   SHOW_SYSUSERS
+!
+! IMPLICIT INPUTS:  None.
+!
+! IMPLICIT OUTPUTS: None.
+!
+! COMPLETION CODES:
+!
+!   SS$_NORMAL:	    	normal successful completion.
+!
+! SIDE EFFECTS:
+!
+!   None.
+!--
+    LOCAL
+    	STR 	: BLOCK [DSC$K_S_BLN,BYTE],
+    	STR2	: BLOCK [DSC$K_S_BLN,BYTE],
+    	R   	: REF TXTDEF;
+
+    INIT_DYNDESC (STR, STR2);
+
+    IF .SYSUSERS [QUE_L_HEAD] EQLA SYSUSERS [QUE_L_HEAD] THEN
+    	RETURN SS$_NORMAL;
+
+    IF .OUTCMD THEN
+    	(.OUTRTN) (%ASCID'DEFINE SYSTEM_USERS -')
+    ELSE
+    BEGIN
+    	(.OUTRTN) (null_str);
+    	(.OUTRTN) (%ASCID'System (privileged) users:');
+    END;
+
+    R = .SYSUSERS [QUE_L_HEAD];
+    WHILE .R NEQA SYSUSERS [QUE_L_HEAD] DO
+    BEGIN
+    	QUOTE_STRING (STR2, .R [TXT_W_LEN], R [TXT_T_TEXT]);
+    	STR$CONCAT (STR, %ASCID'    ', STR2);
+
+    	IF .OUTCMD THEN
+    	    IF .R NEQ .SYSUSERS [QUE_L_TAIL] THEN STR$APPEND (STR, commadash_str);
+
+    	(.OUTRTN) (STR);
+
+    	R = .R [TXT_L_FLINK];
+
+    END; ! WHILE R
+
+    FREE_STRINGS (STR, STR2);
+
+    SS$_NORMAL
+
+END; ! SHOW_SYSUSERS
+
+%SBTTL 'SHOW_FILE'
+GLOBAL ROUTINE SHOW_FILE (OUTRTN, OUTCMD) =
+BEGIN
+!++
+! FUNCTIONAL DESCRIPTION:
+!
+!   Displays the name of the config file we are editing.
+!
+! RETURNS:  	cond_value, longword (unsigned), write only, by value
+!
+! PROTOTYPE:
+!
+!   SHOW_FILE
+!
+! IMPLICIT INPUTS:  None.
+!
+! IMPLICIT OUTPUTS: None.
+!
+! COMPLETION CODES:
+!
+!   SS$_NORMAL:	    	normal successful completion.
+!
+! SIDE EFFECTS:
+!
+!   None.
+!--
+    LOCAL
+    	STR 	: BLOCK [DSC$K_S_BLN,BYTE];
+
+    $INIT_DYNDESC (STR);
+
+    IF NOT .OUTCMD THEN (.OUTRTN) (null_str);
+
+    IF .OUTCMD THEN
+    	LIB$SYS_FAO (%ASCID'!! Configuration file: !AS', 0, STR, CFGFILE)
+    ELSE
+    	LIB$SYS_FAO (%ASCID'Configuration file: !AS', 0, STR, CFGFILE);
+
+    (.OUTRTN) (STR);
+
+    STR$FREE1_DX (STR);
+
+    SS$_NORMAL
+
+END; ! SHOW_FILE
+
+%SBTTL 'SHOW_FSUSER'
+GLOBAL ROUTINE SHOW_FSUSER (OUTRTN, OUTCMD, PAT_A, SUPPRESS) =
+BEGIN
+!++
+! FUNCTIONAL DESCRIPTION:
+!
+!   Displays file server info.
+!
+! RETURNS:  	cond_value, longword (unsigned), write only, by value
+!
+! PROTOTYPE:
+!
+!   SHOW_FSUSER  outrtn, outcmd, pattn
+!
+! IMPLICIT INPUTS:  None.
+!
+! IMPLICIT OUTPUTS: None.
+!
+! COMPLETION CODES:
+!
+!   SS$_NORMAL:	    	normal successful completion.
+!
+! SIDE EFFECTS:
+!
+!   None.
+!--
+    BIND
+    	PAT 	= .PAT_A    : BLOCK [,BYTE];
+
+    LOCAL
+    	STR 	: BLOCK [DSC$K_S_BLN,BYTE],
+    	STR2	: BLOCK [DSC$K_S_BLN,BYTE],
+    	TODAY	: BLOCK [8,BYTE],
+    	BEGINDT	: BLOCK [8,BYTE],
+    	ENDDT	: BLOCK [8,BYTE],
+    	F   	: REF FSRVDEF,
+    	DID1FS;
+
+    INIT_DYNDESC (STR, STR2);
+    $BINTIM (TIMBUF=%ASCID'-- 00:00:00.00', TIMADR=TODAY);
+
+    DID1FS = 0;
+    F = .FSRVQUE [QUE_L_HEAD];
+    WHILE .F NEQA FSRVQUE [QUE_L_HEAD] DO
+    BEGIN
+    	STR$COPY_R (STR2, F [FSRV_W_NAME], F [FSRV_T_NAME]);
+    	STR$UPCASE (STR, STR2);
+    	IF STR$MATCH_WILD (STR, .PAT_A) THEN
+    	BEGIN
+    	    IF NOT .OUTCMD AND NOT .DID1FS THEN
+    	    BEGIN
+    	    	(.OUTRTN) (null_str);
+    	    	(.OUTRTN) (%ASCID'File servers:');
+    	    END;
+    	    DID1FS = 1;
+
+    	    IF .OUTCMD THEN
+    	    BEGIN
+    	    	LIB$SYS_FAO (%ASCID'DEFINE FILE_SERVER "!AD" -', 0, STR,
+    	    	    .F [FSRV_W_NAME], F [FSRV_T_NAME]);
+    	    	(.OUTRTN) (STR);
+
+		IF .F [FSRV_W_DESC] GTR 0 THEN
+    	    	BEGIN
+    	    	    QUOTE_STRING (STR2, .F [FSRV_W_DESC], F [FSRV_T_DESC]);
+    	    	    LIB$SYS_FAO (%ASCID'  /DESCRIPTION=!AS -', 0, STR, STR2);
+    	    	    (.OUTRTN) (STR);
+    	    	END;
+
+    	    	LIB$SYS_FAO (%ASCID'  /MANAGER="!AD" -', 0, STR,
+    	    	    .F [FSRV_W_MGR], F [FSRV_T_MGR]);
+    	    	(.OUTRTN) (STR);
+    	    	LIB$SYS_FAO (%ASCID'  /ROOT=!AD -', 0, STR, .F [FSRV_W_ROOT],
+    	    	    F [FSRV_T_ROOT]);
+    	    	(.OUTRTN) (STR);
+    	    	IF .F [FSRV_W_MLIST] EQL 0 THEN
+    	    	    (.OUTRTN) (%ASCID'  /NOMAILING_LIST -')
+    	    	ELSE
+    	    	BEGIN
+    	    	    LIB$SYS_FAO (%ASCID'  /MAILING_LIST="!AD" -', 0, STR,
+    	    	    	.F [FSRV_W_MLIST], F [FSRV_T_MLIST]);
+    	    	    (.OUTRTN) (STR);
+    	    	END;
+    	    	IF .F [FSRV_L_THRESH] EQL -1 THEN
+    	    	    (.OUTRTN) (%ASCID'  /NODELAY_THRESHOLD -')
+    	    	ELSE
+    	    	BEGIN
+    	    	    LIB$ADD_TIMES (TODAY, F [FSRV_Q_BEGIN], BEGINDT);
+    	    	    LIB$ADD_TIMES (TODAY, F [FSRV_Q_END], ENDDT);
+    	    	    LIB$SYS_FAO (%ASCID'  /DELAY_THRESHOLD=!UL -', 0, STR,
+    	    	    	.F [FSRV_L_THRESH]);
+    	    	    (.OUTRTN) (STR);
+    	    	    LIB$SYS_FAO (%ASCID'  /BEGIN_SEND_PERIOD="!5%T" -', 0, STR,
+    	    	    	BEGINDT);
+    	    	    (.OUTRTN) (STR);
+    	    	    LIB$SYS_FAO (%ASCID'  /END_SEND_PERIOD="!5%T" -', 0, STR,
+    	    	    	ENDDT);
+    	    	    (.OUTRTN) (STR);
+    	    	END;
+    	    	IF .F [FSRV_L_SERVLIM] EQL 0 THEN
+    	    	    (.OUTRTN) (%ASCID'  /NOSERVER_LIMIT -')
+    	    	ELSE
+    	    	BEGIN
+    	    	    LIB$SYS_FAO (%ASCID'  /SERVER_LIMIT=!UL -', 0, STR,
+    	    	    	.F [FSRV_L_SERVLIM]);
+    	    	    (.OUTRTN) (STR);
+    	    	END;
+    	    	IF .F [FSRV_L_HOSTLIM] EQL 0 THEN
+    	    	    (.OUTRTN) (%ASCID'  /NOHOST_LIMIT -')
+    	    	ELSE
+    	    	BEGIN
+    	    	    LIB$SYS_FAO (%ASCID'  /HOST_LIMIT=!UL -', 0, STR,
+    	    	    	.F [FSRV_L_HOSTLIM]);
+    	    	    (.OUTRTN) (STR);
+    	    	END;
+    	    	IF .F [FSRV_L_USERLIM] EQL 0 THEN
+    	    	    (.OUTRTN) (%ASCID'  /NOUSER_LIMIT')
+    	    	ELSE
+    	    	BEGIN
+    	    	    LIB$SYS_FAO (%ASCID'  /USER_LIMIT=!UL -', 0, STR,
+    	    	    	.F [FSRV_L_USERLIM]);
+    	    	    (.OUTRTN) (STR);
+    	    	END;
+    	    END
+    	    ELSE
+    	    BEGIN
+    	    	LIB$SYS_FAO (%ASCID'  Name: !AD, Manager: !AD', 0, STR,
+    	    	    .F [FSRV_W_NAME], F [FSRV_T_NAME],
+    	    	    .F [FSRV_W_MGR], F [FSRV_T_MGR]);
+    	    	(.OUTRTN) (STR);
+		IF .F [FSRV_W_DESC] GTR 0 THEN
+    	    	BEGIN
+    	    	    LIB$SYS_FAO (%ASCID'    Description: !AD', 0, STR,
+    	    	    	.F [FSRV_W_DESC], F [FSRV_T_DESC]);
+    	    	    (.OUTRTN) (STR);
+    	    	END;
+
+    	    	LIB$SYS_FAO (%ASCID'    Root: !AD', 0, STR, 
+    	    	    .F [FSRV_W_ROOT], F [FSRV_T_ROOT]);
+    	    	(.OUTRTN) (STR);
+    	    	IF .F [FSRV_W_MLIST] EQL 0 THEN
+    	    	    (.OUTRTN) (%ASCID'    Not linked to a mailing list.')
+    	    	ELSE
+    	    	BEGIN
+    	    	    LIB$SYS_FAO (%ASCID'    Linked to mailing list: !AD', 0,
+    	    	    	STR, .F [FSRV_W_MLIST], F [FSRV_T_MLIST]);
+    	    	    (.OUTRTN) (STR);
+    	    	END;
+    	    	IF .F [FSRV_L_THRESH] EQL -1 THEN
+    	    	    (.OUTRTN) (%ASCID'    No delay threshold.')
+    	    	ELSE
+    	    	BEGIN
+    	    	    LIB$ADD_TIMES (TODAY, F [FSRV_Q_BEGIN], BEGINDT);
+    	    	    LIB$ADD_TIMES (TODAY, F [FSRV_Q_END], ENDDT);
+    	    	    LIB$SYS_FAO (%ASCID'    Delay threshold: !UL', 0, STR,
+    	    	    	.F [FSRV_L_THRESH]);
+    	    	    (.OUTRTN) (STR);
+    	    	    LIB$SYS_FAO (%ASCID'    Send period: !5%T - !5%T', 0,
+    	    	    	STR, BEGINDT, ENDDT);
+    	    	    (.OUTRTN) (STR);
+    	    	END;
+    	    	LIB$SYS_FAO (%ASCID %STRING ('  Daily limits: Server: !UL  ',
+    	    	    	'Host: !UL  User: !UL'), 0, STR, .F [FSRV_L_SERVLIM],
+    	    	    .F [FSRV_L_HOSTLIM], .F [FSRV_L_USERLIM]);
+    	    	(.OUTRTN) (STR);
+    	    END;
+
+    	    IF NOT .OUTCMD THEN (.OUTRTN) (null_str);
+
+    	END;
+
+    	F = .F [FSRV_L_FLINK];
+
+    END; ! WHILE F
+
+    IF NOT .DID1FS AND NOT .OUTCMD AND NOT .SUPPRESS THEN
+    	SIGNAL (MCP__NOMATCH, 1, %ASCID'file server');
+
+    FREE_STRINGS (STR, STR2);
+
+    SS$_NORMAL
+
+END; ! SHOW_FSUSER
+
+%SBTTL 'SHOW_SMTP'
+GLOBAL ROUTINE SHOW_SMTP (OUTRTN, OUTCMD) = 
+BEGIN
+!++
+! FUNCTIONAL DESCRIPTION:
+!
+!   Displays SET SMTP info.
+!
+! RETURNS:  	cond_value, longword (unsigned), write only, by value
+!
+! PROTOTYPE:
+!
+!   SHOW_SMTP
+!
+! IMPLICIT INPUTS:  None.
+!
+! IMPLICIT OUTPUTS: None.
+!
+! COMPLETION CODES:
+!
+!   SS$_NORMAL:	    	normal successful completion.
+!
+! SIDE EFFECTS:
+!
+!   None.
+!--
+    LOCAL
+    	STR 	: BLOCK [DSC$K_S_BLN,BYTE];
+
+    INIT_DYNDESC (STR);
+
+    IF .OUTCMD THEN
+    BEGIN
+    	LIB$SYS_FAO (%ASCID'SET SMTP/!ASACCOUNTING/RETRY_INTERVAL="!%D" -',
+    	    0, STR, (IF .SMTP_INFO [SMTP_V_ACCTG] THEN null_str ELSE
+    	    no_str), SMTP_INFO [SMTP_Q_RETRY]);
+    	(.OUTRTN) (STR);
+    	LIB$SYS_FAO (%ASCID'  /MAXIMUM_RETRIES=!UL /DNS_RETRIES=!UL-', 0, STR,
+    	    .SMTP_INFO [SMTP_L_MAXTRIES], .SMTP_INFO [SMTP_L_MAXDNS]);
+    	(.OUTRTN) (STR);
+    	LIB$SYS_FAO (%ASCID'  /!ASVERIFY_ALLOWED-', 0, STR,
+    	    (IF .SMTP_INFO [SMTP_V_NOVRFY] THEN no_str ELSE null_str));
+    	(.OUTRTN) (STR);
+    	LIB$SYS_FAO (%ASCID'  /!ASRELAY_ALLOWED-', 0, STR,
+    	    (IF .SMTP_INFO [SMTP_V_NORELAY] THEN no_str ELSE null_str));
+    	(.OUTRTN) (STR);
+    	LIB$SYS_FAO (%ASCID'  /!ASVALIDATE_SENDER_DOMAIN-', 0, STR,
+    	    (IF .SMTP_INFO [SMTP_V_VALDOM] THEN null_str ELSE no_str));
+    	(.OUTRTN) (STR);
+    	LIB$SYS_FAO (%ASCID'  /!ASPERCENT_HACK-', 0, STR,
+    	    (IF .SMTP_INFO [SMTP_V_NOPCTHACK] THEN no_str ELSE null_str));
+    	(.OUTRTN) (STR);
+    	LIB$SYS_FAO (%ASCID'  /!ASTLS', 0, STR,
+    	    (IF .SMTP_INFO [SMTP_V_TLS] THEN null_str ELSE no_str));
+    	(.OUTRTN) (STR);
+    	IF .smtp_info [SMTP_V_RBL] AND NOT QUEUE_EMPTY (smtp_info [SMTP_Q_RBLQUE]) THEN
+    	BEGIN
+    	    BIND
+    	    	rblque = smtp_info [SMTP_Q_RBLQUE] : QUEDEF;
+    	    LOCAL
+    	    	txt : REF TXTDEF;
+    	    (.outrtn) (%ASCID'SET SMTP/RBL_CHECK=(-');
+    	    txt = .rblque [QUE_L_HEAD];
+    	    WHILE .txt NEQA rblque DO
+    	    BEGIN
+    	    	LIB$SYS_FAO (%ASCID'  "!AD"!AS', 0, str,
+    	    	    	    	.txt [TXT_W_LEN], txt [TXT_T_TEXT],
+    	    	    	    	(IF .txt [TXT_L_FLINK] EQLA rblque THEN %ASCID')' ELSE commadash_str));
+    	    	(.outrtn) (str);
+    	    	txt = .txt [TXT_L_FLINK];
+    	    END;
+    	END
+    	ELSE
+    	BEGIN
+    	    LIB$SYS_FAO (%ASCID'SET SMTP/!ASRBL_CHECK', 0, str,
+    	    	    	 (IF .smtp_info [SMTP_V_RBL] THEN null_str ELSE no_str));
+    	    (.OUTRTN) (STR);
+    	END;
+
+    	IF .SMTP_INFO [SMTP_W_DEFRTR] EQL 0 THEN
+    	    (.OUTRTN) (%ASCID'SET SMTP/NODEFAULT_ROUTER-')
+    	ELSE
+    	BEGIN
+    	    LIB$SYS_FAO (%ASCID'SET SMTP/DEFAULT_ROUTER="!AD"-', 0, STR,
+    	    	.SMTP_INFO [SMTP_W_DEFRTR], SMTP_INFO [SMTP_T_DEFRTR]);
+    	    (.OUTRTN) (STR);
+    	END;
+
+    	IF .smtp_info [SMTP_V_AUTHCRAM] OR .smtp_info [SMTP_V_AUTHPLAIN] THEN
+    	BEGIN
+    	    STR$COPY_DX (str, %ASCID'    /AUTHENTICATION=(');
+    	    IF .smtp_info [SMTP_V_AUTHCRAM] THEN
+    	    BEGIN
+    	    	STR$APPEND (str, %ASCID'CRAM_MD5');
+    	    	IF .smtp_info [SMTP_V_AUTHPLAIN] THEN
+    	    	    STR$APPEND (str, %ASCID',');
+    	    END;
+    	    IF .smtp_info [SMTP_V_AUTHPLAIN] THEN
+    	    	STR$APPEND (str, %ASCID'PLAIN');
+    	    STR$APPEND (str, %ASCID')');
+    	END
+    	ELSE
+    	    STR$COPY_DX (str, %ASCID'    /NOAUTHENTICATION');
+    	(.OUTRTN) (str);
+    END
+    ELSE
+    BEGIN
+    	(.OUTRTN) (null_str);
+    	(.OUTRTN) (%ASCID'SMTP agent settings:');
+    	LIB$SYS_FAO (%ASCID'  Retry interval:                 !%D', 0, STR,
+    	    SMTP_INFO [SMTP_Q_RETRY]);
+    	(.OUTRTN) (STR);
+    	LIB$SYS_FAO (%ASCID'  Maximum number of retries:      !UL', 0, STR,
+    	    .SMTP_INFO [SMTP_L_MAXTRIES]);
+    	(.OUTRTN) (STR);
+    	LIB$SYS_FAO (%ASCID'  Number of DNS failure retries:  !UL',
+    	    0, STR, .SMTP_INFO [SMTP_L_MAXDNS]);
+    	(.OUTRTN) (STR);
+    	LIB$SYS_FAO (%ASCID'  Accounting:                     !AS', 0, STR,
+    	    (IF .SMTP_INFO [SMTP_V_ACCTG] THEN enabled_d ELSE
+    	    	disabled_d));
+    	(.OUTRTN) (STR);
+    	LIB$SYS_FAO (%ASCID'  Default router:                 !AD', 0, STR,
+    	    (IF .SMTP_INFO [SMTP_W_DEFRTR] EQL 0 THEN 6 ELSE
+    	    	.SMTP_INFO [SMTP_W_DEFRTR]),
+    	    (IF .SMTP_INFO [SMTP_W_DEFRTR] EQL 0 THEN UPLIT ('(none)') ELSE
+    	    	SMTP_INFO [SMTP_T_DEFRTR]));
+    	(.OUTRTN) (STR);
+    	(.OUTRTN) (null_str);
+    	(.OUTRTN) (%ASCID'SMTP server settings:');
+    	LIB$SYS_FAO (%ASCID'  Allow VRFY commands:            !AS', 0, STR,
+    	    (IF .SMTP_INFO [SMTP_V_NOVRFY] THEN disabled_d ELSE
+    	    	enabled_d));
+    	(.OUTRTN) (STR);
+    	LIB$SYS_FAO (%ASCID'  Act as SMTP relay for any host: !AS!AS', 0, STR,
+    	    (IF .SMTP_INFO [SMTP_V_NORELAY] THEN disabled_d ELSE
+    	    	enabled_d),
+    	    (IF .SMTP_INFO [SMTP_V_NORELAY] THEN %ASCID' [SHOW LOCAL_DOMAINS lists hosts]'
+    	    	ELSE null_str));
+    	(.OUTRTN) (STR);
+    	LIB$SYS_FAO (%ASCID'  Validate sender''s domain name:  !AS', 0, STR,
+    	    (IF .SMTP_INFO [SMTP_V_VALDOM] THEN enabled_d ELSE
+    	    	disabled_d));
+    	(.OUTRTN) (STR);
+    	LIB$SYS_FAO (%ASCID'  Allow percent-hacked addresses: !AS', 0, STR,
+    	    (IF .SMTP_INFO [SMTP_V_NOPCTHACK] THEN disabled_d ELSE
+    	    	enabled_d));
+    	(.OUTRTN) (STR);
+    	LIB$SYS_FAO (%ASCID'  TLS secure communication:       !AS', 0, STR,
+    	    (IF .SMTP_INFO [SMTP_V_TLS] THEN enabled_d ELSE
+    	    	disabled_d));
+    	(.OUTRTN) (STR);
+    	LIB$SYS_FAO (%ASCID'  CRAM-MD5 SMTP authentication:   !AS', 0, STR,
+    	    (IF .SMTP_INFO [SMTP_V_AUTHCRAM] THEN enabled_d ELSE
+    	    	disabled_d));
+    	(.OUTRTN) (STR);
+    	LIB$SYS_FAO (%ASCID'  PLAIN SMTP authentication:      !AS', 0, STR,
+    	    (IF .SMTP_INFO [SMTP_V_AUTHPLAIN] THEN enabled_d ELSE
+    	    	disabled_d));
+    	(.OUTRTN) (STR);
+    	LIB$SYS_FAO (%ASCID'  Realtime Blackhole List check:  !AS!AS', 0, STR,
+    	    (IF .SMTP_INFO [SMTP_V_RBL] THEN enabled_d ELSE disabled_d),
+    	    (IF .smtp_info [SMTP_V_RBL] AND QUEUE_EMPTY (smtp_info [SMTP_Q_RBLQUE]) THEN %ASCID' (default domain)' ELSE null_str));
+    	(.OUTRTN) (STR);
+    	IF .smtp_info [SMTP_V_RBL] AND NOT QUEUE_EMPTY (smtp_info [SMTP_Q_RBLQUE]) THEN
+    	BEGIN
+    	    BIND
+    	    	rblque = smtp_info [SMTP_Q_RBLQUE] : QUEDEF;
+    	    LOCAL
+    	    	txt : REF TXTDEF;
+    	    (.OUTRTN)(%ASCID'  RBL domains to check:');
+    	    txt = .rblque [QUE_L_HEAD];
+    	    WHILE .txt NEQA rblque DO
+    	    BEGIN
+    	    	LIB$SYS_FAO (%ASCID'    !AD', 0, str, .txt [TXT_W_LEN], txt [TXT_T_TEXT]);
+    	    	(.outrtn) (str);
+    	    	txt = .txt [TXT_L_FLINK];
+    	    END;
+    	END;
+
+    END;
+
+    FREE_STRINGS (STR);
+
+    SS$_NORMAL
+
+END; ! SHOW_SMTP
+
+%SBTTL 'SHOW_LOCAL'
+GLOBAL ROUTINE SHOW_LOCAL (OUTRTN, OUTCMD) = 
+BEGIN
+!++
+! FUNCTIONAL DESCRIPTION:
+!
+!   Displays SET LOCAL info.
+!
+! RETURNS:  	cond_value, longword (unsigned), write only, by value
+!
+! PROTOTYPE:
+!
+!   SHOW_LOCAL
+!
+! IMPLICIT INPUTS:  None.
+!
+! IMPLICIT OUTPUTS: None.
+!
+! COMPLETION CODES:
+!
+!   SS$_NORMAL:	    	normal successful completion.
+!
+! SIDE EFFECTS:
+!
+!   None.
+!--
+    BIND
+    	TOPVEC	= LOCAL_INFO [LOCAL_L_HDRTOP] : BITVECTOR [32],
+    	BOTVEC	= LOCAL_INFO [LOCAL_L_HDREND] : BITVECTOR [32];
+
+!+
+! NB: order of these names must correspond to MX_K_HDR_x codes in MX.R32!!!
+!-
+    TABLE (HDRNAME, '', 'FROM', 'SENDER', 'TO', 'RESENT_TO', 'CC', 'RESENT_CC',
+    	'BCC', 'RESENT_BCC', 'MESSAGE_ID', 'RESENT_MESSAGE_ID',
+    	'IN_REPLY_TO', 'REFERENCES', 'KEYWORDS', 'SUBJECT', 'ENCRYPTED',
+    	'DATE', 'REPLY_TO', 'RECEIVED', 'RESENT_REPLY_TO', 'RESENT_FROM',
+    	'RESENT_SENDER', 'RESENT_DATE', 'RETURN_PATH', 'OTHER');
+
+    LOCAL
+    	STR 	: BLOCK [DSC$K_S_BLN,BYTE];
+
+    INIT_DYNDESC (STR);
+
+    IF .OUTCMD THEN
+    BEGIN
+    	LIB$SYS_FAO (%ASCID'SET LOCAL/!ASACCOUNTING/RETRY_INTERVAL="!%D" -',
+    	    0, STR, (IF .LOCAL_INFO [LOCAL_V_ACCTG] THEN null_str ELSE
+    	    no_str), LOCAL_INFO [LOCAL_Q_RETRY]);
+    	(.OUTRTN) (STR);
+    	LIB$SYS_FAO (%ASCID %STRING('  /MAXIMUM_RETRIES=!UL/!ASLONG_LINES/!ASOMIT_RESENT_HEADERS/',
+		'!ASMULTIPLE_FROM/!ASCC_POSTMASTER/!ASQP_DECODE/!ASDISABLE_EXQUOTA!AS-'), 0, STR,
+    	    .LOCAL_INFO [LOCAL_L_MAXTRIES],
+    	    	(IF .local_info [LOCAL_V_LONG_LINES]
+    	    	 THEN null_str ELSE no_str),
+    	    	(IF .local_info [LOCAL_V_OMIT_RESENT]
+    	    	 THEN null_str ELSE no_str),
+    	    	(IF .local_info [LOCAL_V_ONE_FROM]
+		 THEN no_str ELSE null_str),
+		(IF .local_info [LOCAL_V_CC_POSTMASTER]
+		 THEN null_str
+		 ELSE no_str),
+		(IF .local_info [LOCAL_V_DONT_DECODE_QP]
+		 THEN no_str
+		 ELSE null_str),
+		(IF .local_info [LOCAL_V_NO_EXQUOTA]
+		 THEN null_str
+		 ELSE no_str),
+    	    	(IF .local_info [LOCAL_V_NO_EXQUOTA] THEN
+    	    	    IF .local_info [LOCAL_V_EXQUOTA_FATAL] THEN %ASCID'=FATAL'
+    	    	    ELSE %ASCID'=NOFATAL'
+    	    	 ELSE null_str));
+    	(.OUTRTN) (STR);
+    	(.OUTRTN) (%ASCID'  /HEADERS=(TOP=(-');
+    	STR$COPY_DX (STR, null_str);
+    	INCR I FROM 1 TO HDRNAME_COUNT-1 DO
+    	IF .TOPVEC [.I] THEN
+    	BEGIN
+    	    BIND H = .HDRNAME [.I] : BLOCK [DSC$K_S_BLN,BYTE];
+    	    IF .STR [DSC$W_LENGTH] GTR 0 THEN
+    	    	STR$APPEND (STR, ascid_comma)
+    	    ELSE
+    	    	STR$COPY_DX (STR, %ASCID'    ');
+    	    IF .STR [DSC$W_LENGTH] GTR 70-.H [DSC$W_LENGTH] THEN
+    	    BEGIN
+    	    	STR$APPEND (STR, %ASCID'-');
+    	    	(.OUTRTN) (STR);
+    	    	STR$COPY_DX (STR, %ASCID'    ');
+    	    END;
+    	    STR$APPEND (STR, .HDRNAME [.I]);
+    	END;
+    	IF .STR [DSC$W_LENGTH] EQL 0 THEN STR$APPEND (STR, %ASCID'    NOALL');
+    	STR$APPEND (STR, %ASCID'), BOTTOM=(-');
+    	(.OUTRTN) (STR);
+    	STR$COPY_DX (STR, null_str);
+    	INCR I FROM 1 TO HDRNAME_COUNT-1 DO
+    	IF .BOTVEC [.I] THEN
+    	BEGIN
+    	    BIND H = .HDRNAME [.I] : BLOCK [DSC$K_S_BLN,BYTE];
+    	    IF .STR [DSC$W_LENGTH] GTR 0 THEN
+    	    	STR$APPEND (STR, ascid_comma)
+    	    ELSE
+    	    	STR$COPY_DX (STR, %ASCID'    ');
+    	    IF .STR [DSC$W_LENGTH] GTR 70-.H [DSC$W_LENGTH] THEN
+    	    BEGIN
+    	    	STR$APPEND (STR, %ASCID'-');
+    	    	(.OUTRTN) (STR);
+    	    	STR$COPY_DX (STR, %ASCID'    ');
+    	    END;
+    	    STR$APPEND (STR, .HDRNAME [.I]);
+    	END;
+    	IF .STR [DSC$W_LENGTH] EQL 0 THEN STR$APPEND (STR, %ASCID'    NOALL');
+    	STR$APPEND (STR, %ASCID'))');
+    	(.OUTRTN) (STR);
+    END
+    ELSE
+    BEGIN
+    	(.OUTRTN) (null_str);
+    	(.OUTRTN) (%ASCID'LOCAL agent settings:');
+    	LIB$SYS_FAO (%ASCID'  DECnet delivery retry interval: !%D', 0, STR,
+    	    LOCAL_INFO [LOCAL_Q_RETRY]);
+    	(.OUTRTN) (STR);
+    	LIB$SYS_FAO (%ASCID'  Maximum number of retries: !UL', 0, STR,
+    	    .LOCAL_INFO [LOCAL_L_MAXTRIES]);
+    	(.OUTRTN) (STR);
+    	LIB$SYS_FAO (%ASCID'  Accounting !AS.', 0, STR,
+    	    (IF .LOCAL_INFO [LOCAL_V_ACCTG] THEN enabled_d ELSE
+    	    	disabled_d));
+    	(.OUTRTN) (STR);
+    	LIB$SYS_FAO (%ASCID'  Lines longer than 255 characters will!AS be wrapped for local deliveries.', 0, STR,
+    	    (IF .LOCAL_INFO [LOCAL_V_LONG_LINES] THEN %ASCID' not' ELSE null_str));
+    	(.OUTRTN) (STR);
+    	LIB$SYS_FAO (%ASCID'  Resent-* headers will!AS be omitted from VMS MAIL forwards.', 0, STR,
+    	    (IF .LOCAL_INFO [LOCAL_V_OMIT_RESENT] THEN null_str ELSE %ASCID' not'));
+    	(.OUTRTN) (STR);
+    	LIB$SYS_FAO (%ASCID'  !ASultiple VMS Mail From: addresses allowed.',
+			0, STR,
+    	    (IF .LOCAL_INFO [LOCAL_V_ONE_FROM] THEN %ASCID'No m' ELSE
+    	    	%ASCID'M'));
+    	(.OUTRTN) (STR);
+    	LIB$SYS_FAO (
+	%ASCID'  Local delivery errors are !ASCC''ed to local Postmaster.',
+			0, str,
+    	    (IF .local_info [LOCAL_V_CC_POSTMASTER] THEN null_str ELSE
+    	    	not_str));
+    	(.OUTRTN) (STR);
+    	LIB$SYS_FAO (
+	%ASCID'  Incoming quoted-printable MIME messages are !ASdecoded.',
+			0, str,
+    	    (IF .local_info [LOCAL_V_DONT_DECODE_QP] THEN not_str ELSE
+    	    	null_str));
+    	(.OUTRTN) (STR);
+    	LIB$SYS_FAO (
+	%ASCID'  EXQUOTA privilege is !ASabled during local deliveries.',
+			0, str,
+    	    (IF .local_info [LOCAL_V_NO_EXQUOTA] THEN %ASCID'dis' ELSE %ASCID'en'));
+    	(.OUTRTN) (STR);
+    	IF .local_info [LOCAL_V_NO_EXQUOTA] THEN
+    	BEGIN
+    	    LIB$SYS_FAO (%ASCID'  Deliveries exceeding diskquota are !AS.', 0, str,
+    	    	(IF .local_info [LOCAL_V_EXQUOTA_FATAL] THEN %ASCID'immediately returned to sender' ELSE
+    	    	    %ASCID'tried again'));
+    	    (.OUTRTN) (str);
+    	END;
+    	(.OUTRTN) (%ASCID'  Top headers:');
+    	STR$COPY_DX (STR, null_str);
+    	INCR I FROM 1 TO HDRNAME_COUNT-1 DO
+    	IF .TOPVEC [.I] THEN
+    	BEGIN
+    	    BIND H = .HDRNAME [.I] : BLOCK [DSC$K_S_BLN,BYTE];
+    	    IF .STR [DSC$W_LENGTH] GTR 0 THEN
+    	    	STR$APPEND (STR, ascid_comma)
+    	    ELSE
+    	    	STR$COPY_DX (STR, %ASCID'    ');
+    	    IF .STR [DSC$W_LENGTH] GTR 70-.H [DSC$W_LENGTH] THEN
+    	    BEGIN
+    	    	(.OUTRTN) (STR);
+    	    	STR$COPY_DX (STR, %ASCID'    ');
+    	    END;
+    	    STR$APPEND (STR, .HDRNAME [.I]);
+    	END;
+    	IF .STR [DSC$W_LENGTH] EQL 0 THEN (.OUTRTN) (%ASCID'    (none)')
+    	ELSE (.OUTRTN) (STR);
+    	(.OUTRTN) (%ASCID'  Bottom headers:');
+    	STR$COPY_DX (STR, null_str);
+    	INCR I FROM 1 TO HDRNAME_COUNT-1 DO
+    	IF .BOTVEC [.I] THEN
+    	BEGIN
+    	    BIND H = .HDRNAME [.I] : BLOCK [DSC$K_S_BLN,BYTE];
+    	    IF .STR [DSC$W_LENGTH] GTR 0 THEN
+    	    	STR$APPEND (STR, ascid_comma)
+    	    ELSE
+    	    	STR$COPY_DX (STR, %ASCID'    ');
+    	    IF .STR [DSC$W_LENGTH] GTR 70-.H [DSC$W_LENGTH] THEN
+    	    BEGIN
+    	    	(.OUTRTN) (STR);
+    	    	STR$COPY_DX (STR, %ASCID'    ');
+    	    END;
+    	    STR$APPEND (STR, .HDRNAME [.I]);
+    	END;
+    	IF .STR [DSC$W_LENGTH] EQL 0 THEN (.OUTRTN) (%ASCID'    (none)')
+    	ELSE (.OUTRTN) (STR);
+    END;
+
+    FREE_STRINGS (STR);
+
+    SS$_NORMAL
+
+END; ! SHOW_LOCAL
+
+%SBTTL 'SHOW_ROUTER'
+GLOBAL ROUTINE SHOW_ROUTER (OUTRTN, OUTCMD) = 
+BEGIN
+!++
+! FUNCTIONAL DESCRIPTION:
+!
+!   Displays SET ROUTER info.
+!
+! RETURNS:  	cond_value, longword (unsigned), write only, by value
+!
+! PROTOTYPE:
+!
+!   SHOW_ROUTER
+!
+! IMPLICIT INPUTS:  None.
+!
+! IMPLICIT OUTPUTS: None.
+!
+! COMPLETION CODES:
+!
+!   SS$_NORMAL:	    	normal successful completion.
+!
+! SIDE EFFECTS:
+!
+!   None.
+!--
+    LOCAL
+    	STR 	: BLOCK [DSC$K_S_BLN,BYTE];
+
+    INIT_DYNDESC (STR);
+
+    IF .OUTCMD
+    THEN
+	BEGIN
+	LIB$SYS_FAO (%ASCID'SET ROUTER/!ASACCOUNTING/!ASPERCENT_HACK/!ASOMIT_VMSMAIL_SENDER',
+		0, str,
+		(IF .router_info [ROUTER_V_ACCTG] THEN null_str ELSE no_str),
+		(IF .router_info [ROUTER_V_PERCENT_HACK] THEN null_str ELSE no_str),
+		(IF .router_info [ROUTER_V_OMIT_VMSMAIL_SENDER] THEN null_str ELSE no_str));
+	(.OUTRTN) (str);
+	END
+    ELSE
+	BEGIN
+    	(.OUTRTN) (null_str);
+    	(.OUTRTN) (%ASCID'ROUTER agent settings:');
+    	LIB$SYS_FAO (%ASCID'  Accounting:                      !AS', 0, STR,
+    	    (IF .ROUTER_INFO [ROUTER_V_ACCTG] THEN enabled_d ELSE disabled_d));
+    	(.OUTRTN) (STR);
+    	LIB$SYS_FAO (%ASCID'  Automatic percent-hack handling: !AS', 0, STR,
+    	    (IF .ROUTER_INFO [ROUTER_V_PERCENT_HACK] THEN enabled_d
+    	    	ELSE disabled_d));
+    	(.OUTRTN) (STR);
+    	LIB$SYS_FAO (
+	%ASCID'  Sender header for outgoing VMS Mail messages: !AS',
+		0, STR,
+		(IF .router_info [ROUTER_V_OMIT_VMSMAIL_SENDER]
+		THEN %ASCID'omitted'
+		ELSE %ASCID'included if necessary'));
+    	(.OUTRTN) (STR);
+	END;
+
+    FREE_STRINGS (STR);
+
+    SS$_NORMAL
+
+END; ! SHOW_ROUTER
+
+%SBTTL 'SHOW_DNSMTP'
+GLOBAL ROUTINE SHOW_DNSMTP (OUTRTN, OUTCMD) = 
+BEGIN
+!++
+! FUNCTIONAL DESCRIPTION:
+!
+!   Displays SET DECNET_SMTP info.
+!
+! RETURNS:  	cond_value, longword (unsigned), write only, by value
+!
+! PROTOTYPE:
+!
+!   SHOW_DNSMTP
+!
+! IMPLICIT INPUTS:  None.
+!
+! IMPLICIT OUTPUTS: None.
+!
+! COMPLETION CODES:
+!
+!   SS$_NORMAL:	    	normal successful completion.
+!
+! SIDE EFFECTS:
+!
+!   None.
+!--
+    LOCAL
+    	STR 	: BLOCK [DSC$K_S_BLN,BYTE];
+
+    INIT_DYNDESC (STR);
+
+    IF .OUTCMD THEN
+    BEGIN
+    	LIB$SYS_FAO (%ASCID'SET DECNET_SMTP/!ASACCOUNTING/RETRY_INTERVAL="!%D" -',
+    	    0, STR, (IF .DNSMTP_INFO [DNSMTP_V_ACCTG] THEN null_str ELSE
+    	    no_str), DNSMTP_INFO [DNSMTP_Q_RETRY]);
+    	(.OUTRTN) (STR);
+    	LIB$SYS_FAO (%ASCID'  /MAXIMUM_RETRIES=!UL', 0, STR,
+    	    .DNSMTP_INFO [DNSMTP_L_MAXTRIES]);
+    	(.OUTRTN) (STR);
+    END
+    ELSE
+    BEGIN
+    	(.OUTRTN) (null_str);
+    	(.OUTRTN) (%ASCID'DECnet_SMTP agent settings:');
+    	LIB$SYS_FAO (%ASCID'  Retry interval: !%D', 0, STR,
+    	    DNSMTP_INFO [DNSMTP_Q_RETRY]);
+    	(.OUTRTN) (STR);
+    	LIB$SYS_FAO (%ASCID'  Maximum number of retries: !UL', 0, STR,
+    	    .DNSMTP_INFO [DNSMTP_L_MAXTRIES]);
+    	(.OUTRTN) (STR);
+    	LIB$SYS_FAO (%ASCID'  Accounting !AS.', 0, STR,
+    	    (IF .DNSMTP_INFO [DNSMTP_V_ACCTG] THEN enabled_d ELSE
+    	    	disabled_d));
+    	(.OUTRTN) (STR);
+    END;
+
+    FREE_STRINGS (STR);
+
+    SS$_NORMAL
+
+END; ! SHOW_DNSMTP
+
+%SBTTL 'SHOW_SITE'
+GLOBAL ROUTINE SHOW_SITE (OUTRTN, OUTCMD) = 
+BEGIN
+!++
+! FUNCTIONAL DESCRIPTION:
+!
+!   Displays SET SITE info.
+!
+! RETURNS:  	cond_value, longword (unsigned), write only, by value
+!
+! PROTOTYPE:
+!
+!   SHOW_SITE
+!
+! IMPLICIT INPUTS:  None.
+!
+! IMPLICIT OUTPUTS: None.
+!
+! COMPLETION CODES:
+!
+!   SS$_NORMAL:	    	normal successful completion.
+!
+! SIDE EFFECTS:
+!
+!   None.
+!--
+    LOCAL
+    	STR 	: BLOCK [DSC$K_S_BLN,BYTE];
+
+    INIT_DYNDESC (STR);
+
+    IF .OUTCMD THEN
+    BEGIN
+    	LIB$SYS_FAO (%ASCID'SET SITE!AS/RETRY_INTERVAL="!%D" -',
+    	    0, STR, (IF .SITE_INFO [SITE_V_ACCTG] THEN %ASCID'/ACCOUNTING' ELSE
+    	    null_str), SITE_INFO [SITE_Q_RETRY]);
+    	(.OUTRTN) (STR);
+    	LIB$SYS_FAO (%ASCID'  /MAXIMUM_RETRIES=!UL', 0, STR,
+    	    .SITE_INFO [SITE_L_MAXTRIES]);
+    	(.OUTRTN) (STR);
+    END
+    ELSE
+    BEGIN
+    	(.OUTRTN) (null_str);
+    	(.OUTRTN) (%ASCID'SITE agent settings:');
+    	LIB$SYS_FAO (%ASCID'  Retry interval: !%D', 0, STR,
+    	    SITE_INFO [SITE_Q_RETRY]);
+    	(.OUTRTN) (STR);
+    	LIB$SYS_FAO (%ASCID'  Maximum number of retries: !UL', 0, STR,
+    	    .SITE_INFO [SITE_L_MAXTRIES]);
+    	(.OUTRTN) (STR);
+    	IF .SITE_INFO [SITE_V_ACCTG] THEN
+    	BEGIN
+    	    LIB$SYS_FAO (%ASCID'  Accounting !AS.', 0, STR,
+    	    	(IF .SITE_INFO [SITE_V_ACCTG] THEN enabled_d ELSE
+    	    	    disabled_d));
+    	    (.OUTRTN) (STR);
+    	END;
+    END;
+
+    FREE_STRINGS (STR);
+
+    SS$_NORMAL
+
+END; ! SHOW_SITE
+
+%SBTTL 'SHOW_MLF'
+GLOBAL ROUTINE SHOW_MLF (OUTRTN, OUTCMD) = 
+BEGIN
+!++
+! FUNCTIONAL DESCRIPTION:
+!
+!   Displays SET SITE info.
+!
+! RETURNS:  	cond_value, longword (unsigned), write only, by value
+!
+! PROTOTYPE:
+!
+!   SHOW_MLF
+!
+! IMPLICIT INPUTS:  None.
+!
+! IMPLICIT OUTPUTS: None.
+!
+! COMPLETION CODES:
+!
+!   SS$_NORMAL:	    	normal successful completion.
+!
+! SIDE EFFECTS:
+!
+!   None.
+!--
+    LOCAL
+    	STR 	: BLOCK [DSC$K_S_BLN,BYTE];
+
+    TABLE (DAYNAME, 'Monday', 'Tuesday', 'Wednesday', 'Thursday',
+    	    	     'Friday', 'Saturday', 'Sunday');
+    INIT_DYNDESC (STR);
+
+    IF .OUTCMD THEN
+    BEGIN
+    	IF .MLF_INFO [MLF_L_MAXFWD] EQL 0 THEN
+    	    STR$COPY_DX (STR, %ASCID'SET MLF/NORECIPIENT_MAXIMUM-')
+    	ELSE
+    	    LIB$SYS_FAO (%ASCID'SET MLF/RECIPIENT_MAXIMUM=!UL-', 0, STR,
+    	    	    	    .MLF_INFO [MLF_L_MAXFWD]);
+    	
+    	(.OUTRTN) (STR);
+    	IF .MLF_INFO [MLF_L_DELAYDAYS] EQL 0 THEN
+    	    (.OUTRTN) (%ASCID'  /NODELAY_DAYS')
+    	ELSE
+    	BEGIN
+    	    BIND DD = MLF_INFO [MLF_L_DELAYDAYS] : BITVECTOR [];
+    	    LOCAL DID_ONE;
+    	    STR$COPY_DX (STR, %ASCID'/DELAY_DAYS=(');
+    	    DID_ONE = 0;
+    	    INCR I FROM 0 TO DAYNAME_COUNT-1 DO
+    	    BEGIN
+    	    	IF .DD [.I+1] THEN
+    	    	BEGIN
+    	    	    IF .DID_ONE THEN STR$APPEND (STR, ascid_comma);
+    	    	    STR$APPEND (STR, .DAYNAME [.I]);
+    	    	    DID_ONE = 1;
+    	    	END;
+    	    END;
+    	    STR$APPEND (STR, %ASCID')');
+    	    (.OUTRTN) (STR);
+    	END;
+    END
+    ELSE
+    BEGIN
+    	(.OUTRTN) (null_str);
+    	(.OUTRTN) (%ASCID'MLF agent settings:');
+    	IF .MLF_INFO [MLF_L_MAXFWD] EQL 0 THEN
+    	    (.OUTRTN) (%ASCID'  Maximum recipients per message: NONE (no limit)')
+    	ELSE
+    	BEGIN
+    	    LIB$SYS_FAO (%ASCID'  Maximum recipients per message: !UL', 0, STR,
+    	    	    .MLF_INFO [MLF_L_MAXFWD]);
+    	    (.OUTRTN) (STR);
+    	END;
+    	IF .MLF_INFO [MLF_L_DELAYDAYS] EQL 0 THEN
+    	    (.OUTRTN) (%ASCID'  Days of week to delay file server files: NONE')
+    	ELSE
+    	BEGIN
+    	    BIND DD = MLF_INFO [MLF_L_DELAYDAYS] : BITVECTOR [];
+    	    LOCAL DID_ONE;
+    	    (.OUTRTN) (%ASCID'  Days of week to delay file server files:');
+    	    STR$COPY_DX (STR, %ASCID'    ');
+    	    DID_ONE = 0;
+    	    INCR I FROM 0 TO DAYNAME_COUNT-1 DO
+    	    BEGIN
+    	    	IF .DD [.I+1] THEN
+    	    	BEGIN
+    	    	    IF .DID_ONE THEN STR$APPEND (STR, ascid_comma);
+    	    	    STR$APPEND (STR, .DAYNAME [.I]);
+    	    	    DID_ONE = 1;
+    	    	END;
+    	    END;
+    	    (.OUTRTN) (STR);
+    	END;
+    END;
+
+    FREE_STRINGS (STR);
+
+    SS$_NORMAL
+
+END; ! SHOW_MLF
+
+%SBTTL 'SHOW_VERSION'
+GLOBAL ROUTINE SHOW_VERSION (OUTRTN, OUTCMD) =
+BEGIN
+!++
+! FUNCTIONAL DESCRIPTION:
+!
+!   Displays the current version of MX.
+!
+! RETURNS:  	cond_value, longword (unsigned), write only, by value
+!
+! PROTOTYPE:
+!
+!   SHOW_VERSION
+!
+! IMPLICIT INPUTS:  None.
+!
+! IMPLICIT OUTPUTS: None.
+!
+! COMPLETION CODES:
+!
+!   SS$_NORMAL:	    	normal successful completion.
+!
+! SIDE EFFECTS:
+!
+!   None.
+!--
+    LOCAL
+    	STR 	: BLOCK [DSC$K_S_BLN,BYTE];
+
+    $INIT_DYNDESC (STR);
+
+    IF NOT .OUTCMD THEN (.OUTRTN) (null_str);
+
+    IF .OUTCMD THEN
+    	LIB$SYS_FAO (%ASCID'!! MX version id: !AS', 0, STR, MX_VERSION ())
+    ELSE
+    	LIB$SYS_FAO (%ASCID'MX version id is: !AS', 0, STR, MX_VERSION ());
+
+    (.OUTRTN) (STR);
+
+    STR$FREE1_DX (STR);
+
+    SS$_NORMAL
+
+END; ! SHOW_VERSION
+
+%SBTTL 'SHOW_USERS'
+GLOBAL ROUTINE SHOW_USERS (OUTRTN, OUTCMD, pat_a) =
+BEGIN
+!++
+! FUNCTIONAL DESCRIPTION:
+!
+!   Lists the users in the authentication database.
+!
+! RETURNS:  	cond_value, longword (unsigned), write only, by value
+!
+! PROTOTYPE:
+!
+!   SHOW_VERSION
+!
+! IMPLICIT INPUTS:  None.
+!
+! IMPLICIT OUTPUTS: None.
+!
+! COMPLETION CODES:
+!
+!   SS$_NORMAL:	    	normal successful completion.
+!
+! SIDE EFFECTS:
+!
+!   None.
+!--
+    BIND
+    	pat 	= .pat_a    	: BLOCK [DSC$K_S_BLN,BYTE];
+
+    LOCAL
+    	ctx,
+    	did1,
+    	usr 	: BLOCK [DSC$K_S_BLN,BYTE],
+    	str 	: BLOCK [DSC$K_S_BLN,BYTE],
+    	qusr	: BLOCK [DSC$K_S_BLN,BYTE],
+    	status;
+
+    INIT_DYNDESC (usr, str, qusr);
+
+    ctx = did1 = 0;
+    while (status = userauth_user_enum (ctx, usr)) DO
+    BEGIN
+    	IF STR$MATCH_WILD (usr, pat) THEN
+    	BEGIN
+    	    IF NOT .outcmd AND NOT .did1 THEN
+    	    BEGIN
+    	    	(.outrtn) (null_str);
+    	    	(.outrtn) (%ASCID'Usernames in the authentication database:');
+    	    END;
+    	    did1 = 1;
+    	    QUOTE_STRING (qusr, .usr [DSC$W_LENGTH], .usr [DSC$A_POINTER]);
+    	    IF .outcmd THEN
+    	    	STR$CONCAT (str, %ASCID'ADD USER ', qusr)
+    	    ELSE
+    	    	STR$CONCAT (str, %ASCID'  ', qusr);
+    	    (.outrtn) (str);
+    	END;
+    END;
+
+    IF NOT .did1 AND NOT .outcmd THEN
+    	SIGNAL (MCP__NOMATCH, 1, %ASCID'username');
+
+    FREE_STRINGS (usr, qusr, str);
+
+    SS$_NORMAL
+
+END; ! SHOW_USERS
+
+END
+ELUDOM

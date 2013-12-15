@@ -1,0 +1,1058 @@
+%TITLE	'FLQ_COMPRESS'
+MODULE FLQ_COMPRESS (IDENT = 'V2.3',
+	ADDRESSING_MODE(NONEXTERNAL=LONG_RELATIVE)) =
+BEGIN
+!++
+!
+!  Facility:	QCMD_COMPRESS
+!
+!  Author:	Hunter Goatley
+!
+!  Date:	January 16, 1994
+!
+!
+! Copyright (c) 2008, Hunter Goatley.
+! Copyright (c) 2011, Endless Software Solutions.
+! 
+! All rights reserved.
+! 
+! Redistribution and use in source and binary forms, with or without
+! modification, are permitted provided that the following conditions
+! are met:
+! 
+!     * Redistributions of source code must retain the above
+!       copyright notice, this list of conditions and the following
+!       disclaimer.
+!     * Redistributions in binary form must reproduce the above
+!       copyright notice, this list of conditions and the following
+!       disclaimer in the documentation and/or other materials provided
+!       with the distribution.
+!     * Neither the name of the copyright owner nor the names of any
+!       other contributors may be used to endorse or promote products
+!       derived from this software without specific prior written
+!       permission.
+! 
+! THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
+! "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
+! LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
+! A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
+! OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
+! SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
+! LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
+! DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
+! THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
+! (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
+! OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+!
+!  Abstract:
+!
+!	This modules contains routines to create, extend, and compress
+!	the MX message queue file.
+!
+!  Modified by:
+!
+!	V2.3		Hunter Goatley		15-NOV-1995 00:09
+!		Fix corruption problem in COMPRESS.  entries[0] was
+!		not initialized to 0, yet it was used to fill in the
+!		various BACKREFs.  Depending on the value of entries[0],
+!		queue corruption could occur as entries pointed to
+!		incorrect or non-existent entries!
+!
+!	V2.2-1		Hunter Goatley		31-MAY-1994 16:25
+!		Fix status overwrite in CREATE, add "highest entry"
+!		percentage to STATISTICS.
+!
+!	V2.2		Juan Altmayer Pizzorno	14-MAY-1994 18:17
+!		Add MXQ_L_LSVREF
+!
+!	V2.1-5		Hunter Goatley		23-MAR-1994 12:20
+!		Whew!  Change OWNs to LOCAL, fix some stuff.
+!
+!	V2.1-4		Hunter Goatley		21-MAR-1994 06:41
+!		Forgot to init the QHDR.
+!
+!	V2.1-3		Hunter Goatley		17-MAR-1994 15:52
+!		Add support for MX_SYSTEM_QUEUE logical.
+!
+!	V2.1-2		Hunter Goatley		15-MAR-1994 09:15
+!		Modified to work with up to 128K entries in queue.
+!
+!	V2.1-1		Hunter Goatley		14-MAR-1994 16:08
+!		Removed unused checks for /LOG.
+!
+!	V2.1		Hunter Goatley		16-FEB-1994 11:09
+!		Added QCMD_CREATE, QCMD_EXTEND, and FLQ_SET_END_OF_FILE.
+!
+!	V2.0		Hunter Goatley		15-FEB-1994 07:46
+!		Rewrite to work with FLQ V2.
+!
+!	V1.0-1		Hunter Goatley		26-JAN-1994 07:23
+!		Add default allocation quantities, etc.
+!
+!	V1.0		Hunter Goatley		16-JAN-1994 18:28
+!		Original version from MX_FLQ_CONVERT.B32.
+!
+!--
+LIBRARY 'SYS$LIBRARY:LIB';                  	!Pull stuff from LIB
+LIBRARY 'MX_SRC_COMMON:FLQ';                       !Pull stuff from FLQ
+LIBRARY 'MX_SRC_FLQ:FLQ_PRIVATE_DEFS';             !Pull from FLQ_PRIVATE_DEFS
+
+UNDECLARE
+    %QUOTE INIT_SDESC,
+    %QUOTE __FREE_STRING1,
+    %QUOTE __INIT_DYNDESC1,
+    %QUOTE INIT_DYNDESC,
+    %QUOTE FREE_STRINGS,
+    %QUOTE G_HAT;
+
+LIBRARY 'MX_SRC_COMMON:MX';
+
+FORWARD ROUTINE
+	qcmd_create,
+	qcmd_compress,
+	flq_make_compress_fspec,
+	flq_set_end_of_file
+	;
+
+EXTERNAL LITERAL
+	MCP__QCOMPERR, MCP__QBPASS1, MCP__QBPASS2, MCP__QPRCSNG, MCP__QDIRREN,
+	MCP__QCREDIR, MCP__QRENMSG, MCP__QDELDIR, MCP__QDELFLQ, MCP__QCOMPNON,
+	MCP__QCVTFAIL, MCP__QOPENERR, MCP__INSFPRV, MCP__QINVSIZ,
+	MCP__QNEWQFL, MCP__QNEWQDN, MCP__QEXTFAIL, MCP__QEXTQDN, MCP__QUSECMP,
+	MCP__QEXTINV, MCP__QMAXREQ, MCP__QSTATUS,
+	CLI$_PRESENT;
+
+EXTERNAL ROUTINE
+	qcmd_synchronize,
+	G_HAT (LIB$PUT_OUTPUT, LIB$DELETE_FILE, LIB$RENAME_FILE, LIB$CVT_DTB),
+	G_HAT (LIB$DELETE_FILE, LIB$CREATE_DIR, CLI$PRESENT, CLI$GET_VALUE),
+	G_HAT (LIB$ANALYZE_SDESC, STR$COPY_R, LIB$PUT_OUTPUT, LIB$SYS_FAO),
+	G_HAT (LIB$GET_VM_PAGE, LIB$FREE_VM_PAGE, STR$COPY_DX),
+        G_HAT (FLQ___GETBITMAP, FLQ___FREEBITMAP, FLQ_SEARCH_END);
+
+    MACRO
+	PRINT (status) [] =
+	BEGIN
+	    IF (.log)
+	    THEN
+		SIGNAL (status
+		%IF NOT %NULL (%REMAINING) %THEN , %REMAINING %FI);
+	END%;
+
+    MACRO
+	filename = 'MX_FLQ_DIR:MX_SYSTEM_QUEUE.FLQ_CTL;'%;
+
+    BIND
+	maximum_entries	= %ASCID'MAXIMUM_ENTRIES';
+
+
+%SBTTL 'QCMD_CREATE'
+GLOBAL ROUTINE QCMD_CREATE =
+BEGIN
+!++
+! FUNCTIONAL DESCRIPTION:
+!
+!   The routine creates a new, empty MX_SYSTEM_QUEUE.FLQ_CTL file.
+!
+! RETURNS:	cond_value, longword (unsigned), write only, by value
+!
+! PROTOTYPE:
+!
+!   QCMD_COMPRESS
+!
+! IMPLICIT INPUTS:  None.
+!
+! IMPLICIT OUTPUTS: None.
+!
+! COMPLETION CODES:
+!
+!   SS$_NORMAL: 	normal successful completion.
+!
+! SIDE EFFECTS:
+!
+!   None.
+!--
+    LOCAL
+	privs		: VECTOR [2, LONG],
+	prvprv		: VECTOR [2, LONG],
+	espec		: $BBLOCK [NAM$C_MAXRSS],
+	rspec		: $BBLOCK [NAM$C_MAXRSS],
+	flq_nam	: $NAM (ESA=espec, ESS=%ALLOCATION (espec),
+			RSA=rspec, RSS=%ALLOCATION (rspec)),
+	flq_fab : $FAB_DECL,
+	flq_rab : $RAB (			!Indexed RAB for output file
+		FAB = flq_fab,			!The related FAB
+		RAC = SEQ			!Record access is keyed
+		),
+	tmpstr		: $BBLOCK [DSC$K_S_BLN],
+    	fspec	    	: BLOCK [DSC$K_S_BLN,BYTE],
+	bmap		: REF BLOCK[,LONG],
+	alq, deq,
+	log;
+
+    REGISTER
+	status		: UNSIGNED LONG;
+
+    INIT_DYNDESC (tmpstr, fspec);
+
+    privs[0] = PRV$M_BYPASS;
+    privs[1] = 0;
+
+    IF ($SETPRV (ENBFLG = 1, PRVADR = privs, PRVPRV = prvprv)
+		EQLU SS$_NOTALLPRIV)
+    THEN
+	BEGIN
+	SIGNAL (MCP__INSFPRV, 1, %ASCID'BYPASS');
+	RETURN (SS$_NORMAL);
+	END;
+
+    alq = 2048;
+    deq = 256;
+
+    IF CLI$PRESENT (%ASCID'FSPEC') EQL CLI$_PRESENT THEN
+    	CLI$GET_VALUE (%ASCID'FSPEC', fspec)
+    ELSE
+    	STR$COPY_DX (fspec, %ASCID'MX_SYSTEM_QUEUE');
+
+    $FAB_INIT ( FAB = flq_fab,
+		FNA = .fspec [DSC$A_POINTER],
+    	    	FNS = .fspec [DSC$W_LENGTH],
+		DNM = filename,
+		SHR = (MSE,UPI),
+		ORG = SEQ,
+		MRS = 512,
+		RFM = FIX,
+		ALQ = 256,
+		DEQ = 256,
+		FOP = CBT,
+		FAC = (PUT,UPD,GET,BIO),	!Access is put and update
+		NAM = flq_nam);
+
+    IF (CLI$PRESENT(maximum_entries))
+    THEN
+	BEGIN
+	status = CLI$GET_VALUE (maximum_entries, tmpstr);
+	LIB$CVT_DTB (.tmpstr [DSC$W_LENGTH], .tmpstr [DSC$A_POINTER], alq);
+	IF (.alq LSS 0) OR (.alq GTRU FLQ_K_MAXENT)
+	THEN
+	    BEGIN
+	    SIGNAL (MCP__QINVSIZ, 1, FLQ_K_MAXENT);
+	    FREE_STRINGS (tmpstr, fspec);
+	    RETURN SS$_NORMAL;
+	    END;
+	END
+    ELSE
+	BEGIN
+    	FREE_STRINGS (tmpstr, fspec);
+	SIGNAL (MCP__QMAXREQ);
+	RETURN (SS$_NORMAL);
+	END;
+
+    !
+    !  Make the queue file big enough to hold the specified number of
+    !  entries, plus the bitmap.
+    !
+    flq_fab [FAB$L_ALQ] = .alq + FLQ_K_QENTBASE + 1;
+    flq_fab [FAB$W_DEQ] = .deq;
+
+    FREE_STRINGS (tmpstr);
+
+    SIGNAL (MCP__QNEWQFL, 1, .alq);
+    !
+    !  Now try to create the new file.
+    !
+    status = $CREATE (FAB = flq_fab);
+    IF (.status) THEN status = $CONNECT (RAB = flq_rab);
+
+    !
+    !  Allocate and init some pages for the bitmap.
+    !
+    IF (.status)
+    THEN
+	BEGIN
+	status = LIB$GET_VM_PAGE (%REF(FLQ_K_BMAPBLKS), bmap);
+	IF (.status) THEN CH$FILL (0, 512*FLQ_K_BMAPBLKS, .bmap);
+	END;
+
+    !
+    !  Now write the bitmap out to the disk file.
+    !
+    IF (.status)
+    THEN
+	BEGIN
+	flq_rab [RAB$L_RBF] = .bmap;
+	flq_rab [RAB$W_RSZ] = FLQ_K_BMAPSIZE;
+	flq_rab [RAB$L_BKT] = FLQ_K_BMAPBASE;
+	status = $WRITE (RAB = flq_rab);
+	END;
+
+    !
+    !  And a zeroed QHDR (now obsolete)
+    !
+    IF (.status)
+    THEN
+	BEGIN
+	flq_rab [RAB$L_RBF] = .bmap;
+	flq_rab [RAB$W_RSZ] = 512;
+	flq_rab [RAB$L_BKT] = FLQ_K_QHDRBASE__obsolete;
+	status = $WRITE (RAB = flq_rab);
+	END;
+
+    $CLOSE (FAB = flq_fab);
+
+    FREE_STRINGS (tmpstr, fspec);
+
+    IF (.status)
+    THEN
+	status = flq_set_end_of_file (flq_fab);
+
+    IF NOT(.status)
+    THEN
+	SIGNAL (MCP__QCVTFAIL, 0, .status)
+    ELSE
+	SIGNAL (MCP__QNEWQDN, 1, .alq);
+
+    SS$_NORMAL
+
+END;						!End of routine
+
+
+%SBTTL 'QCMD_EXTEND'
+GLOBAL ROUTINE QCMD_EXTEND =
+BEGIN
+!++
+! FUNCTIONAL DESCRIPTION:
+!
+!   This routine extends an existing MX_SYSTEM_QUEUE.FLQ_CTL file.
+!
+! RETURNS:	cond_value, longword (unsigned), write only, by value
+!
+! PROTOTYPE:
+!
+!   QCMD_COMPRESS
+!
+! IMPLICIT INPUTS:  None.
+!
+! IMPLICIT OUTPUTS: None.
+!
+! COMPLETION CODES:
+!
+!   SS$_NORMAL: 	normal successful completion.
+!
+! SIDE EFFECTS:
+!
+!   None.
+!--
+    LOCAL
+	privs		: VECTOR [2, LONG],
+	prvprv		: VECTOR [2, LONG],
+	qctx		: REF QCTXDEF,
+	espec		: $BBLOCK [NAM$C_MAXRSS],
+	rspec		: $BBLOCK [NAM$C_MAXRSS],
+	flq_nam	: $NAM (ESA=espec, ESS=%ALLOCATION (espec),
+			RSA=rspec, RSS=%ALLOCATION (rspec)),
+	flq_fab : $FAB (			!FAB for output file
+		FNM = 'MX_SYSTEM_QUEUE',
+		DNM = filename,
+		LNM_MODE=PSL$C_EXEC,
+		SHR = (MSE,UPI),
+		FOP = CBT,
+		FAC = (PUT,UPD,GET,BIO),	!Access is put and update
+		NAM = flq_nam
+		),
+	tmpstr		: $BBLOCK [DSC$K_S_BLN],
+	alq, desired_alq,
+	log;
+
+    REGISTER
+	status		: UNSIGNED LONG;
+
+    INIT_DYNDESC (tmpstr);
+
+    privs[0] = PRV$M_BYPASS;
+    privs[1] = 0;
+
+    IF ($SETPRV (ENBFLG = 1, PRVADR = privs, PRVPRV = prvprv)
+		EQLU SS$_NOTALLPRIV)
+    THEN
+	BEGIN
+	SIGNAL (MCP__INSFPRV, 1, %ASCID'BYPASS');
+	RETURN (SS$_NORMAL);
+	END;
+
+!    log = (CLI$PRESENT(%ASCID'LOG') EQLU CLI$_PRESENT);
+
+    alq = 512;
+
+    IF (CLI$PRESENT(maximum_entries))
+    THEN
+	BEGIN
+	status = CLI$GET_VALUE (maximum_entries, tmpstr);
+	LIB$CVT_DTB (.tmpstr [DSC$W_LENGTH], .tmpstr [DSC$A_POINTER], alq);
+	IF (.alq LSS 0) OR (.alq GTRU FLQ_K_MAXENT)
+	THEN
+	    BEGIN
+	    SIGNAL (MCP__QINVSIZ, 1, FLQ_K_MAXENT);
+	    FREE_STRINGS (tmpstr);
+	    RETURN SS$_NORMAL;
+	    END;
+	END
+    ELSE
+	BEGIN
+	SIGNAL (MCP__QMAXREQ);
+	RETURN (SS$_NORMAL);
+	END;
+
+    !
+    !  Make the queue file big enough to hold the specified number of
+    !  entries, plus the bitmap.
+    !
+    desired_alq = .alq + FLQ_K_QENTBASE + 1;
+
+    FREE_STRINGS (tmpstr);
+
+    status = $OPEN (FAB = flq_fab);
+
+    IF (.status)
+    THEN
+	BEGIN
+	IF (.flq_fab [FAB$L_ALQ] GEQU .desired_alq)
+	THEN
+	    BEGIN
+	    SIGNAL (MCP__QEXTINV, 2, .alq,
+			.flq_fab [FAB$L_ALQ] - FLQ_K_QENTBASE - 1);
+	    status = MCP__QUSECMP;
+	    END
+	ELSE
+	    BEGIN
+	    flq_fab [FAB$L_ALQ] = .desired_alq - .flq_fab [FAB$L_ALQ];
+	    status = $EXTEND (FAB = flq_fab);
+	    END;
+	END;
+
+    $CLOSE (FAB = flq_fab);
+
+    IF (.status)
+    THEN
+	status = flq_set_end_of_file (flq_fab);
+
+    IF NOT(.status)
+    THEN
+	SIGNAL (MCP__QEXTFAIL, 0, .status)
+    ELSE
+	SIGNAL (MCP__QEXTQDN, 1, .alq);
+
+    SS$_NORMAL
+
+END;						!End of routine
+
+
+%SBTTL 'QCMD_COMPRESS'
+GLOBAL ROUTINE QCMD_COMPRESS =
+BEGIN
+!++
+! FUNCTIONAL DESCRIPTION:
+!
+!   The routine rebuilds the MX_SYSTEM_QUEUE.FLQ_CTL file by creating
+!   a new file and renumbering the entries in the old file.
+!
+! RETURNS:	cond_value, longword (unsigned), write only, by value
+!
+! PROTOTYPE:
+!
+!   QCMD_COMPRESS
+!
+! IMPLICIT INPUTS:  None.
+!
+! IMPLICIT OUTPUTS: None.
+!
+! COMPLETION CODES:
+!
+!   SS$_NORMAL: 	normal successful completion.
+!
+! SIDE EFFECTS:
+!
+!   None.
+!--
+    LOCAL
+	privs		: VECTOR [2, LONG],
+	prvprv		: VECTOR [2, LONG],
+	key,
+	qent		: QENTDEF,
+	newqent 	: QENTDEF,
+	espec		: $BBLOCK [NAM$C_MAXRSS],
+	rspec		: $BBLOCK [NAM$C_MAXRSS],
+	flq_nam	: $NAM (ESA=espec, ESS=%ALLOCATION (espec),
+			RSA=rspec, RSS=%ALLOCATION (rspec)),
+	flq_fab : $FAB (			!FAB for output file
+		FNM = 'MX_SYSTEM_QUEUE',
+		DNM = filename,
+		LNM_MODE=PSL$C_EXEC,
+		SHR = (MSE,UPI),
+		ORG = SEQ,
+		MRS = 512,
+		RFM = FIX,
+		FOP = CBT,
+		FAC = (PUT,UPD,GET,BIO),	!Access is put and update
+		NAM = flq_nam
+		),
+	flq_rab : $RAB (			!Indexed RAB for output file
+		FAB = flq_fab,			!The related FAB
+		RAC = SEQ,			!Record access is keyed
+		RBF = qent,
+		RSZ = %ALLOCATION(qent),
+		UBF = qent,
+		USZ = %ALLOCATION(qent)
+		),
+	flqlst		: _FLQSRCHLST_DECL (ITEMS = 1),
+	entries 	: REF VECTOR [,LONG],
+	tmpstr		: $BBLOCK [DSC$K_S_BLN],
+	bmap		: REF BLOCK[,LONG],
+	qctx		: REF QCTXDEF,
+	sctx,
+	array_size,
+	alq, deq,
+	counter,
+	entnum,
+	rmsstv,
+	log;
+
+    REGISTER
+	status		: UNSIGNED LONG;
+
+    INIT_DYNDESC (tmpstr);
+
+    privs[0] = PRV$M_BYPASS;
+    privs[1] = 0;
+
+    IF ($SETPRV (ENBFLG = 1, PRVADR = privs, PRVPRV = prvprv)
+		EQLU SS$_NOTALLPRIV)
+    THEN
+	BEGIN
+	SIGNAL (MCP__INSFPRV, 1, %ASCID'BYPASS');
+	RETURN (SS$_NORMAL);
+	END;
+
+    log = (CLI$PRESENT(%ASCID'LOG') EQLU CLI$_PRESENT);
+
+    alq = 2048;
+    deq = 256;
+
+    IF (CLI$PRESENT(maximum_entries))
+    THEN
+	BEGIN
+	status = CLI$GET_VALUE (maximum_entries, tmpstr);
+	LIB$CVT_DTB (.tmpstr [DSC$W_LENGTH], .tmpstr [DSC$A_POINTER], alq);
+	IF (.alq LSS 0) OR (.alq GTRU FLQ_K_MAXENT)
+	THEN
+	    BEGIN
+	    SIGNAL (MCP__QINVSIZ, 1, FLQ_K_MAXENT);
+	    FREE_STRINGS (tmpstr);
+	    RETURN SS$_NORMAL;
+	    END;
+	END
+    ELSE
+	BEGIN
+	SIGNAL (MCP__QMAXREQ);
+	RETURN (SS$_NORMAL);
+	END;
+
+    flq_fab [FAB$L_ALQ] = .alq + FLQ_K_QENTBASE + 1;
+    flq_fab [FAB$W_DEQ] = 0;
+
+    FREE_STRINGS (tmpstr);
+
+    !
+    !  Open the queue file for *exclusive* access!
+    !
+    status = FLQ_OPEN (FLQ__FULL, qctx, %ASCID'', rmsstv, 1);
+    IF NOT (.status)
+    THEN
+	BEGIN
+	SIGNAL (MCP__QOPENERR, 0, .status, .rmsstv);
+	RETURN (SS$_NORMAL);
+	END;
+
+    SIGNAL (MCP__QNEWQFL, 1, .alq);
+    !
+    !  Now try to create the new file.
+    !
+    status = $CREATE (FAB = flq_fab);
+    IF (.status) THEN status = $CONNECT (RAB = flq_rab);
+    IF NOT (.status)
+    THEN
+	BEGIN
+	SIGNAL (MCP__QCVTFAIL, 0, .status);
+	RETURN (SS$_NORMAL);
+	END;
+
+    SIGNAL (MCP__QBPASS1);
+    counter = 1;
+
+    array_size = (((.qctx [QCTX_L_MAXENT]+1) * 4)+511)/512;	!Size of array needed
+    status = LIB$GET_VM_PAGE (array_size, entries);
+    IF NOT (.status)
+    THEN
+	BEGIN
+	SIGNAL (MCP__QCVTFAIL, 0, .status);
+	RETURN (SS$_NORMAL);
+	END;
+
+    !
+    !  Initialize entire array, including [0] entry.  That entry ends
+    !  up being used in the BACKREF initialization below if there are
+    !  no BACKREFs in the original entry.
+    !
+    INCR I FROM 0 TO .qctx [QCTX_L_MAXENT] DO
+	entries [.I] = 0;
+
+    status = LIB$GET_VM_PAGE (%REF(FLQ_K_BMAPBLKS), bmap);	!Get 8 pages of bitmap memory
+    CH$FILL (0, QENT_S_QENTDEF*FLQ_K_BMAPBLKS, .bmap);		!Zero out the bitmap
+
+    IF (.status EQLU RMS$_RNF)
+    THEN
+	BEGIN
+	SIGNAL (MCP__QCOMPNON);
+	$CLOSE (FAB = flq_fab);
+	FLQ_CLOSE (qctx);
+	RETURN (SS$_NORMAL);
+	END;
+
+    _FLQSRCHLST_INIT (SRCHLST=flqlst, (CODE=0));
+    sctx = 0;
+
+    CH$FILL (0, QENT_S_QENTDEF, qent);		!Zero out the entry
+
+    IF (.status)
+    THEN
+	BEGIN
+	WHILE (FLQ_SEARCH (qctx, flqlst, sctx, qent)) DO
+	    BEGIN
+	    entries [.qent [QENT_L_ENTNUM]] = .counter;
+	    counter = .counter + 1;
+	    END;
+        FLQ_SEARCH_END (qctx, sctx);
+	END;
+
+    IF (.status)
+    THEN
+	IF (.counter GEQU .alq)
+	THEN
+	    BEGIN
+	    SIGNAL (MCP__QEXTINV, 2, .alq, .counter - 1);
+	    status = SS$_ABORT;
+	    END;
+
+    IF (.status)
+    THEN
+	BEGIN
+	SIGNAL (MCP__QBPASS2);
+
+	flq_rab [RAB$L_RBF] = qent;
+	flq_rab [RAB$W_RSZ] = QENT_S_QENTDEF;
+
+	CH$FILL (0, QENT_S_QENTDEF, qent);
+	WHILE (status = FLQ_SEARCH (qctx, flqlst, sctx, qent)) DO
+	    BEGIN
+	    IF (.entries[.qent [QENT_L_ENTNUM]] NEQU 0)
+	    THEN
+		BEGIN
+
+		PRINT (MCP__QPRCSNG, 2,
+				.qent [QENT_L_ENTNUM],
+				.entries[.qent [QENT_L_ENTNUM]]);
+		qent [QENT_L_ENTNUM] =
+				.entries[.qent [QENT_L_ENTNUM]];
+		qent [QENT_L___obs1] = 0;
+		qent [QENT_L___obs2] = 0;
+		qent [MXQ_L_BACKREF] =
+				.entries[.qent [MXQ_L_BACKREF]];
+		qent [MXQ_L_SMTPREF] =
+				.entries[.qent [MXQ_L_SMTPREF]];
+		qent [MXQ_L_LOCALREF] =
+				.entries[.qent [MXQ_L_LOCALREF]];
+		qent [MXQ_L_UUCPREF] =
+				.entries[.qent [MXQ_L_UUCPREF]];
+		qent [MXQ_L_MLFREF] =
+				.entries[.qent [MXQ_L_MLFREF]];
+		qent [MXQ_L_X400REF] =
+				.entries[.qent [MXQ_L_X400REF]];
+		qent [MXQ_L_SITEREF] =
+				.entries[.qent [MXQ_L_SITEREF]];
+		qent [MXQ_L_DNSMTPREF] =
+				.entries[.qent [MXQ_L_DNSMTPREF]];
+		qent [MXQ_L_XSMTPREF] =
+				.entries[.qent [MXQ_L_XSMTPREF,]];
+		qent [MXQ_L_LSVREF] =
+				.entries[.qent [MXQ_L_LSVREF]];
+                INCR i FROM 0 TO MX_K_HOLDQ_MAX-1 DO
+                BEGIN
+                    BIND
+                        fwdref = qent [MXQ_L_HOLDQREF_BASE] : VECTOR [,LONG];
+                    IF .fwdref [.i] NEQU 0 THEN
+                        fwdref [.i] = .entries [.fwdref [.i]];
+                END;
+		key = .qent [QENT_L_ENTNUM] ;
+
+		entnum = .qent [QENT_L_ENTNUM] - 1;	!Get the entry number
+		bmap [(.entnum/32), (.entnum MOD 32), 1, 0] = 1;
+
+		flq_rab [RAB$L_BKT] = FLQ_K_QENTBASE + .qent [QENT_L_ENTNUM];
+		status = $WRITE (RAB = flq_rab);
+		IF NOT(.status) THEN EXITLOOP;
+		END;
+	    END;
+            FLQ_SEARCH_END (qctx, sctx);
+	END;
+
+    IF (.status)
+    THEN
+	BEGIN
+	flq_rab [RAB$L_RBF] = .bmap;
+	flq_rab [RAB$W_RSZ] = FLQ_K_BMAPSIZE;
+	flq_rab [RAB$L_BKT] = FLQ_K_BMAPBASE;
+	status = $WRITE (RAB = flq_rab);
+	END;
+
+
+    IF (.status EQLU RMS$_EOF) THEN status = SS$_NORMAL;
+    IF NOT(.status)
+    THEN
+	BEGIN
+	IF (.status NEQU SS$_ABORT)
+	THEN
+	    SIGNAL (MCP__QCVTFAIL, 0, .status)
+	ELSE
+	    SIGNAL (MCP__QCVTFAIL);
+	$CLOSE (FAB = flq_fab);
+        FLQ_CLOSE (qctx);
+	END;
+
+    IF (.status)
+    THEN
+	BEGIN
+	LOCAL	old_file : $BBLOCK [DSC$K_S_BLN],
+		new_file : $BBLOCK [DSC$K_S_BLN];
+	INIT_DYNDESC (old_file, new_file);
+	PRINT (MCP__QDIRREN);
+	INCR I FROM 0 TO 9 DO
+	    BEGIN
+	    LIB$SYS_FAO (%ASCID'MX_FLQ_DIR:!UB.DIR', 0, old_file,
+		.i);
+	    LIB$SYS_FAO (%ASCID'MX_FLQ_DIR:OLD_!UB.DIR', 0, new_file,
+		.i);
+	    status = LIB$RENAME_FILE (old_file, new_file);
+	    IF NOT(.status) AND (.status NEQU RMS$_FNF) THEN EXITLOOP;
+	    END;
+
+	PRINT (MCP__QCREDIR);
+	INCR I FROM 0 TO 9 DO
+	    BEGIN
+	    flq_make_compress_fspec (.i, %ASCID'', old_file, 2);
+	    status = LIB$CREATE_DIR (old_file);
+	    IF NOT(.status) THEN EXITLOOP;
+	    END;
+
+	IF (.status)
+	THEN
+	    BEGIN
+	    PRINT (MCP__QRENMSG);
+	    INCR I FROM 1 TO .qctx [QCTX_L_MAXENT] DO
+		IF (.entries[.I] NEQU 0)
+		THEN
+		    BEGIN
+		    flq_make_compress_fspec (.i, %ASCID'*;*', old_file, 1);
+		    flq_make_compress_fspec (.entries[.i], %ASCID'*;*', new_file, 0);
+		    status = LIB$RENAME_FILE(old_file, new_file);
+		    IF NOT(.status) AND (.status NEQU RMS$_FNF)
+		    THEN EXITLOOP;
+		    END;
+	    END;
+
+	$CLOSE (FAB = flq_fab);
+	status = flq_set_end_of_file (flq_fab);
+    FLQ_CLOSE (qctx);
+
+	IF (.status) OR (.status EQLU RMS$_FNF)
+	THEN
+	    BEGIN
+	    LOCAL qab;
+
+	    PRINT (MCP__QDELDIR);
+	    LIB$DELETE_FILE (%ASCID'MX_FLQ_DIR:OLD_%.DIR;*');
+	    PRINT (MCP__QDELFLQ);
+	    LIB$DELETE_FILE (%ASCID'MX_FLQ_DIR:MX_SYSTEM_QUEUE.FLQ_CTL;-1');
+
+	    END;
+
+	END;
+
+    LIB$FREE_VM_PAGE (array_size, entries);
+    LIB$FREE_VM_PAGE (%REF (FLQ_K_BMAPBLKS), bmap);
+
+    RETURN ((IF (.status EQLU RMS$_EOF) THEN SS$_NORMAL ELSE .status));
+
+END;						!End of routine
+
+
+%SBTTL 'QCMD_STATISTICS'
+GLOBAL ROUTINE QCMD_STATISTICS =
+BEGIN
+!++
+! FUNCTIONAL DESCRIPTION:
+!
+!   The routine shows status information about the MX_SYSTEM_QUEUE.FLQ_CTL
+!   file.
+!
+! RETURNS:	cond_value, longword (unsigned), write only, by value
+!
+! PROTOTYPE:
+!
+!   QCMD_STATISTICS
+!
+! IMPLICIT INPUTS:  None.
+!
+! IMPLICIT OUTPUTS: None.
+!
+! COMPLETION CODES:
+!
+!   SS$_NORMAL: 	normal successful completion.
+!
+! SIDE EFFECTS:
+!
+!   None.
+!--
+    LOCAL
+	qctx		: REF QCTXDEF,
+	bmap		: REF BITVECTOR [],
+	total_entries,
+        maxent,
+	status;
+
+    status = FLQ_OPEN (FLQ__FULL, qctx);
+    IF NOT .status THEN
+    BEGIN
+        SIGNAL (MCP__QOPENERR, 0, .status);
+        RETURN SS$_NORMAL;
+    END;
+
+    status = FLQ___GETBITMAP (.qctx, bmap);
+    IF .status THEN
+    BEGIN
+        total_entries = 0;
+        INCR i FROM 0 TO (FLQ_K_BMAPSIZE+3)/4-1 DO
+            total_entries = .total_entries + .bmap [.i];
+        FLQ___FREEBITMAP (.qctx);
+        maxent = .qctx [QCTX_L_MAXENT];
+    END;
+    FLQ_CLOSE (qctx);
+
+    IF NOT .status THEN
+        SIGNAL (.status, 0)
+    ELSE
+        SIGNAL (MCP__QSTATUS, 3, .total_entries, .maxent,
+		((.total_entries*100)/.maxent));
+
+    SS$_NORMAL
+
+END;	!QCMD_STATISTICS
+
+
+%SBTTL 'FLQ_MAKE_COMPRESS_FSPEC'
+ROUTINE FLQ_MAKE_COMPRESS_FSPEC (ENTNUM, EXTEN_A, FSPEC_A, flag) =
+BEGIN
+!++
+! FUNCTIONAL DESCRIPTION:
+!
+!   description
+!
+! RETURNS:	cond_value, longword (unsigned), write only, by value
+!
+! PROTOTYPE:
+!
+!   FLQ_MAKE_COMPRESS_FSPEC
+!
+! IMPLICIT INPUTS:  None.
+!
+! IMPLICIT OUTPUTS: None.
+!
+! COMPLETION CODES:
+!
+!   SS$_NORMAL: 	normal successful completion.
+!
+! SIDE EFFECTS:
+!
+!   None.
+!--
+    BUILTIN
+	ACTUALCOUNT;
+
+    BIND
+	EXTEN	= .EXTEN_A  : BLOCK [DSC$K_S_BLN,BYTE],
+	FSPEC	= .FSPEC_A  : BLOCK [DSC$K_S_BLN,BYTE];
+
+    LOCAL
+	EXTLEN	: WORD,
+	EXTPTR	: REF VECTOR [,BYTE],
+	EXTPTR2 : REF VECTOR [,BYTE],
+	FAOLEN	: WORD,
+	FAODSC	: BLOCK [DSC$K_S_BLN,BYTE],
+	FAOBUF	: VECTOR [512,BYTE],
+	FAB	: $FAB_DECL,
+	NAM	: $NAM_DECL,
+	ESPEC	: VECTOR [255,BYTE],
+	RSPEC	: VECTOR [255,BYTE],
+	STATUS;
+
+    STATUS =  LIB$ANALYZE_SDESC (EXTEN, EXTLEN, EXTPTR);
+    IF NOT .STATUS THEN RETURN .STATUS;
+
+    STATUS = 0;
+    INIT_SDESC (FAODSC, %ALLOCATION (FAOBUF), FAOBUF);
+    IF NOT .STATUS THEN
+	STATUS = $FAO (%ASCID'!AS!UL.!AD', FAOLEN, FAODSC,
+		    %ASCID 'MX_FLQ_DIR:', .ENTNUM, .EXTLEN, .EXTPTR);
+    $FAB_INIT (FAB=FAB, FNA=FAOBUF, FNS=.FAOLEN, NAM=NAM, LNM_MODE=PSL$C_EXEC);
+    $NAM_INIT (NAM=NAM, ESA=ESPEC, ESS=%ALLOCATION (ESPEC),
+		RSA=RSPEC, RSS=%ALLOCATION (RSPEC));
+    STATUS = $PARSE (FAB=FAB);
+    IF NOT .STATUS THEN RETURN .STATUS;
+
+    !
+    !  Now convert the file spec to use the FLQ_DIR subdirectory format:
+    !
+    !		e.g., DUA0:[MX.QUEUE.3]123.MSG_TEXT
+    !
+    !  The last digit of the file name is used to determine the FLQ_DIR
+    !  subdirectory (0--9).
+    !
+    EXTLEN = .NAM[NAM$B_ESL];		!Re-use the EXTLEN to get a word length
+
+    FAODSC[DSC$W_LENGTH] = %ALLOCATION(FAOBUF); 	!Reset the FAO dsc len
+    EXTPTR = .NAM[NAM$L_NAME] - 1;			!Point to "]" or ">"
+    FAOLEN = CH$DIFF(.EXTPTR, .NAM[NAM$L_ESA]); 	!Length of directory
+    EXTLEN = .EXTLEN - .FAOLEN - 1;	!Remainder (- version)
+    IF (.flag EQLU 2)
+    THEN
+	status = $FAO (%ASCID'!AD.!AS!UB!AD', FAODSC, FAODSC,
+			.FAOLEN, .NAM[NAM$L_ESA],	!The device/directory
+			(IF (.flag EQLU 1) THEN %ASCID'OLD_' ELSE %ASCID''),
+			.ENTNUM MOD 10, 		!The subdirectory name
+			1, .EXTPTR)
+    ELSE
+	STATUS = $FAO (%ASCID'!AD.!AS!UB!AD!AD', FAODSC, FAODSC,
+			.FAOLEN, .NAM[NAM$L_ESA],	!The device/directory
+			(IF (.flag EQLU 1) THEN %ASCID'OLD_' ELSE %ASCID''),
+			.ENTNUM MOD 10, 		!The subdirectory name
+			1, .EXTPTR,			!The "]" or ">"
+			.EXTLEN, .NAM[NAM$L_NAME]);	!The NAME.TYPE;VERS
+
+    !
+    !  Copy the string to the caller's buffer.
+    !
+    STR$COPY_R (FSPEC, FAODSC, .FAODSC[DSC$A_POINTER]);
+
+    SS$_NORMAL
+
+END; ! FLQ_MAKE_COMPRESS_FSPEC
+
+
+%SBTTL 'FLQ_SET_END_OF_FILE'
+ROUTINE FLQ_SET_END_OF_FILE (fab_a) =
+BEGIN
+!++
+! FUNCTIONAL DESCRIPTION:
+!
+!   This routine sets the end of file block to the last block allocated
+!   for the MX message queue file (like SET FILE/END_OF_BLOCK).
+!
+!   The FAB passed in *must* have a NAM block associated with it!
+!
+! RETURNS:	cond_value, longword (unsigned), write only, by value
+!
+! PROTOTYPE:
+!
+!   FLQ_SET_END_OF_FILE fab
+!
+! IMPLICIT INPUTS:  None.
+!
+! IMPLICIT OUTPUTS: None.
+!
+! COMPLETION CODES:
+!
+!   SS$_NORMAL: 	normal successful completion.
+!
+! SIDE EFFECTS:
+!
+!   None.
+!--
+    BIND
+	fab	= .fab_a		: $FAB_DECL,
+	nam	= .fab [FAB$L_NAM]	: $NAM_DECL;
+
+    LOCAL
+	desc		: $BBLOCK [DSC$K_S_BLN],
+	iosb		: VECTOR [4, WORD],
+	fib		: $BBLOCK [FIB$C_LENGTH],	!A FIB for the QIO
+	atr_recattr	: $BBLOCK [ATR$S_RECATTR],
+	atr_itmlst	: BLOCKVECTOR [2, ATR$S_ATRDEF, BYTE],
+	channel,
+	status;
+
+    !
+    !  Initialize the ATR item list to get QIO record attributes.
+    !
+    atr_itmlst [0, ATR$W_SIZE] = ATR$S_RECATTR;
+    atr_itmlst [0, ATR$W_TYPE] = ATR$C_RECATTR;
+    atr_itmlst [0, ATR$L_ADDR] = atr_recattr;
+    atr_itmlst [1, 0, 0, 32, 0] = 0;			!End of item list
+
+    !
+    !  Assign a channel to the disk pointed to by the NAM.
+    !
+    INIT_SDESC (desc, .VECTOR [nam [NAM$T_DVI], 0; ,BYTE],
+				nam [NAM$T_DVI] + 1);
+    status = $ASSIGN (DEVNAM = desc, CHAN = channel);
+
+    IF NOT (.status) THEN RETURN (.status);
+
+    !
+    !  Set up the FIB.
+    !
+    desc [DSC$W_LENGTH] = FIB$C_LENGTH;		!Re-use descriptor for FIB
+    desc [DSC$A_POINTER] = fib;
+    CH$FILL (0, FIB$C_LENGTH, fib);		!Zero out the FIB
+
+    fib [FIB$L_ACCTL]	= FIB$M_WRITE OR FIB$M_NOWRITE OR FIB$M_NOREAD;
+
+    fib [FIB$W_FID_NUM] = .nam [NAM$W_FID_NUM];
+    fib [FIB$W_FID_SEQ] = .nam [NAM$W_FID_SEQ];
+    fib [FIB$W_FID_RVN] = .nam [NAM$W_FID_RVN];
+
+    status = $QIOW (	CHAN = .channel,
+			FUNC = IO$_ACCESS,
+			IOSB = iosb,
+			P1 = desc,
+			P5 = atr_itmlst);
+    IF (.status) THEN status = .iosb [0];
+    IF NOT(.status) THEN RETURN (.status);
+
+    atr_recattr [FAT$L_EFBLK] = .atr_recattr [FAT$L_HIBLK];
+    atr_recattr [FAT$W_FFBYTE] = 512;
+
+    status = $QIOW (	CHAN = .channel,
+			FUNC = IO$_MODIFY,
+			IOSB = iosb,
+			P1 = desc,
+			P5 = atr_itmlst);
+    IF (.status) THEN status = .iosb [0];
+
+    $QIOW (CHAN = .channel, FUNC = IO$_DEACCESS, P1 = desc);
+    $DASSGN (CHAN = .channel);
+
+    RETURN (.status);
+
+END;	!FLQ_SET_END_OF_FILE
+
+END						!End of module BEGIN
+ELUDOM						!End of module

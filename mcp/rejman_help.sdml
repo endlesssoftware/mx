@@ -1,0 +1,893 @@
+<COMMENT>
+
+   File:	REJMAN_HELP.SDML
+
+   Abstract:	DOCUMENT source for REJMAN command descriptions.
+
+   Authors:	Matt Madison
+
+Copyright (c) 2008, Matthew Madison.
+
+All rights reserved.
+
+Redistribution and use in source and binary forms, with or without
+modification, are permitted provided that the following conditions
+are met:
+
+    * Redistributions of source code must retain the above
+      copyright notice, this list of conditions and the following
+      disclaimer.
+    * Redistributions in binary form must reproduce the above
+      copyright notice, this list of conditions and the following
+      disclaimer in the documentation and/or other materials provided
+      with the distribution.
+    * Neither the name of the copyright owner nor the names of any
+      other contributors may be used to endorse or promote products
+      derived from this software without specific prior written
+      permission.
+
+THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
+"AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
+LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
+A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
+OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
+SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
+LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
+DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
+THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
+(INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
+OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+
+   Modified by:
+
+	22-SEP-1997	Madison		Initial coding.
+    	05-OCT-1997 	Madison	    	PURGE.
+    	14-OCT-1997 	Madison	    	CHECK.
+    	13-DEC-1997 	Madison	    	Fix PURGE/LOG help.
+    	13-JUN-1998 	Madison	    	Add heuristic stuff.
+    	20-JUN-1998 	Madison	    	SET HEURISTICS.
+    	11-OCT-1998 	Madison	    	Fix formatting problems.
+    	13-NOV-1999 	Madison	    	Fix explanation of /REJECT=FORWARD.
+    	29-NOV-2000 	Madison	    	ADD REJ/HEAD/FORW.
+        17-FEB-2002     Madison         Rule IDs, regex stuff.
+	17-FEB-2010	Tim Sneddon	Added FROM_BAD_LOCAL_USER
+
+<ENDCOMMENT>
+<COMMAND_SECTION>(REJMAN Commands\REJMAN)
+<SET_TEMPLATE_COMMAND>(COMMAND\DOUBLERUNNINGHEADS)
+
+<BOOK_ONLY>
+
+<COMMAND>(REJMAN\\REJMAN_cmd)
+<OVERVIEW>
+Executes the MX Rejection Manager.
+<ENDOVERVIEW>
+<FORMAT>
+<FCMD>(REJMAN)
+<FPARMS>([command])
+<ENDFORMAT>
+<QUAL_LIST>
+<QPAIR>(/DATABASE=file-spec)
+<ENDQUAL_LIST>
+
+<PARAMDEFLIST>
+<PARAMITEM>(command)
+<PARAMDEF>
+Any REJMAN command except the input redirection operator (@).  The
+specified command is executed and control is returned to DCL immediately
+thereafter.
+<ENDPARAMDEFLIST>
+
+<DESCRIPTION>
+REJMAN was written to be used as a DCL <quote>(foreign) command.  To use
+it this way, you must define a symbol as follows:
+<INTERACTIVE>
+<S>($ )<U>(REJMAN :== $MX_EXE:REJMAN)
+<ENDINTERACTIVE>
+<P>Defining the symbol in this way allows you to use the /DATABASE qualifier
+and specify <QUOTE>(one-host) commands on the command line.
+<P>By default, REJMAN loads in the current configuration file,
+MX_DIR:MX_REJECTION_DATABASE.MXCFG, when started.
+<NOTE>
+REJMAN requires the SYSLCK privilege to be able to lock the rejection
+database from being modified by other processes.
+<ENDNOTE>
+<ENDDESCRIPTION>
+
+<QUALDEFLIST>
+<QUALITEM>(/DATABASE=file-spec)
+<QUALDEF>
+Loads the specified rejection database for editing.  If not specified,
+the default database, MX_DIR:MX_REJECTION_DATABASE.MXCFG, is loaded.
+<ENDQUALDEFLIST>
+
+<ENDBOOK_ONLY>
+
+<KEEP_HELP_LEVEL>
+<COMMAND>(Command Input Redirection\\rejman_cmd_redirect)
+<ENDKEEP_HELP_LEVEL>
+<OVERVIEW>
+Execute REJMAN commands stored in a file.
+<ENDOVERVIEW>
+
+<FORMAT>
+<FCMD>(@)
+<FPARMS>(file-spec)
+<ENDFORMAT>
+
+<PARAMDEFLIST>
+<PARAMITEM>(file-spec)
+<PARAMDEF>
+Name of the file containing REJMAN commands.  If the file type is omitted, 
+the default type is MCP.
+<ENDPARAMDEFLIST>
+<DESCRIPTION>
+Use this command to have REJMAN take further command input from the specified
+file.  There is no built-in limit on the number of levels of nesting of
+command files, so be careful when using input redirection from within
+a command file.
+<P>This command can only be used at the REJMAN  command prompt, not as a
+<quote>(one-shot) REJMAN command.  To have a file be used for input for an
+entire REJMAN  session, use the following sequence of DCL commands.
+<interactive>
+<s>($ )<u>(DEFINE/USER SYS$INPUT file-spec)
+<s>($ )<u>(REJMAN)
+<endinteractive>
+<ENDDESCRIPTION>
+
+<KEEP_HELP_LEVEL>
+<COMMAND>(ADD EXCLUSION\\rejman_cmd_add_excl)
+<ENDKEEP_HELP_LEVEL>
+<OVERVIEW>
+Adds an exclusion to heuristic junk mail filters.
+<ENDOVERVIEW>
+
+<FORMAT>
+<FCMD>(ADD EXCLUSION)
+<FPARMS>(sender-pat)
+<ENDFORMAT>
+<QUAL_LIST>
+<QPAIR>(/HEURISTIC=heuristic-name\)
+<ENDQUAL_LIST>
+
+<PARAMDEFLIST>
+<PARAMITEM>(sender-pat)
+<PARAMDEF>
+E-mail address or wildcard pattern to match the sender of the message,
+as it would appear in either the RFC822 From header or the SMTP MAIL FROM command.
+<ENDPARAMDEFLIST>
+
+<DESCRIPTION>
+This command adds a new exception to one or all of the heuristic filters.
+If the sender (from either the RFC822 From header, or the SMTP MAIL FROM
+return path) of a message matches this address or pattern, the message
+is excluded from the specified heuristic filter check (or all checks if
+the /HEURISTIC qualifier is omitted).
+<ENDDESCRIPTION>
+
+<QUALDEFLIST>
+<QUALITEM>(/HEURISTIC=heuristic-name)
+<QUALDEF>
+Specifies the heuristic filter to which this exclusion
+applies.  If not specified, the exclusion is added to
+the global exclusion list for all heuristic filter checks.
+<ENDQUALDEFLIST>
+
+
+<KEEP_HELP_LEVEL>
+<COMMAND>(ADD REJECTION\\rejman_cmd_add_rej)
+<ENDKEEP_HELP_LEVEL>
+<OVERVIEW>
+Adds a rejection rule to the database for the SMTP server.
+<ENDOVERVIEW>
+
+<FORMAT>
+<FCMD>(ADD REJECTION)
+<FPARMS>(sender-pat [rcpt-pat])
+<ENDFORMAT>
+<QUAL_LIST>
+<QPAIR>(/ACCEPT[=accept-kwd]\)
+<QPAIR>(/ADDRESS=ip-addr-pat\)
+<QPAIR>(/FORWARD_TO=address\)
+<QPAIR>(/HEADER\)
+<QPAIR>(/MESSAGE=rejection-message\)
+<QPAIR>(/REGEX\)
+<ENDQUAL_LIST>
+
+<PARAMDEFLIST>
+<PARAMITEM>(sender-pat)
+<PARAMDEF>
+E-mail address or wildcard pattern to match the sender of the message,
+as it would appear in the SMTP MAIL FROM command.  If the /HEADER
+qualifier is specified, this parameter is treated as a wildcard pattern
+to match an RFC822 header in the message, and the <EMPHASIS>(rcpt-pat)
+parameter and other qualifiers are not used.
+<PARAMITEM>(rcpt-pat)
+<PARAMDEF>
+E-mail address or wildcard pattern to match the recipient of the message,
+as it would appear in the SMTP RCPT TO command.  If omitted, matching only
+occurs against the sender, and a match causes the rejection to happen immediately
+after receipt of the MAIL FROM command, rather than on a per-recipient basis.
+<P>
+To match a character normally regarded as a wildcard (asterisk or
+percent sign), prefix the character with a backslash.
+<P>
+This parameter is not permitted if the /HEADER qualifier is specified.
+<ENDPARAMDEFLIST>
+<DESCRIPTION>
+This command adds a new rejection rule to the database.  For address-based
+rejection rules (those not specifying /HEADER), a match occurs for any of the
+following:
+<LIST>(NUMBERED)
+<LE><EMPHASIS>(sender-pat) is specified with no <EMPHASIS>(rcpt-pat),
+    and the address in the SMTP MAIL FROM command matches
+    the specified address or pattern.  The sending system is notified of the
+    rejection in the status code returned for the MAIL FROM command.
+<LE><EMPHASIS>(sender-pat) and <EMPHASIS>(rcpt-pat) are both specified.  In this
+    case, the SMTP MAIL FROM address must match <EMPHASIS>(sender-pat) and the
+    RCPT TO address must match the <EMPHASIS>(rcpt-pat).  The check occurs on
+    receipt of the RCPT TO command, and if a match occurs, the sending SMTP
+    system is notified of the rejection in the status returned on the RCPT TO.
+    Note that this may not prevent the delivery of the message to other users
+    who do not match the <EMPHASIS>(rcpt-pat) pattern.
+<ENDLIST>
+<CP>In both cases, the rule can be restricted by the use of the /ADDRESS qualifier;
+if specified, the sending SMTP system's numeric IP address must match the address
+or pattern specified on that qualifier.  You may modify the behavior of MX's SMTP
+server when a match occurs by using other qualifiers; see the qualifier descriptions
+for more information.
+<P>Header-based rules are specified with the /HEADER qualifier.  Header-based rules
+are checked only after the entire message is received by the SMTP server, and if
+a match occurs, the sender is notified of the rejection after it transmits the
+termination sequence (CRLF-dot-CRLF) for the message.  Header-based rules affect
+delivery to all specified recipients of a message; the <EMPHASIS>(rcpt-pat) parameter
+is not used.  Other qualifiers are not allowed when the /HEADER qualifier is used.
+<ENDDESCRIPTION>
+
+<QUALDEFLIST>
+<QUALITEM>(/ACCEPT[=accept-kwd])
+<QUALDEF>
+Specifies that the message should be accepted rather than rejected.  This
+qualifier can be used to provide exceptions to other rejection rules; it
+applies only when both the <EMPHASIS>(sender-pat) and <EMPHASIS>(rcpt-pat)
+parameters are specified.  Valid values for <EMPHASIS>(accept-kwd) are:
+<LIST>(unnumbered)
+<LE><EMPHASIS>(AS_IS\BOLD).  This is the default when no keyword is specified,
+    and indicates that the recipient address should not be altered.
+<LE><EMPHASIS>(REWRITE=\BOLD)<EMPHASIS>(new-rcpt-addr).  This indicates that
+    the recipient's address should be rewritten to the specified new address.
+    This mechanism can be used to re-direct messages that would otherwise be
+    rejected to the postmaster or to another party that might be interested
+    in tracking the unwanted messages.
+<ENDLIST>
+<CP>
+This qualifier cannot be used in combination with the /MESSAGE qualifier or
+the /HEADER qualifier.
+
+<QUALITEM>(/ADDRESS=ip-addr-pat)
+<QUALDEF>
+Specifies either an IP address (in dotted-decimal form) or a wildcard pattern
+for matching an IP address.  If specified, the IP address of the sending SMTP
+system is obtained for the incoming connection and matched against the specified
+address or pattern.  This qualifier is not allowed when /HEADER is specified.
+
+<QUALITEM>(/FORWARD_TO=address)
+<QUALDEF>
+Specifies an e-mail address to which a message rejected by a header-based rule
+should be forwarded.  This qualifier is used only with the /HEADER qualifier.
+When a message is forwarded using this qualifier, additional headers are included
+with the diverted message to indicate the original list of recipients for the
+message.
+
+<QUALITEM>(/HEADER)
+<QUALDEF>
+Modifies the type of rejection rule to be based on RFC822 headers, rather than
+on SMTP envelope addresses.  When specified, the <EMPHASIS>(sender-pat) parameter
+is used for matching RFC822 headers that might be present in the incoming message,
+and no other parameters or qualifiers are allowed.
+
+<QUALITEM>(/MESSAGE=rejection-message)
+<QUALDEF>
+Specifies the message emitted by the SMTP server which accompanies the SMTP status
+code indicating that the MAIL FROM or RCPT TO command has been rejected.  By default,
+a generic message is emitted, indicating that rejection for the sender or recipient
+has been programmed.  You cannot use this qualifier with either the /HEADER qualifier
+or the /ACCEPT qualifier.
+
+<QUALITEM>(/REGEX)
+<QUALDEF>
+Specifies that the sender/recipient pattern, or header text pattern,
+uses regular expressions instead of VMS-style wildcards.  For header
+matching, specify /REGEX after the /HEADER qualifier.
+<ENDQUALDEFLIST>
+
+<COMMAND>(ATTACH\\rejman_cmd_attach)
+<OVERVIEW>
+Transfers control to another process in the current process tree.
+<ENDOVERVIEW>
+<FORMAT>
+<FCMD>(ATTACH)
+<FPARMS>([process-name])
+<ENDFORMAT>
+<QUAL_LIST>
+<QPAIR>(/IDENTIFICATION=process-id\)
+<QPAIR>(/PARENT\)
+<ENDQUAL_LIST>
+
+<PARAMDEFLIST>
+<PARAMITEM>(process-name)
+<PARAMDEF>
+Name of the process to which the terminal should be attached.
+The process must be in the current process tree.  This parameter
+is omitted if one of the qualifiers is specified.
+<ENDPARAMDEFLIST>
+<DESCRIPTION>
+This command is similar to the DCL ATTACH command.  It is used
+in interactive jobs to attach the terminal to another process in
+the current process tree for the job.
+<ENDDESCRIPTION>
+<QUALDEFLIST>
+<QUALITEM>(/IDENTIFICATION=process-id)
+<QUALDEF>
+Specifies the process by its process identification, a hexadecimal
+number.
+<QUALITEM>(/PARENT)
+<QUALDEF>
+Specifies that the terminal should be attached to the current
+subprocess's immediate parent in the process tree.
+<ENDQUALDEFLIST>
+
+<COMMAND>(CHECK\\rejman_cmd_check)
+<OVERVIEW>
+Checks to see if an address would be blocked by the rejection
+rules.
+<ENDOVERVIEW>
+
+<FORMAT>
+<FCMD>(CHECK)
+<FPARMS>(sender-address  [recipient-address])
+<ENDFORMAT>
+<QUAL_LIST>
+<QPAIR>(/ADDRESS=ip-address\)
+<ENDQUAL_LIST>
+
+<PARAMDEFLIST>
+<PARAMITEM>(sender-address)
+<PARAMDEF>
+An e-mail address as it would appear on an SMTP MAIL FROM:
+command, representing the sender of the message.
+
+<PARAMITEM>(recipient-address)
+<PARAMDEF>
+An e-mail address as it would appear on an SMTP RCPT TO:
+command, representing the message recipient.  If not
+specified, only the sender address will be checked.
+<ENDPARAMDEFLIST>
+
+<DESCRIPTION>
+This command simulates the check performed by the SMTP
+server on a sender address, optionally combined with
+a recipient address and the numeric IP address of a
+host.
+<P>
+CHECK will signal its success or failure in finding
+a matching rule.  If successful, the patterns in the
+rule are displayed in the message.
+<ENDDESCRIPTION>
+
+<QUALDEFLIST>
+<QUALITEM>(/ADDRESS=ip-address)
+<QUALDEF>
+Specifies the IP address to be used in the rejection check.
+This should be specified in dotted-decimal format.
+<ENDQUALDEFLIST>
+
+<COMMAND>(DEFINE/KEY\\rejman_cmd_defkey)
+<OVERVIEW>
+Defines an equivalence string and a set of attributes with a key
+on the terminal keyboard.
+<ENDOVERVIEW>
+
+<FORMAT>
+<FCMD>(DEFINE/KEY)
+<FPARMS>(key-name  equivalence-string)
+<ENDFORMAT>
+<QUAL_LIST>
+<QPAIR>(/ECHO\)
+<QPAIR>(/ERASE\)
+<QPAIR>(/IF_STATE\)
+<QPAIR>(/LOCK_STATE\)
+<QPAIR>(/LOG\)
+<QPAIR>(/SET_STATE\)
+<QPAIR>(/TERMINATE\)
+<ENDQUAL_LIST>
+
+<DESCRIPTION>
+See the DCL help entry for DEFINE/KEY for more information on
+this command.
+<P>
+You can have a set of keys defined automatically for use with
+REJMAN by placing DEFINE/KEY commands in the file
+SYS$LOGIN:MX_MCP_KEYDEFS.INI.  Note that this is the same file
+that is used with the MCP program.
+<ENDDESCRIPTION>
+
+<KEEP_HELP_LEVEL>
+<COMMAND>(DELETE EXCLUSION\\rejman_cmd_del_excl)
+<ENDKEEP_HELP_LEVEL>
+<OVERVIEW>
+Removes an exclusion from heuristic junk mail filters.
+<ENDOVERVIEW>
+
+<FORMAT>
+<FCMD>(DELETE EXCLUSION)
+<FPARMS>(sender-pat)
+<ENDFORMAT>
+<QUAL_LIST>
+<QPAIR>(/HEURISTIC=heuristic-name\)
+<ENDQUAL_LIST>
+
+<PARAMDEFLIST>
+<PARAMITEM>(sender-pat)
+<PARAMDEF>
+E-mail address or wildcard pattern to match the sender of the message,
+as it would appear in either the RFC822 From header or the SMTP MAIL FROM command.
+<ENDPARAMDEFLIST>
+
+<DESCRIPTION>
+This command removes an entry from either the global exclusion list,
+or from the exclusion list for a specific heuristic filter.
+If the sender (from either the RFC822 From header, or the SMTP MAIL FROM
+return path) of a message matches this address or pattern, the message
+is excluded from the specified heuristic filter check (or all checks if
+the /HEURISTIC qualifier is omitted).
+<ENDDESCRIPTION>
+
+<QUALDEFLIST>
+<QUALITEM>(/HEURISTIC=heuristic-name)
+<QUALDEF>
+Specifies the heuristic filter to which this exclusion
+applies.  If not specified, the matching entry is removed from the
+the global exclusion list for all heuristic filter checks.
+<ENDQUALDEFLIST>
+
+<KEEP_HELP_LEVEL>
+<COMMAND>(DELETE REJECTION\\rejman_cmd_delrej)
+<ENDKEEP_HELP_LEVEL>
+<OVERVIEW>
+Removes a rejection rule from the database.
+<ENDOVERVIEW>
+
+<FORMAT>
+<FCMD>(DELETE REJECTION)
+<FPARMS>(sender-pat [rcpt-pat])
+<ENDFORMAT>
+<QUAL_LIST>
+<QPAIR>(/ADDRESS=ip-addr-pat\)
+<QPAIR>(/HEADER\)
+<QPAIR>(/IDENTIFIER=rule-id\)
+<ENDQUAL_LIST>
+
+<DESCRIPTION>
+This command deletes a rule from the rejection database.  Deletion
+occurs when the specified parameters and qualifiers match the values
+used when the rule was added.
+<ENDDESCRIPTION>
+
+<QUALDEFLIST>
+<QUALITEM>(/ADDRESS=ip-addr-pat)
+<QUALDEF>
+Specifies either an IP address (in dotted-decimal form) or a wildcard pattern
+for matching an IP address. This qualifier is not allowed when /HEADER or
+/IDENTIFIER is specified.
+
+<QUALITEM>(/HEADER)
+<QUALDEF>
+Modifies the type of selected rejection rule to be based on RFC822 headers, rather than
+on SMTP envelope addresses.
+
+<QUALITEM>(/IDENTIFIER=rule-id)
+<QUALDEF>
+Selects the rule to be deleted based on its unique identifier, an integer value
+assigned when the rule is added to the rejection database.
+<ENDQUALDEFLIST>
+
+<KEEP_HELP_LEVEL>
+<COMMAND>(DISABLE HEURISTIC\\rejman_cmd_disable_heuristic)
+<ENDKEEP_HELP_LEVEL>
+<OVERVIEW>
+Disables junk mail heuristic filters in the SMTP server.
+<ENDOVERVIEW>
+
+<FORMAT>
+<FCMD>(DISABLE HEURISTIC)
+<FPARMS>([heuristic-name...])
+<ENDFORMAT>
+<QUAL_LIST>
+<QPAIR>(/ALL\)
+<ENDQUAL_LIST>
+
+<PARAMDEFLIST>
+<PARAMITEM>(heuristic-name)
+<PARAMDEF>
+A comma-separated list of one or more keywords that identifies
+the heuristic filters to be disabled.
+See
+<HELP_ONLY>
+the help for ENABLE HEURISTIC
+<ENDHELP_ONLY>
+<BOOK_ONLY>
+<REFERENCE>(rejman_cmd_enable_heuristic)
+<ENDBOOK_ONLY>
+for the list of heuristic filter names.
+<ENDPARAMDEFLIST>
+
+<DESCRIPTION>
+This command disables one or more of the heuristic junk mail
+filters.
+<ENDDESCRIPTION>
+
+<QUALDEFLIST>
+<QUALITEM>(/ALL)
+<QUALDEF>
+Disables all heuristic filters.  No parameters
+are permitted when this qualifier is specified.
+<ENDQUALDEFLIST>
+
+<KEEP_HELP_LEVEL>
+<COMMAND>(ENABLE HEURISTIC\\rejman_cmd_enable_heuristic)
+<ENDKEEP_HELP_LEVEL>
+<OVERVIEW>
+Enables junk mail heuristic filters in the SMTP server.
+<ENDOVERVIEW>
+
+<FORMAT>
+<FCMD>(ENABLE HEURISTIC)
+<FPARMS>([heuristic-name...])
+<ENDFORMAT>
+<QUAL_LIST>
+<QPAIR>(/ALL\)
+<QPAIR>(/CONFIDENCE_LEVEL={DEFAULT<VBAR>clevel}\)
+<ENDQUAL_LIST>
+
+<PARAMDEFLIST>
+<PARAMITEM>(heuristic-name)
+<PARAMDEF>
+A comma-separated list of one or more of the following keywords
+which identify the heuristics to be enabled:
+<LIST>(UNNUMBERED)
+<LE>FROM_TO_SENDER_SAME
+<LE>FROM_BAD_LOCAL_USER
+<LE>INVALID_AOL_ADDRESS
+<LE>INVALID_FROM
+<LE>INVALID_HOTMAIL_ADDRESS
+<LE>INVALID_TO
+<LE>MSGID_HAS_FROM
+<LE>MSGID_HAS_TO
+<LE>NULL_FROM
+<LE>NULL_MSGID
+<LE>NULL_TO
+<LE>NUMERIC_ADDRESS
+<LE>PRECEDENCE_BULK
+<LE>RECEIVED_AFTER_FROM
+<LE>RECEIVED_ALL_ZEROS
+<LE>UIDL_AUTH_SENDER
+<LE>X_UIDL
+<ENDLIST>
+<ENDPARAMDEFLIST>
+
+<DESCRIPTION>
+This command enables one or more of the heuristic junk mail
+filters.
+<ENDDESCRIPTION>
+
+<QUALDEFLIST>
+<QUALITEM>(/ALL)
+<QUALDEF>
+Enables all heuristic filters.  No parameters or other qualifiers
+are permitted when this qualifier is specified.
+<QUALITEM>(/CONFIDENCE_LEVEL={DEFAULT<VBAR>clevel})
+<QUALDEF>
+Specifies the confidence level to be associated with a match against
+this filter.  This is a local qualifier that must be specified immediately
+after a heuristic name.
+<P>
+The confidence level for a filter is a number representing the likelihood
+that a message matching that filter is junk mail.  A low confidence level
+indicates that the message is more likely to be legitimate; a high confidence
+level indicates that the message is more likely to be junk mail.  Each
+message passed through the heuristic filters is assigned the highest possible
+confidence level for each filter it matches, until either all enabled filters
+are checked or the message is given a confidence level that is greater than
+the REJECT level set with the SET HEURISTIICS command.
+<P>
+If the DEFAULT keyword is specified, the built-in default confidence level
+for the heuristic is set.  Otherwise, specify a decimal number from 0 through
+10 to set a non-default confidence level.
+<ENDQUALDEFLIST>
+
+<COMMAND>(EXIT\\rejman_cmd_exit)
+<OVERVIEW>
+Saves changes to the database and exits the program.
+<ENDOVERVIEW>
+
+<FORMAT>
+<FCMD>(EXIT)
+<FPARMS>( )
+<ENDFORMAT>
+
+<DESCRIPTION>
+This command saves the changes made during the current REJMAN session
+and exits the program.
+<ENDDESCRIPTION>
+
+<COMMAND>(HELP\\rejman_cmd_help)
+<OVERVIEW>
+Displays information about REJMAN commands.
+<ENDOVERVIEW>
+
+<FORMAT>
+<FCMD>(HELP)
+<FPARMS>([topic])
+<ENDFORMAT>
+
+<PARAMDEFLIST>
+<PARAMITEM>(topic)
+<PARAMDEF>
+Topic, such as a REJMAN command, about which you want help.
+If omitted, a list of available commands is displayed.
+<ENDPARAMDEFLIST>
+
+<DESCRIPTION>
+This command displays descriptions and other information on REJMAN commands.
+<ENDDESCRIPTION>
+
+<COMMAND>(QUIT\\rejman_cmd_quit)
+<OVERVIEW>
+Exits the program without saving changes.
+<ENDOVERVIEW>
+
+<FORMAT>
+<FCMD>(QUIT)
+<FPARMS>( )
+<ENDFORMAT>
+
+<DESCRIPTION>
+This command causes the program to exit without saving the
+changes made during the current session.  You will be prompted
+for confirmation if you have made any changes.
+<ENDDESCRIPTION>
+
+<COMMAND>(PURGE\\rejman_cmd_purge)
+<OVERVIEW>
+Purges old rejection rules from the database.
+<ENDOVERVIEW>
+
+<FORMAT>
+<FCMD>(PURGE)
+<FPARMS>()
+<ENDFORMAT>
+<QUAL_LIST>
+<QPAIR>(/BEFORE=date-time\See text.)
+<QPAIR>(/[NO]LOG\/LOG)
+<ENDQUAL_LIST>
+
+<DESCRIPTION>
+The PURGE command deletes rejection rules from the database
+considered <quote>(old;) that is, they were last used by the
+SMTP server to reject messages before a date in the past.
+By default, rules not used for 30 days are purged from the
+database; you may override this by specifying the /BEFORE
+qualifier.
+<ENDDESCRIPTION>
+
+<QUALDEFLIST>
+<QUALITEM>(/BEFORE=date-time)
+<QUALDEF>
+By default, the PURGE command deletes records that have
+not been used for 30 days.  You may override this cut-off
+date with the /BEFORE qualifier.
+
+<QUALITEM>(/LOG)
+<QUALDEF>
+By default, the PURGE command logs a message indicating the
+number of rules purged from the database, along with the
+cut-off date when successful.  Specify /NOLOG to prevent this
+message from being issued on a successful PURGE.
+<ENDQUALDEFLIST>
+
+<COMMAND>(SAVE\\rejman_cmd_save)
+<OVERVIEW>
+Writes out the rejection database to a file.
+<ENDOVERVIEW>
+
+<FORMAT>
+<FCMD>(SAVE)
+<FPARMS>([file-spec])
+<ENDFORMAT>
+
+<PARAMDEFLIST>
+<PARAMITEM>(file-spec)
+<PARAMDEF>
+Name of the file to which the database should be written.
+If omitted, the default is MX_DIR:MX_REJECTION_DATABASE.MXCFG,
+or the file pointed to by the logical name MX_REJECTION_DATABASE.
+<ENDPARAMDEFLIST>
+
+<DESCRIPTION>
+This command writes the rejection database to a file.  To ensure
+that the MX SMTP server uses the rejection database information,
+omit the file specification to allow REJMAN to write the information
+to the default location.
+<ENDDESCRIPTION>
+
+<KEEP_HELP_LEVEL>
+<COMMAND>(SET HEURISTICS\\rejman_cmd_set_heur)
+<ENDKEEP_HELP_LEVEL>
+<OVERVIEW>
+Modifies global settings for the heuristic junk mail filters.
+<ENDOVERVIEW>
+
+<FORMAT>
+<FCMD>(SET HEURISTICS)
+<FPARMS>( )
+<ENDFORMAT>
+
+<QUAL_LIST>
+<QPAIR>(/CONFIDENCE_LEVEL=[(ACCEPT=<EMPHASIS>(number),REJECT=<EMPHASIS>(number))]\)
+<QPAIR>(/[NO]INCLUDE_REASON\/NOINCLUDE_REASON)
+<QPAIR>(/REJECT_ACTION={DROP<VBAR>FORWARD=<EMPHASIS>(address)}\)
+<ENDQUAL_LIST>
+
+<DESCRIPTION>
+This command modifies the global settings for the heuristic junk mail filter
+in the SMTP server.
+<ENDDESCRIPTION>
+
+<QUALDEFLIST>
+<QUALITEM>(/CONFIDENCE_LEVEL)
+<QUALDEF>
+Sets the confidence levels for accepting and rejecting messages as junk mail.
+Each heuristic filter has a confidence level, representing the likelihood that
+a message matching that filter is junk mail.  This qualifier is used to set
+the thresholds for accepting a message as legitimate and rejecting a message
+as junk mail.
+<P>
+This qualifier takes a list of keywords (ACCEPT, REJECT) that assign the threshold
+values.  Each keyword must be specified with a value, which is either a number from
+0 to 10 or the keyword DEFAULT.  If you specify both the ACCEPT and REJECT keywords,
+you must enclose the list in parentheses.
+<P>
+The default settings are:
+<INTERACTIVE>
+/CONFIDENCE_LEVEL=(ACCEPT=0,REJECT=8)
+<ENDINTERACTIVE>
+<CP>
+A message is considered fully acceptable when its assigned confidence level is
+<emphasis>(less than or equal to) the ACCEPT threshold; in that case, the message
+is passed on to recipients with no further action.  A message is considered
+junk mail when its assigned confidence level is <emphasis>(greater than) the
+REJECT threshold; in that case, the action specified by SET HEURISTICS/REJECT_ACTION
+is taken.
+<P>
+Messages assigned confidence levels <emphasis>(between) the two thresholds are
+considered partially acceptable.  They are passed on to the recipients with
+an additional header (X-Junk-Mail-Rating) warning them that the message may be junk
+mail.  A second additional header containing the reason for the warning
+may also be included based on the SET HEURISTICS/INCLUDE_REASON setting.
+
+<QUALITEM>(/INCLUDE_REASON)
+<QUALDEF>
+For a message that is assigned a confidence level that falls between
+the ACCEPT and REJECT thresholds, specifies that an additional header
+(X-Junk-Mail-Reason) be included in the message to explain to the recipient
+why the message was flagged with a warning indicating that it might be
+junk mail.  The default is /NOINCLUDE_REASON.
+
+<QUALITEM>(/REJECT_ACTION)
+<QUALDEF>
+Specifies the action to take when the confidence level assigned to
+a message exceeds the REJECT threshold.  This qualifier takes one of
+two keyword values.  The DROP keyword specifies that the SMTP server
+should drop the message by sending an error status back to the sending
+SMTP system.  The FORWARD keyword specifies that the message should
+be diverted to a different address.  You must specify an e-mail address as
+a value for the FORWARD keyword.
+<P>
+When the FORWARD keyword is specified, the message is silently diverted
+to the forwarding address, with headers added to the top of the message
+indicating the reason the message was rejected, the original sending
+address, and the original recipients for the message.  This setting is
+provided so that the local postmaster or other responsible person can
+verify that any messages rejected by the heuristic filters are in fact
+junk mail.  In the case that a rejected message is actually legitimate,
+the system manager can then forward the message on to its intended
+recipients and modify the heuristic filter configuration to prevent
+such messages from being rejected in the future.
+<P>
+The default setting is /REJECT_ACTION=DROP.
+<ENDQUALDEFLIST>
+
+<COMMAND>(SHOW\\rejman_cmd_show)
+<OVERVIEW>
+Displays rejection entries and other information.
+<ENDOVERVIEW>
+
+<FORMAT>
+<FCMD>(SHOW)
+<FPARMS>(keyword)
+<ENDFORMAT>
+<QUAL_LIST>
+<QPAIR>(/COMMAND\)
+<QPAIR>(/IDENTIFIER=rule-id\)
+<QPAIR>(/OUTPUT=file-spec\)
+<ENDQUAL_LIST>
+
+<PARAMDEFLIST>
+<PARAMITEM>(keyword)
+<PARAMDEF>Specifies the information to be shown.  Acceptable
+keywords are ALL, DATABASE_FILE, HEURISTICS, KEY, REJECTIONS, and VERSION.  You
+must specify one of these keywords.
+<ENDPARAMDEFLIST>
+<DESCRIPTION>
+SHOW DATABASE_FILE displays the name of the database file that
+you are modifying.
+<P>
+SHOW HEURISTICS displays information about the heuristic filters
+and exclusions.
+<P>
+SHOW KEY displays key definitions.  Refer to the DCL SHOW KEY
+command for further information.
+<P>
+SHOW REJECTIONS displays the entries in the rejection database,
+inculding their reference counts, the date and time they were
+entered in the database, and the date and time they were last
+used by the SMTP server.
+<P>SHOW VERSION displays the version of MX running on the system.
+<P>SHOW ALL shows all of the information mentioned above.
+<ENDDESCRIPTION>
+<QUALDEFLIST>
+<QUALITEM>(/COMMAND)
+<QUALDEF>
+Formats the output as REJMAN commands.  This can be used with the
+/OUTPUT qualifier to create a REJMAN command file to re-create the
+rejection database from scratch.
+<QUALITEM>(/IDENTIFIER=rule-id)
+<QUALDEF>
+Used only with SHOW REJECTIONS, this qualifier selects the rejection
+rule to be displayed by its unique identifier, an integer value.
+If not specified, all rejection rules are displayed.
+<QUALITEM>(/OUTPUT=file-spec)
+<QUALDEF>
+Directs the displayed information to the specified file.  By
+default, output is displayed on the current standard output
+device (based on the SYS$OUTPUT logical name).
+<ENDQUALDEFLIST>
+
+<COMMAND>(SPAWN\\rejman_cmd_spawn)
+<OVERVIEW>
+Spawns a subprocess.
+<ENDOVERVIEW>
+
+<FORMAT>
+<FCMD>(SPAWN)
+<FPARMS>([dcl-command])
+<ENDFORMAT>
+
+<PARAMDEFLIST>
+<PARAMITEM>(dcl-command)
+<PARAMDEF>
+A DCL command to be executed in the subprocess.  If omitted,
+REJMAN is suspended and the terminal is attached to the
+subprocess for interactive entry of commands.  To return
+to the process running REJMAN, use the DCL LOGOUT command to
+end the subprocess.
+<ENDPARAMDEFLIST>
+
+<DESCRIPTION>
+This command creates a subprocess to execute one or more DCL
+commands.  See the description of the DCL SPAWN command for
+further information.
+<ENDDESCRIPTION>
+
+<ENDCOMMAND_SECTION>

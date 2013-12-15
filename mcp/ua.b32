@@ -1,0 +1,287 @@
+%TITLE 'UA'
+MODULE UA (IDENT='V1.0-1', ADDRESSING_MODE (EXTERNAL=LONG_RELATIVE, NONEXTERNAL=LONG_RELATIVE)) =
+BEGIN
+!++
+! FACILITY: 	    MCP
+!
+! ABSTRACT: 	    abstract
+!
+! MODULE DESCRIPTION:
+!
+!   Commands dealing with the User Authentication database.
+!
+! AUTHOR:   	    M. Madison
+!
+! Copyright (c) 2008, Matthew Madison.
+! 
+! All rights reserved.
+! 
+! Redistribution and use in source and binary forms, with or without
+! modification, are permitted provided that the following conditions
+! are met:
+! 
+!     * Redistributions of source code must retain the above
+!       copyright notice, this list of conditions and the following
+!       disclaimer.
+!     * Redistributions in binary form must reproduce the above
+!       copyright notice, this list of conditions and the following
+!       disclaimer in the documentation and/or other materials provided
+!       with the distribution.
+!     * Neither the name of the copyright owner nor the names of any
+!       other contributors may be used to endorse or promote products
+!       derived from this software without specific prior written
+!       permission.
+! 
+! THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
+! "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
+! LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
+! A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
+! OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
+! SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
+! LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
+! DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
+! THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
+! (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
+! OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+!
+! CREATION DATE:    26-NOV-2000
+!
+! MODIFICATION HISTORY:
+!
+!   26-NOV-2000	V1.0	Madison	    Initial coding.
+!   03-DEC-2000	V1.0-1	Madison	    Validate username and password on add.
+!--
+
+    LIBRARY 'SYS$LIBRARY:STARLET';
+    LIBRARY 'MX_SRC_COMMON:MX';
+
+    FORWARD ROUTINE
+    	CMD_UA_CREDB,
+    	CMD_UA_ADD,
+    	CMD_UA_MODIFY,
+    	CMD_UA_REMOVE;
+
+    EXTERNAL LITERAL
+    	CLI$_PRESENT,
+    	MCP__UACREFAIL, MCP__UAADDFAIL, MCP__UAMODFAIL, MCP__UAREMFAIL,
+    	MCP__UAINVUNAME, MCP__UAINVPWD;
+
+    EXTERNAL ROUTINE
+    	G_HAT (userauth_db_create, userauth_user_add, userauth_user_modify, userauth_user_delete),
+    	G_HAT (CLI$PRESENT, CLI$GET_VALUE),
+    	G_HAT (STR$COPY_DX, STR$FREE1_DX);
+
+    BIND
+    	username_d  	= %ASCID'USERNAME',
+    	password_d  	= %ASCID'PASSWORD',
+    	okunamechars	= %ASCID'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789_' : BLOCK [,BYTE];
+
+
+%SBTTL 'CMD_UA_CREDB'
+GLOBAL ROUTINE CMD_UA_CREDB = 
+BEGIN
+!++
+! FUNCTIONAL DESCRIPTION:
+!
+!   Creates the authentication database.
+!
+! RETURNS:  	cond_value, longword (unsigned), write only, by value
+!
+! PROTOTYPE:
+!
+!   CMD_UA_CREDB
+!
+! IMPLICIT INPUTS:  None.
+!
+! IMPLICIT OUTPUTS: None.
+!
+! COMPLETION CODES:
+!
+!   SS$_NORMAL:	    	normal successful completion.
+!
+! SIDE EFFECTS:	    None.
+!--
+    LOCAL
+    	fspec	: BLOCK [DSC$K_S_BLN,BYTE],
+    	do_fspec,
+    	status;
+
+    INIT_DYNDESC (fspec);
+
+    do_fspec = CLI$PRESENT (%ASCID'FSPEC') EQL CLI$_PRESENT;
+    IF .do_fspec THEN
+    	CLI$GET_VALUE (%ASCID'FSPEC', fspec);
+
+    status = userauth_db_create ((IF .do_fspec THEN fspec ELSE 0), 0);
+
+    FREE_STRINGS (fspec);
+
+    IF NOT .status THEN
+    	SIGNAL (MCP__UACREFAIL, 0, .status);
+    
+    SS$_NORMAL
+
+END; ! cmd_ua_credb
+
+%SBTTL 'CMD_UA_ADD'
+GLOBAL ROUTINE CMD_UA_ADD = 
+BEGIN
+!++
+! FUNCTIONAL DESCRIPTION:
+!
+!   Adds a user to the authentication database.
+!
+! RETURNS:  	cond_value, longword (unsigned), write only, by value
+!
+! PROTOTYPE:
+!
+!   CMD_UA_ADD
+!
+! IMPLICIT INPUTS:  None.
+!
+! IMPLICIT OUTPUTS: None.
+!
+! COMPLETION CODES:
+!
+!   SS$_NORMAL:	    	normal successful completion.
+!
+! SIDE EFFECTS:	    None.
+!--
+    LOCAL
+    	username    : BLOCK [DSC$K_S_BLN,BYTE],
+    	password    : BLOCK [DSC$K_S_BLN,BYTE],
+    	status;
+
+    INIT_DYNDESC (username, password);
+
+    CLI$GET_VALUE (username_d, username);
+    IF CLI$PRESENT (password_d) EQL CLI$_PRESENT THEN
+    	CLI$GET_VALUE (password_d, password)
+    ELSE
+    	STR$COPY_DX (password, password_d);
+
+    IF .username [DSC$W_LENGTH] GTRU 16 THEN
+    BEGIN
+    	SIGNAL (MCP__UAADDFAIL, 0, MCP__UAINVUNAME, 0);
+    	RETURN SS$_NORMAL;
+    END;
+
+    IF .password [DSC$W_LENGTH] GTRU 64 THEN
+    BEGIN
+    	SIGNAL (MCP__UAADDFAIL, 0, MCP__UAINVPWD, 0);
+    	RETURN SS$_NORMAL;
+    END;
+
+    INCR cp FROM .username [DSC$A_POINTER] TO CH$PLUS (.username [DSC$A_POINTER], .username [DSC$W_LENGTH]-1) DO
+    BEGIN
+    	IF CH$FAIL (CH$FIND_CH (.okunamechars [DSC$W_LENGTH], .okunamechars [DSC$A_POINTER], CH$RCHAR (.cp))) THEN
+    	BEGIN
+    	    SIGNAL (MCP__UAADDFAIL, 0, MCP__UAINVUNAME, 0);
+    	    RETURN SS$_NORMAL;
+    	END;
+    END;
+
+    status = userauth_user_add (username, password);
+
+    FREE_STRINGS (username, password);
+
+    IF NOT .status THEN
+    	SIGNAL (MCP__UAADDFAIL, 0, .status);
+    
+    SS$_NORMAL
+
+END; ! cmd_ua_add
+
+%SBTTL 'CMD_UA_MODIFY'
+GLOBAL ROUTINE CMD_UA_MODIFY = 
+BEGIN
+!++
+! FUNCTIONAL DESCRIPTION:
+!
+!   Modifies a user's password in the authentication database.
+!
+! RETURNS:  	cond_value, longword (unsigned), write only, by value
+!
+! PROTOTYPE:
+!
+!   CMD_UA_MODIFY
+!
+! IMPLICIT INPUTS:  None.
+!
+! IMPLICIT OUTPUTS: None.
+!
+! COMPLETION CODES:
+!
+!   SS$_NORMAL:	    	normal successful completion.
+!
+! SIDE EFFECTS:	    None.
+!--
+    LOCAL
+    	username    : BLOCK [DSC$K_S_BLN,BYTE],
+    	password    : BLOCK [DSC$K_S_BLN,BYTE],
+    	status;
+
+    INIT_DYNDESC (username, password);
+
+    CLI$GET_VALUE (username_d, username);
+    IF CLI$PRESENT (password_d) EQL CLI$_PRESENT THEN
+    	CLI$GET_VALUE (password_d, password)
+    ELSE
+    	STR$COPY_DX (password, password_d);
+
+    status = userauth_user_modify (username, password);
+
+    FREE_STRINGS (username, password);
+
+    IF NOT .status THEN
+    	SIGNAL (MCP__UAMODFAIL, 0, .status);
+    
+    SS$_NORMAL
+
+END; ! cmd_ua_modify
+
+%SBTTL 'CMD_UA_REMOVE'
+GLOBAL ROUTINE CMD_UA_REMOVE = 
+BEGIN
+!++
+! FUNCTIONAL DESCRIPTION:
+!
+!   Deletes a user from the authentication database.
+!
+! RETURNS:  	cond_value, longword (unsigned), write only, by value
+!
+! PROTOTYPE:
+!
+!   CMD_UA_REMOVE
+!
+! IMPLICIT INPUTS:  None.
+!
+! IMPLICIT OUTPUTS: None.
+!
+! COMPLETION CODES:
+!
+!   SS$_NORMAL:	    	normal successful completion.
+!
+! SIDE EFFECTS:	    None.
+!--
+    LOCAL
+    	username    : BLOCK [DSC$K_S_BLN,BYTE],
+    	status;
+
+    INIT_DYNDESC (username);
+
+    CLI$GET_VALUE (username_d, username);
+
+    status = userauth_user_delete (username);
+
+    FREE_STRINGS (username);
+
+    IF NOT .status THEN
+    	SIGNAL (MCP__UAREMFAIL, 0, .status);
+    
+    SS$_NORMAL
+
+END; ! cmd_ua_remove
+
+END
+ELUDOM

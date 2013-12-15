@@ -1,0 +1,558 @@
+%TITLE 'MAILQUEUE'
+MODULE MAILQUEUE (IDENT='V2.1', MAIN=MAILQUEUE,
+    	ADDRESSING_MODE (EXTERNAL=LONG_RELATIVE, NONEXTERNAL=LONG_RELATIVE)) =
+BEGIN
+!++
+! FACILITY: 	    MAILQUEUE
+!
+! ABSTRACT: 	    Shows queued entries for a particular user.
+!
+! MODULE DESCRIPTION:
+!
+!   Program for displaying queued entries.
+!
+! AUTHOR:   	    M. Madison
+!
+! Copyright (c) 2008, Matthew Madison.
+! Copyright (c) 2011, Endless Software Solutions.
+! 
+! All rights reserved.
+! 
+! Redistribution and use in source and binary forms, with or without
+! modification, are permitted provided that the following conditions
+! are met:
+! 
+!     * Redistributions of source code must retain the above
+!       copyright notice, this list of conditions and the following
+!       disclaimer.
+!     * Redistributions in binary form must reproduce the above
+!       copyright notice, this list of conditions and the following
+!       disclaimer in the documentation and/or other materials provided
+!       with the distribution.
+!     * Neither the name of the copyright owner nor the names of any
+!       other contributors may be used to endorse or promote products
+!       derived from this software without specific prior written
+!       permission.
+! 
+! THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
+! "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
+! LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
+! A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
+! OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
+! SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
+! LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
+! DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
+! THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
+! (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
+! OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+!
+! CREATION DATE:    28-OCT-1991
+!
+! MODIFICATION HISTORY:
+!
+!   28-OCT-1991	V1.0	Madison	    Initial coding (from MCP QUEUE_CMDS).
+!   18-FEB-1992	V1.1	Greer	    Add X25-SMTP support.
+!   21-JAN-1993 V1.2	Goatley     Fixed some SIGNAL problems.
+!   12-FEB-1993 V1.2-1	Goatley     Rename FLQ_ locks & logicals to MX_FLQ_.
+!   10-MAR-1993 V1.3	Goatley     Converted to AXP.
+!   17-JAN-1994 V1.4	Goatley     Add info msg if no entries, hold BACKREF.
+!   19-JAN-1994 V1.4-1	Goatley     Back out BACKREF change in V1.4.  Ooops.
+!    7-APR-1994 V1.5	Goatley     Fix memory problem---use MEM_FREERCPT.
+!   14-MAY-1994	V1.5-1	Altmayer    Add MXQ_L_LSVREF
+!   06-JAN-1997	V1.6	Madison	    Eliminate need for MDMLIB.
+!   02-MAY-1997	V1.7	Madison	    New address formatter.
+!   29-AUG-1997	V1.8	Madison	    New RCPT structure.
+!   18-FEB-1998 V1.9	Goatley	    Add missing "." in Xrte check in SHOW.
+!   19-JUN-1998	V1.9-1	Madison	    Add LOWERCASE modifier when formatting address.
+!   14-JUL-1998	V2.0	Madison	    Use READ_ENVELOPE.
+!   20-JUN-1999	V2.0-1	Madison	    Fix FWDREF array; sanity check fwd/back refs.
+!   30-JAN-2000	V2.0-2	Madison	    More holding queues.
+!   13-APR-2005 V2.1    Madison     FLQ_SEARCH_END.
+!--
+    LIBRARY 'SYS$LIBRARY:STARLET';
+    LIBRARY 'MX_SRC_COMMON:MX';
+    LIBRARY 'MX_SRC_COMMON:FLQ';
+    LIBRARY 'MX_SRC_COMMON:FIELDS';
+    LIBRARY 'MCP';
+
+    FORWARD ROUTINE
+    	MAILQUEUE,
+    	SHOW_ENTRY  	: NOVALUE;
+
+    EXTERNAL ROUTINE
+    	G_HAT (READ_ENVELOPE, DISPOSE_ENVELOPE, MX_FMT_LCL_ADDR, MEM_FREERCPT),
+    	G_HAT (LIB$FREE_VM, STR$CONCAT, FLQ_SEARCH_END);
+
+    _DEF (DID)
+    	DID_L_FLINK 	= _LONG,
+    	DID_L_BLINK 	= _LONG,
+    	DID_L_ENTNUM	= _LONG
+    _ENDDEF (DID);
+
+    EXTERNAL LITERAL
+    	MAILQ__QOPENERR, MAILQ__MQNONE;
+
+    MACRO
+    	ROUTER_ENTRY (QENT) =
+    	    BEGIN
+    	    	BIND _QE = QENT : QENTDEF;
+    	    	CH$EQL (9, UPLIT ('MX_ROUTER'), ._QE [QENT_W_DSTPRC],
+    	    	    _QE [QENT_T_DSTPRC], %C' ')
+    	    END%;
+
+    LITERAL
+    	FWDREF_COUNT = FLQ_K_MX_HOLDQ_BASE+1;
+
+    $ASSUME (FWDREF_COUNT, EQL, MX_K_PATH_HOLDQ_BASE)
+
+    MACRO BYTENUM (A,B,C,D) = (A)%;
+
+    OWN
+    	IMGPRV	    : VECTOR [2,LONG],
+    	PRCPRV	    : VECTOR [2,LONG],
+    	USER	    : BLOCK [DSC$K_S_BLN,BYTE],
+    	MYADR	    : BLOCK [DSC$K_S_BLN,BYTE],
+    	FWDREF	    : VECTOR [FWDREF_COUNT,LONG] PSECT ($PLIT$) INITIAL (
+    	    	    	BYTENUM (MXQ_L_SMTPREF),
+    	    	    	BYTENUM (MXQ_L_LOCALREF),
+    	    	    	BYTENUM (MXQ_L_JNETREF),
+    	    	    	BYTENUM (MXQ_L_UUCPREF),
+    	    	    	BYTENUM (MXQ_L_MLFREF),
+    	    	    	BYTENUM (MXQ_L_X400REF),
+    	    	    	BYTENUM (MXQ_L_SITEREF),
+    	    	    	BYTENUM (MXQ_L_DNSMTPREF),
+    	    	    	BYTENUM (MXQ_L_XSMTPREF),
+			BYTENUM (MXQ_L_LSVREF),
+			BYTENUM (MXQ_L_HOLDQREF_BASE)),
+    	SHOW_FAB    : $FAB_DECL,
+    	SHOW_RAB    : $RAB_DECL,
+    	SRCVAL	: VECTOR [8,LONG] PSECT ($PLIT$) INITIAL (
+    	    	    MX_K_ORG_LOCAL, MX_K_ORG_SMTP,
+    	    	    MX_K_ORG_UUCP, MX_K_ORG_X400, MX_K_ORG_SITE,
+    	    	    MX_K_ORG_VMSMAIL, MX_K_ORG_DNSMTP,
+    	    	    MX_K_ORG_XSMTP),
+    	STAVAL	: VECTOR [6,LONG] PSECT ($PLIT$) INITIAL (
+    	    	    FLQ_K_STRDY, FLQ_K_STUHO, FLQ_K_STOPH, FLQ_K_STINP,
+    	    	    FLQ_K_STFIN, FLQ_K_STCAN);
+
+
+    TABLE (FWDNAM, 'SMTP', 'Local', '*?*', 'UUCP', 'MList/FSrv', 'X.400',
+    	    	    'SITE', 'DECnet-SMTP', 'X25-SMTP', 'LSV', 'HOLD!UL');
+    TABLE (INFNAM, 'SMTP_INFO', 'LOCAL_INFO', 'UNUSED_INFO', 'UUCP_INFO',
+    	    	'MLF_INFO', 'X400_INFO', 'SITE_INFO', 'DNSMTP_INFO',
+    	    	'XSMTP_INFO', 'LSV_INFO', 'HOLD!UL_INFO');
+    TABLE (SRCNAM, 'Local', 'SMTP', 'UUCP', 'X.400', 'SITE',
+    	    	'VMSmail', 'DECnet-SMTP', 'X25-SMTP');
+    TABLE (STANAM, 'READY', 'USERHOLD', 'OPERHOLD', 'IN-PROGRESS',
+    	    	    'FINISHED', 'CANCELLED');
+
+%SBTTL 'MAILQUEUE'
+GLOBAL ROUTINE MAILQUEUE = 
+BEGIN
+!++
+! FUNCTIONAL DESCRIPTION:
+!
+!   MAILQUEUE program.
+!
+! RETURNS:  	cond_value, longword (unsigned), write only, by value
+!
+! PROTOTYPE:
+!
+!   MAILQUEUE
+!
+! IMPLICIT INPUTS:  None.
+!
+! IMPLICIT OUTPUTS: None.
+!
+! COMPLETION CODES:
+!
+!   SS$_NORMAL:	    	normal successful completion.
+!
+! SIDE EFFECTS:
+!
+!   None.
+!--
+    LOCAL
+    	STR 	: BLOCK [DSC$K_S_BLN,BYTE],
+    	FLQLST	: _FLQSRCHLST_DECL (ITEMS=1),
+    	JPILST	: $ITMLST_DECL (ITEMS=3),
+    	QENT	: QENTDEF,
+    	DIDQ	: QUEDEF,
+    	DID 	: REF DIDDEF,
+    	USRNAM	: VOLATILE VECTOR [32,BYTE],
+    	USRLEN	: VOLATILE WORD,
+    	LNMBUF	: VOLATILE VECTOR [256,BYTE],
+    	LNMLEN	: VOLATILE WORD,
+    	LNMLST	: $ITMLST_DECL (ITEMS=1),
+    	LCLHST	: BLOCK [DSC$K_S_BLN,BYTE],
+    	OUTRTN,
+    	FULL, WAITING, ALL,
+    	ENTNUM,
+    	CTX,
+    	QCTX, QCTX2,
+	showed_some,
+    	STATUS, RMSSTV;
+
+    $ITMLST_INIT (ITMLST=JPILST,
+    	(ITMCOD=JPI$_PROCPRIV, BUFADR=PRCPRV, BUFSIZ=8),
+    	(ITMCOD=JPI$_IMAGPRIV, BUFADR=IMGPRV, BUFSIZ=8),
+    	(ITMCOD=JPI$_USERNAME, BUFADR=USRNAM, BUFSIZ=32, RETLEN=USRLEN));
+    STATUS = $GETJPI (ITMLST=JPILST);
+    IF NOT .STATUS THEN RETURN SS$_NORMAL;
+    IMGPRV [0] = .IMGPRV [0] AND NOT .PRCPRV [0];
+    IMGPRV [1] = .IMGPRV [1] AND NOT .PRCPRV [1];
+    $SETPRV (PRVADR=IMGPRV, ENBFLG=0);
+    IF (DECR I FROM .USRLEN-1 TO 0 DO
+    	IF CH$RCHAR (CH$PLUS (USRNAM, .I)) NEQ %C' ' THEN
+    	BEGIN
+    	    USRLEN = .I+1;
+    	    EXITLOOP .I;
+    	END) LSS 0 THEN USRLEN = 0;
+    INIT_DYNDESC (MYADR, STR);
+    INIT_SDESC (USER, .USRLEN, USRNAM);
+    MX_FMT_LCL_ADDR (MX__FMT_ENVFROM OR FMT_M_LOWERCASE, USER, MYADR);
+
+    INIT_QUEUE (DIDQ);
+    OUTRTN = LIB$PUT_OUTPUT;
+
+    $SETPRV (PRVADR=IMGPRV, ENBFLG=1);
+    STATUS = FLQ_OPEN (FLQ__RDONLY, QCTX, %ASCID'', RMSSTV);
+    $SETPRV (PRVADR=IMGPRV, ENBFLG=0);
+    IF NOT .STATUS THEN
+    BEGIN
+    	SIGNAL (MAILQ__QOPENERR, 0, .STATUS, 0, .RMSSTV);
+    	RETURN SS$_NORMAL;
+    END;
+    $SETPRV (PRVADR=IMGPRV, ENBFLG=1);
+    STATUS = FLQ_OPEN (FLQ__RDONLY, QCTX2,
+    	%ASCID'MX_FLQ_DIR:MX_SYSTEM_QUEUE.FLQ_CTL', RMSSTV);
+    $SETPRV (PRVADR=IMGPRV, ENBFLG=0);
+    IF NOT .STATUS THEN
+    BEGIN
+    	FLQ_CLOSE (QCTX);
+    	SIGNAL (MAILQ__QOPENERR, 0, .STATUS, .RMSSTV);
+    	RETURN SS$_NORMAL;
+    END;
+
+    FULL = 1;
+    ALL = 0;
+    showed_some = 0;
+
+    _FLQSRCHLST_INIT (SRCHLST=FLQLST,
+    	(CODE=FLQS__STATUS, COUNT=1, STATUS=FLQ_K_STRDY));
+    CTX = 0;
+    WHILE FLQ_SEARCH (QCTX, FLQLST, CTX, QENT) DO
+    	SHOW_ENTRY (.OUTRTN, QENT, .QCTX2, .FULL, .ALL, DIDQ, showed_some);
+
+    FLQ_SEARCH_END (qctx, ctx);
+    FLQ_CLOSE (QCTX);
+    FLQ_CLOSE (QCTX2);
+
+    IF NOT(.showed_some)
+    THEN
+	SIGNAL (MAILQ__MQNONE);
+
+    FREE_STRINGS (STR, MYADR);
+    WHILE NOT REMQUE (.DIDQ [QUE_L_HEAD], DID) DO
+    	LIB$FREE_VM (%REF (DID_S_DIDDEF), DID);
+
+    SS$_NORMAL
+
+END; ! MAILQUEUE
+
+%SBTTL 'SHOW_ENTRY'
+ROUTINE SHOW_ENTRY (OUTRTN, QENT_A, QCTX, FULL, ALL, DIDQ_A, showed_some_a)
+	: NOVALUE = 
+BEGIN
+!++
+! FUNCTIONAL DESCRIPTION:
+!
+!   Displays a queue entry (or collection of them).
+!
+! RETURNS:  	cond_value, longword (unsigned), write only, by value
+!
+! PROTOTYPE:
+!
+!   SHOW_ENTRY  outrtn, qent, qctx, full, all, didq
+!
+! IMPLICIT INPUTS:  None.
+!
+! IMPLICIT OUTPUTS: None.
+!
+! COMPLETION CODES:
+!
+!   SS$_NORMAL:	    	normal successful completion.
+!
+! SIDE EFFECTS:
+!
+!   None.
+!--
+    BIND
+    	QENT	= .QENT_A   	: QENTDEF,
+    	DIDQ	= .DIDQ_A   	: QUEDEF,
+	showed_some	= .showed_some_a;
+
+    LOCAL
+    	envl	: ENVLDEF,
+    	DID 	: REF DIDDEF,
+    	QE  	: REF QENTDEF,
+    	QE2 	: QENTDEF,
+    	QE3 	: QENTDEF,
+    	STR 	: BLOCK [DSC$K_S_BLN,BYTE],
+    	STR2	: BLOCK [DSC$K_S_BLN,BYTE],
+    	SENDER	: BLOCK [DSC$K_S_BLN,BYTE],
+    	fnbuf	: VECTOR [32,BYTE],
+    	inbuf	: VECTOR [32,BYTE],
+    	fndsc	: BLOCK [DSC$K_S_BLN,BYTE],
+    	indsc	: BLOCK [DSC$K_S_BLN,BYTE],
+    	RCPT	: REF RCPTDEF,
+    	fnptr,
+    	inptr,
+    	DID_FWD,
+    	RCPNO,
+    	SOURCE,
+    	STATUS;
+
+    INIT_DYNDESC (STR, STR2, SENDER);
+
+    IF .QENT [MXQ_L_BACKREF] NEQ 0 THEN
+    BEGIN
+    	STATUS = FLQ_READ (QCTX, .QENT [MXQ_L_BACKREF], QE2);
+    	IF NOT .STATUS THEN RETURN;
+    	QE = QE2;
+    END
+    ELSE QE = QENT;
+
+    DID = .DIDQ [QUE_L_HEAD];
+    WHILE .DID NEQA DIDQ DO
+    BEGIN
+    	IF .QE [QENT_L_ENTNUM] EQL .DID [DID_L_ENTNUM] THEN RETURN;
+    	DID = .DID [DID_L_FLINK];
+    END;
+    LIB$GET_VM (%REF (DID_S_DIDDEF), DID);
+    DID [DID_L_ENTNUM] = .QE [QENT_L_ENTNUM];
+    INSQUE (.DID, .DIDQ [QUE_L_TAIL]);
+
+    IF NOT .ALL THEN
+    	IF .QE [QENT_L_STATUS] NEQ FLQ_K_STRDY AND
+    	    .QE [QENT_L_STATUS] NEQ FLQ_K_STINP THEN RETURN;
+
+    IF .FULL THEN
+    BEGIN
+    	LOCAL origin;
+    	BIND_ENVL_FIELDS (envl);
+    	$SETPRV (PRVADR=IMGPRV, ENBFLG=1);
+    	CH$FILL (%CHAR (0), ENVL_S_ENVLDEF, envl);
+    	INIT_QUEUE (envl [ENVL_Q_RCPTQUE]);
+    	STATUS = READ_ENVELOPE (QCTX, .QE, %ASCID'SRC_INFO', envl);
+    	$SETPRV (PRVADR=IMGPRV, ENBFLG=0);
+    	IF .STATUS THEN
+    	BEGIN
+    	    BIND PP = PRCPRV : BLOCK [,BYTE];
+    	    IF NOT .PP [PRV$V_SYSPRV] THEN
+    	    BEGIN
+    	    	IF .envl [ENVL_V_ORIGIN] AND .envl [ENVL_L_ORIGIN] EQL MX_K_ORG_VMSMAIL THEN
+    	    	BEGIN
+    	    	    IF CH$NEQ (.USER [DSC$W_LENGTH], .USER [DSC$A_POINTER],
+    	    	    	       .fromadr [TXT_W_LEN], fromadr [TXT_T_TEXT])
+    	    	    THEN STATUS = 0;
+    	    	END
+    	    	ELSE IF .envl [ENVL_V_ORIGIN] AND .envl [ENVL_L_ORIGIN] EQL MX_K_ORG_LOCAL THEN
+    	    	BEGIN
+    	    	    IF CH$NEQ (.MYADR [DSC$W_LENGTH], .MYADR [DSC$A_POINTER],
+    	    	    	       .fromadr [TXT_W_LEN], fromadr [TXT_T_TEXT])
+    	    	    THEN STATUS = 0;
+    	    	END
+    	    	ELSE STATUS = 0;
+    	    END;
+    	END;
+    	IF NOT .STATUS THEN
+    	BEGIN
+    	    DISPOSE_ENVELOPE (envl);
+    	    FREE_STRINGS (STR, STR2);
+    	    RETURN;
+    	END;
+
+	showed_some = 1;
+
+    	origin = (IF .envl [ENVL_V_ORIGIN] THEN .envl [ENVL_L_ORIGIN] ELSE .qe [QENT_L_ORIGIN]);
+    	IF (INCR I FROM 0 TO SRCNAM_COUNT-1 DO
+    	    	IF .SRCVAL [.I] EQL .origin THEN
+    	    	BEGIN
+    	    	    STR$COPY_DX (STR2, .SRCNAM [.I]);
+    	    	    EXITLOOP .I;
+    	    	END) LSS 0 THEN LIB$SYS_FAO (%ASCID'code=!UL', 0, STR2, .origin);
+    	LIB$SYS_FAO (%ASCID'Entry: !UL, Origin: [!AS] !AD', 0, STR,
+    	    	    	    .QE [QENT_L_ENTNUM], STR2, .fromadr [TXT_W_LEN], fromadr [TXT_T_TEXT]);
+    	(.OUTRTN) (STR);
+
+    	IF (INCR I FROM 0 TO STANAM_COUNT-1 DO
+    	    IF .STAVAL [.I] EQL .QE [QENT_L_STATUS] THEN
+    	    BEGIN
+    	    	LIB$SYS_FAO (%ASCID'  Status: !AS', 0, STR, .STANAM [.I]);
+    	    	EXITLOOP .I;
+    	    END) LSS 0 THEN LIB$SYS_FAO (%ASCID'  Status: code=!UL', 0, STR,
+    	    	    	    	    	    .QE [QENT_L_STATUS]);
+    	IF .QE [QENT_V_DELAY] AND .QE [QENT_L_STATUS] EQL FLQ_K_STRDY THEN
+    	BEGIN
+    	    LIB$SYS_FAO (%ASCID', waiting until !%D', 0,
+    	    	    	    STR2, QE [QENT_Q_DLYDT]);
+    	    STR$APPEND (STR, STR2);
+    	END;
+    	(.OUTRTN) (STR);
+
+    	DID_FWD = 0;
+
+    	INCR I FROM 0 TO FWDREF_COUNT+MX_K_HOLDQ_MAX-1 DO
+    	BEGIN
+    	    LOCAL offset;
+    	    offset = (IF .i LSSU FWDREF_COUNT-1 THEN .fwdref [.i]
+    	    	     ELSE BYTENUM (MXQ_L_HOLDQREF_BASE)+4*(.i-FWDREF_COUNT));
+    	    IF .qe [.offset,0,32,0] NEQ 0 THEN
+    	    BEGIN
+    	    	BIND
+    	    	    EN = QE [.offset,0,32,0] : LONG;
+    	    	LOCAL
+    	    	    fwdenv : ENVLDEF;
+    	    	DID_FWD = 1;
+    	    	IF .i LSSU FWDREF_COUNT-1 THEN
+    	    	BEGIN
+    	    	    fnptr = .fwdnam [.i];
+    	    	    inptr = .infnam [.i];
+    	    	END
+    	    	ELSE
+    	    	BEGIN
+    	    	    INIT_SDESC (fndsc, %ALLOCATION (fnbuf), fnbuf);
+    	    	    $FAO (.fwdnam [FWDREF_COUNT-1], fndsc, fndsc, .i-FWDREF_COUNT+1);
+    	    	    fnptr = fndsc;
+    	    	    INIT_SDESC (indsc, %ALLOCATION (inbuf), inbuf);
+    	    	    $FAO (.infnam [FWDREF_COUNT-1], indsc, indsc,
+    	    	    	  .i - FWDREF_COUNT + 1);
+    	    	    inptr = indsc;
+    	    	END;
+    	    	STATUS = FLQ_READ (QCTX, .EN, QE3);
+    	    	IF .STATUS AND .QE3 [MXQ_L_BACKREF] EQL .QE [QENT_L_ENTNUM] THEN
+    	    	BEGIN
+    	    	    IF (INCR J FROM 0 TO STANAM_COUNT-1 DO
+    	    	    	IF .STAVAL [.J] EQL .QE3 [QENT_L_STATUS] THEN
+    	    	    	BEGIN
+    	    	    	    LIB$SYS_FAO (%ASCID %STRING ('  !AS entry #!UL,',
+    	    	    	    	' status: !AS'), 0, STR, .fnptr,
+    	    	    	    	.QE3 [QENT_L_ENTNUM], .STANAM [.J]);
+    	    	    	    EXITLOOP .J;
+    	       	    	END) LSS 0 THEN LIB$SYS_FAO (%ASCID
+    	    	    	    	%STRING ('  !AS entry #!UL, status: code=!UL'),
+    	    	    	    	0, STR, .fnptr, .QE3 [QENT_L_ENTNUM],
+    	    	    	    	.QE3 [QENT_L_STATUS]);
+    	    	    (.OUTRTN) (STR);
+    	    	    IF .QE3 [QENT_V_DELAY] AND .QE3 [QENT_L_STATUS]
+    	    	    	    EQL FLQ_K_STRDY THEN
+    	    	    BEGIN
+    	    	    	LIB$SYS_FAO (%ASCID'      Waiting for retry until: !%D',
+    	    	    	    	0, STR, QE3 [QENT_Q_DLYDT]);
+    	    	    	(.OUTRTN) (STR);
+    	    	    END;
+    	    	    $SETPRV (PRVADR=IMGPRV, ENBFLG=1);
+    	    	    CH$FILL (%CHAR (0), ENVL_S_ENVLDEF, fwdenv);
+    	    	    INIT_QUEUE (fwdenv [ENVL_Q_RCPTQUE]);
+    	    	    STATUS = READ_ENVELOPE (QCTX, QE3, .inptr, fwdenv);
+    	    	    $SETPRV (PRVADR=IMGPRV, ENBFLG=0);
+    	    	    IF .STATUS THEN
+    	    	    BEGIN
+    	    	    	BIND_ENVL_FIELDS (fwdenv);
+    	    	    	RCPNO = 0;
+    	    	    	WHILE NOT REMQUE_HEAD (fwdenv [ENVL_Q_RCPTQUE], RCPT) DO
+    	    	    	BEGIN
+    	    	    	    BIND
+    	    	    	    	Xaddr = RCPT [RCPT_A_ADDR]  : REF TXTDEF,
+    	    	    	    	Xrte  = RCPT [RCPT_A_ROUTE] : REF TXTDEF;
+    	    	    	    RCPNO = .RCPNO + 1;
+    	    	    	    LIB$SYS_FAO (%ASCID %STRING ('      Recipient #!UL:',
+    	    	    	    	' !AD'), 0, STR, .RCPNO, .Xaddr [TXT_W_LEN],
+    	    	    	    	Xaddr [TXT_T_TEXT]);
+    	    	    	    IF .Xrte NEQA 0 THEN
+    	    	    	    BEGIN
+    	    	    	    	LOCAL DSC : BLOCK [DSC$K_S_BLN,BYTE];
+    	    	    	    	INIT_SDESC (DSC, .Xrte [TXT_W_LEN], Xrte [TXT_T_TEXT]);
+    	    	    	    	STR$APPEND (STR, %ASCID', Route=');
+    	    	    	    	STR$APPEND (STR, DSC);
+    	    	    	    END;
+    	    	    	    (.OUTRTN) (STR);
+    	    	    	    FREE_STRINGS (STR);
+    	    	    	    IF .RCPT [RCPT_W_CNT1] GTR 0 THEN
+    	    	    	    BEGIN
+    	    	    	    	LIB$SYS_FAO (%ASCID'      Error count=!UL',
+    	    	    	    	    0, STR2, .RCPT [RCPT_W_CNT1]);
+    	    	    	    	STR$APPEND (STR, STR2);
+    	    	    	    END;
+    	    	    	    IF .RCPT [RCPT_W_CNT2] GTR 0 THEN
+    	    	    	    BEGIN
+    	    	    	    	IF .STR [DSC$W_LENGTH] EQL 0 THEN
+    	    	    	    	    LIB$SYS_FAO (%ASCID'      DNS errors=!UL',
+    	    	    	    	    	0, STR, .RCPT [RCPT_W_CNT2])
+    	    	    	    	ELSE
+    	    	    	    	BEGIN
+    	    	    	    	    LIB$SYS_FAO (%ASCID', DNS errors=!UL',
+    	    	    	    	    	0, STR2, .RCPT [RCPT_W_CNT2]);
+    	    	    	    	    STR$APPEND (STR, STR2);
+    	    	    	    	END;
+    	    	    	    END;
+    	    	    	    IF .STR [DSC$W_LENGTH] GTR 0 THEN
+    	    	    	    BEGIN
+    	    	    	    	LOCAL
+    	    	    	    	    MSGDSC  : BLOCK [DSC$K_S_BLN,BYTE],
+    	    	    	    	    MSGBUF  : VECTOR [1024,BYTE];
+    	    	    	    	(.OUTRTN) (STR);
+    	    	    	    	INIT_SDESC (MSGDSC, 1024, MSGBUF);
+    	    	    	    	$GETMSG (MSGID=.RCPT [RCPT_L_LASTERR],
+    	    	    	    	    MSGLEN=MSGDSC [DSC$W_LENGTH],
+    	    	    	    	    BUFADR=MSGDSC, FLAGS=15);
+    	    	    	    	STR$CONCAT (STR, %ASCID'      Last error: ',
+    	    	    	    	    MSGDSC);
+    	    	    	    	(.OUTRTN) (STR);
+    	    	    	    END;
+    	    	    	    MEM_FREERCPT (RCPT);
+    	    	    	END;
+    	    	    	DISPOSE_ENVELOPE (fwdenv);
+    	    	    END
+    	    	    ELSE
+    	    	    BEGIN
+    	    	    	LIB$SYS_FAO (%ASCID'      [no !AS file for this entry]',
+    	    	    	    0, STR, .INFNAM [.I]);
+    	    	    	(.OUTRTN) (STR);
+    	    	    END;
+    	    	END;
+    	    END;
+    	END;
+
+    	IF NOT .DID_FWD THEN
+    	BEGIN
+    	    RCPNO = 0;
+    	    WHILE NOT REMQUE_HEAD (envl [ENVL_Q_RCPTQUE], RCPT) DO
+    	    BEGIN
+    	    	BIND
+    	    	    Xaddr = RCPT [RCPT_A_ADDR]  : REF TXTDEF;
+
+    	    	RCPNO = .RCPNO + 1;
+    	    	LIB$SYS_FAO (%ASCID'    Recipient #!UL: !AD', 0, STR,
+    	    	    	.RCPNO,  .Xaddr [TXT_W_LEN], Xaddr [TXT_T_TEXT]);
+    	    	(.OUTRTN) (STR);
+    	    	MEM_FREERCPT (RCPT);
+    	    END;
+    	END;
+
+    	DISPOSE_ENVELOPE (envl);
+
+    	(.OUTRTN) (%ASCID'');
+
+    END;
+
+
+    FREE_STRINGS (STR, STR2, SENDER);
+
+    SS$_NORMAL
+
+END; ! SHOW_ENTRY
+
+END
+ELUDOM
