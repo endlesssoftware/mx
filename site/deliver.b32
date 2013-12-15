@@ -1,0 +1,504 @@
+%TITLE 'DELIVER'
+MODULE DELIVER (IDENT='V2.5-1') =
+BEGIN
+!++
+! FACILITY: 	    MX SITE delivery agent
+!
+! ABSTRACT: 	    Delivers MX messages to "SITE".
+!
+! MODULE DESCRIPTION:
+!
+!   This module contains the routines that deliver messages via DECUS
+!   SITE using their VMS MAIL interface.
+!
+! AUTHOR:   	    M. Madison
+!
+! Copyright (c) 2008, Matthew Madison.
+! 
+! All rights reserved.
+! 
+! Redistribution and use in source and binary forms, with or without
+! modification, are permitted provided that the following conditions
+! are met:
+! 
+!     * Redistributions of source code must retain the above
+!       copyright notice, this list of conditions and the following
+!       disclaimer.
+!     * Redistributions in binary form must reproduce the above
+!       copyright notice, this list of conditions and the following
+!       disclaimer in the documentation and/or other materials provided
+!       with the distribution.
+!     * Neither the name of the copyright owner nor the names of any
+!       other contributors may be used to endorse or promote products
+!       derived from this software without specific prior written
+!       permission.
+! 
+! THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
+! "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
+! LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
+! A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
+! OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
+! SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
+! LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
+! DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
+! THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
+! (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
+! OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+!
+! CREATION DATE:    28-JUN-1990
+!
+! MODIFICATION HISTORY:
+!
+!   28-JUN-1990	V1.0    Madison	    Initial coding (swiped from MX_UUCP).
+!   24-JAN-1991	V1.1	Madison	    Add sender to info passed to subprocess.
+!   20-MAR-1991	V1.1-1	Madison	    Use MEM routines.
+!   28-OCT-1991	V2.0	Madison	    New RCPTDEF structure, one-per, err cnts.
+!   08-APR-1992	V2.0-1	Madison	    Wasn't handling INFOQ properly.
+!   25-JAN-1993 V2.1	Goatley     Broke up command line to avoid length err.
+!   11-JAN-1994 V2.2	Goatley     Fixed subprocess name to allow multiples.
+!   15-JAN-1997	V2.3	Madison	    Use TRACE_DECLARATIONS.
+!   29-AUG-1997	V2.4	Madison	    RCPT change.
+!   12-JUL-1998	V2.5	Madison	    DSN support.
+!   27-NOV-1999 V2.5-1	Madison	    Protect SPTQUE access.
+!--
+    LIBRARY 'SYS$LIBRARY:STARLET';
+    LIBRARY 'MX_SRC_COMMON:FLQ';
+    LIBRARY 'MX_SRC_COMMON:MX';
+    LIBRARY 'MX_SRC_COMMON:MX_LCLDEFS';
+
+    FORWARD ROUTINE
+    	DELIVER,
+    	DELIVER_FILE,
+    	SPRCVR;
+
+    EXTERNAL ROUTINE
+    	G_HAT (SP_OPEN, SP_SEND, SP_RECEIVE, QUOTE_STRING,
+    	    DSN_REPORT_ADD_RCPT, DSN_SET_RCPT_STATUS,
+    	    PARSE_ADDRLIST, FORMAT_HDR, MEM_GETTXT, MEM_FREERCPT),
+    	G_HAT (STR$COPY_R, STR$COPY_DX, STR$CONCAT, STR$FREE1_DX, STR$PREFIX,
+    	    STR$APPEND, LIB$GETJPI, LIB$SYS_FAO, LIB$FREE_VM, LIB$GET_VM,
+    	    LIB$CVT_HTB, LIB$DELETE_FILE, STR$POSITION, STR$RIGHT);
+
+    EXTERNAL LITERAL
+    	MX__RETRYEXCD;
+
+    EXTERNAL
+    	SITE_INFO   	: SITEDEF;
+
+    TRACE_DECLARATIONS (EXTERNAL);
+
+    OWN
+    	SPHANDLE    : INITIAL (0),
+    	SPTQUE	    : QUEDEF;
+
+%SBTTL 'DELIVER'
+GLOBAL ROUTINE DELIVER (QENT_A, envl_a, HDRQUE_A, RETRY_A, dsnctx) =
+BEGIN
+!++
+! FUNCTIONAL DESCRIPTION:
+!
+!   Creates a text file with a mail message in it and sends it
+!   through MAIL for delivery to SITE.
+!
+! RETURNS:  	cond_value, longword (unsigned), write only, by value
+!
+! PROTOTYPE:
+!
+!   DELIVER
+!
+! IMPLICIT INPUTS:  None.
+!
+! IMPLICIT OUTPUTS: None.
+!
+! COMPLETION CODES:
+!
+!   SS$_NORMAL:	    	normal successful completion.
+!
+! SIDE EFFECTS:
+!
+!   None.
+!--
+    BIND
+    	QENT	= .QENT_A   	: QENTDEF,
+    	envl	= .envl_a   	: ENVLDEF,
+    	HDRQUE	= .HDRQUE_A 	: QUEDEF,
+    	RETRY	= .RETRY_A  	: QUEDEF;
+    BIND_ENVL_FIELDS (envl);
+
+    LOCAL
+    	FAB 	: $FAB_DECL,
+    	FAB2	: $FAB_DECL,
+    	RAB 	: $RAB_DECL,
+    	RAB2	: $RAB_DECL,
+    	XABFHC	: $XABFHC_DECL,
+    	NAM 	: $NAM_DECL,
+    	NAM2	: $NAM_DECL,
+    	ESPEC	: BLOCK [255,BYTE],
+    	RSPEC	: BLOCK [255,BYTE],
+    	TXT 	: REF TXTDEF,
+    	HDR 	: REF TXTDEF,
+    	USR 	: REF RCPTDEF,
+    	TXTQUE	: QUEDEF,
+    	sender	: BLOCK [DSC$K_S_BLN,BYTE],
+    	STR 	: BLOCK [DSC$K_S_BLN,BYTE],
+    	STR2	: BLOCK [DSC$K_S_BLN,BYTE],
+    	STR3	: BLOCK [DSC$K_S_BLN,BYTE],
+    	SDSC	: BLOCK [DSC$K_S_BLN,BYTE],
+    	MSGTMP	: BLOCK [DSC$K_S_BLN,BYTE],
+    	ADRTMP	: BLOCK [DSC$K_S_BLN,BYTE],
+    	ROUTE	: BLOCK [DSC$K_S_BLN,BYTE],
+    	TIME	: VECTOR [2,LONG],
+    	PID,
+    	STATUS;
+
+    INIT_DYNDESC (STR, STR2, STR3, MSGTMP, ADRTMP);
+    INIT_QUEUE (TXTQUE);
+    INIT_SDESC (sender, .fromadr [TXT_W_LEN], fromadr [TXT_T_TEXT]);
+
+    $GETTIM (TIMADR=TIME);
+    LIB$GETJPI (%REF (JPI$_PID), 0, 0, PID);
+    LIB$SYS_FAO (%ASCID'MX_SITE_DIR:SITE_MSG_!XL_!XL_!XL.TMP', 0, MSGTMP,
+    	.TIME [0], .TIME [1], .PID);
+    LIB$SYS_FAO (%ASCID'MX_SITE_DIR:SITE_ADR_!XL_!XL_!XL.TMP', 0, ADRTMP,
+    	.TIME [0], .TIME [1], .PID);
+
+    $FAB_INIT (FAB=FAB, FAC=PUT, MRS=0, FNA=.MSGTMP [DSC$A_POINTER],
+    	FNS=.MSGTMP [DSC$W_LENGTH], RAT=CR, RFM=VAR, NAM=NAM);
+    $NAM_INIT (NAM=NAM, ESA=ESPEC, ESS=%ALLOCATION (ESPEC),
+    	RSA=RSPEC, RSS=%ALLOCATION (RSPEC));
+    $RAB_INIT (RAB=RAB, ROP=WBH, FAB=FAB);
+    STATUS = $CREATE (FAB=FAB);
+    IF NOT .STATUS THEN
+    BEGIN
+    	TRACE (' DELIVER:  Status=!XL trying to create temp file.');
+    	FREE_STRINGS (MSGTMP, ADRTMP, STR);
+    	DSN_SET_RCPT_STATUS (rcptque, MX__DSN_WS_OTHER, .status, 0, 0);
+    	RETURN .STATUS;
+    END;
+    STR$COPY_R (MSGTMP, %REF (.NAM [NAM$B_RSL]), RSPEC);
+    $CONNECT (RAB=RAB);
+
+    HDR = .HDRQUE [QUE_L_HEAD];
+    WHILE .HDR NEQA HDRQUE [QUE_L_HEAD] DO
+    BEGIN
+    	FORMAT_HDR (.HDR, TXTQUE, 80);
+    	WHILE NOT REMQUE (.TXTQUE [QUE_L_HEAD], TXT) DO
+    	BEGIN
+    	    RAB [RAB$W_RSZ] = .TXT [TXT_W_LEN];
+    	    RAB [RAB$L_RBF] = TXT [TXT_T_TEXT];
+    	    $PUT (RAB=RAB);
+    	    FREETXT (TXT);
+    	END;
+    	HDR = .HDR [TXT_L_FLINK];
+    END;
+
+    RAB [RAB$W_RSZ] = 0;
+    $PUT (RAB=RAB);
+
+    $FAB_INIT (FAB=FAB2, FAC=GET, XAB=XABFHC);
+    IF CH$EQL (MXQ_S_FILEID, QENT [MXQ_X_FILEID], 4, UPLIT (0), %CHAR (0)) THEN
+    BEGIN
+    	FLQ_MAKE_FSPEC (.QENT [MXQ_L_BACKREF], %ASCID'MSG_TEXT', STR);
+    	FAB2 [FAB$L_FNA] = .STR [DSC$A_POINTER];
+    	FAB2 [FAB$B_FNS] = .STR [DSC$W_LENGTH];
+    END
+    ELSE
+    BEGIN
+    	$NAM_INIT (NAM=NAM2);
+    	CH$MOVE (MXQ_S_FILEID, QENT [MXQ_X_FILEID], NAM2 [NAM$T_DVI]);
+    	FAB2 [FAB$L_NAM] = NAM2;
+    	FAB2 [FAB$V_NAM] = 1;
+    END;
+    $XABFHC_INIT (XAB=XABFHC);
+    $RAB_INIT (RAB=RAB2, FAB=FAB2, ROP=RAH);
+    STATUS = $OPEN (FAB=FAB2);
+    IF .STATUS THEN
+    BEGIN
+    	RAB2 [RAB$W_USZ] = (IF .XABFHC [XAB$W_LRL] EQL 0 THEN 1024 ELSE
+    	    	    	    .XABFHC [XAB$W_LRL]);
+    	LIB$GET_VM (%REF (.RAB2 [RAB$W_USZ]), RAB2 [RAB$L_UBF]);
+    	RAB [RAB$L_RBF] = .RAB2 [RAB$L_UBF];
+
+    	$CONNECT (RAB=RAB2);
+    	WHILE $GET (RAB=RAB2) DO
+    	BEGIN
+    	    RAB [RAB$W_RSZ] = .RAB2 [RAB$W_RSZ];
+    	    $PUT (RAB=RAB);
+    	END;
+
+    	$DISCONNECT (RAB=RAB2);
+    	$CLOSE (FAB=FAB2);
+    	LIB$FREE_VM (%REF (.RAB2 [RAB$W_USZ]), RAB2 [RAB$L_UBF]);
+    END;
+
+    $DISCONNECT (RAB=RAB);
+    $CLOSE (FAB=FAB);
+
+    WHILE NOT REMQUE (.rcptque [QUE_L_HEAD], USR) DO
+    BEGIN
+    	BIND
+    	    ua = .USR [RCPT_A_ADDR] : TXTDEF,
+    	    ur = USR [RCPT_A_ROUTE] : REF TXTDEF;
+    	$FAB_INIT (FAB=FAB, FAC=PUT, MRS=0, FNA=.ADRTMP [DSC$A_POINTER],
+    	    FNS=.ADRTMP [DSC$W_LENGTH], RAT=CR, RFM=VAR, NAM=NAM);
+    	$NAM_INIT (NAM=NAM, ESA=ESPEC, ESS=%ALLOCATION (ESPEC),
+    	    RSA=RSPEC, RSS=%ALLOCATION (RSPEC));
+    	$RAB_INIT (RAB=RAB, ROP=WBH, FAB=FAB);
+    	STATUS = $CREATE (FAB=FAB);
+    	IF NOT .STATUS THEN
+    	BEGIN
+    	    TRACE (' DELIVER:  Status=!XL trying to create ADR temp file.');
+    	    USR [RCPT_L_LASTERR] = .STATUS;
+    	    usr [RCPT_L_DSN_STATUS] = MX__DSN_WS_OTHER;
+    	    INSQUE (.USR, .RETRY [QUE_L_TAIL]);
+    	END
+    	ELSE
+    	BEGIN
+    	    STR$COPY_R (ADRTMP, %REF (.NAM [NAM$B_RSL]), RSPEC);
+    	    $CONNECT (RAB=RAB);
+
+    	    RAB [RAB$W_RSZ] = .ua [TXT_W_LEN];
+    	    RAB [RAB$L_RBF] = ua [TXT_T_TEXT];
+    	    $PUT (RAB=RAB);
+
+    	    $DISCONNECT (RAB=RAB);
+    	    $CLOSE (FAB=FAB);
+
+    	    TRACE ('  DELIVER: Delivering...');
+    	    IF .ur EQLA 0 THEN
+    	    	INIT_SDESC (route, 0, ur)
+    	    ELSE
+    	    	INIT_SDESC (route, .ur [TXT_W_LEN], ur [TXT_T_TEXT]);
+    	    STATUS = DELIVER_FILE (MSGTMP, ADRTMP, SENDER, ROUTE);
+    	    IF NOT .STATUS THEN
+    	    BEGIN
+    	    	BIND S = STATUS : BLOCK [,BYTE];
+    	    	IF .S [STS$V_SEVERITY] EQL STS$K_SEVERE THEN
+    	    	BEGIN
+    	    	    usr [RCPT_L_STATUS] = .status;
+    	    	    usr [RCPT_L_DSN_STATUS] = MX__DSN_F__OTHER;
+    	    	    DSN_REPORT_ADD_RCPT (dsnctx, usr, 0);
+    	    	    MEM_FREERCPT (USR);
+    	    	END
+    	    	ELSE
+    	    	BEGIN
+    	    	    IF .USR [RCPT_W_CNT1] GEQ .SITE_INFO [SITE_L_MAXTRIES]
+    	    	    THEN
+    	    	    BEGIN
+    	    	    	usr [RCPT_L_STATUS] = .status;
+    	    	    	usr [RCPT_L_DSN_STATUS] = MX__DSN_F__OTHER;
+    	    	    	DSN_REPORT_ADD_RCPT (dsnctx, usr, 0);
+    	    	    	MEM_FREERCPT (usr);
+    	    	    END
+    	    	    ELSE
+    	    	    BEGIN
+    	    	    	USR [RCPT_L_LASTERR] = .STATUS;
+    	    	    	usr [RCPT_L_DSN_STATUS] = MX__DSN_W__OTHER;
+    	    	    	DSN_REPORT_ADD_RCPT (dsnctx, usr, 0);
+    	    	    	INSQUE (.USR, .RETRY [QUE_L_TAIL]);
+    	    	    END;
+    	    	END;
+    	    END
+    	    ELSE
+    	    BEGIN
+    	    	usr [RCPT_L_STATUS] = SS$_NORMAL;
+    	    	usr [RCPT_L_DSN_STATUS] = MX__DSN_S__OTHER;
+    	    	DSN_REPORT_ADD_RCPT (dsnctx, usr, 0);
+    	    	MEM_FREERCPT (USR);
+    	    END;
+    	END;
+    	LIB$DELETE_FILE (ADRTMP);
+    END;
+
+    LIB$DELETE_FILE (MSGTMP);
+
+    FREE_STRINGS (MSGTMP, ADRTMP, STR, STR2, STR3);
+
+    SS$_NORMAL
+
+END; ! DELIVER
+
+%SBTTL 'DELIVER_FILE'
+ROUTINE DELIVER_FILE (MSGFILE_A, ADDRFILE_A, SENDER_A, ROUTE_A) =
+BEGIN
+!++
+! FUNCTIONAL DESCRIPTION:
+!
+!   Delivers a message file to one or more users.
+!
+! RETURNS:  	cond_value, longword (unsigned), write only, by value
+!
+! PROTOTYPE:
+!
+!   DELIVER_FILE  msgfile, addrfile, sender
+!
+! IMPLICIT INPUTS:  None.
+!
+! IMPLICIT OUTPUTS: None.
+!
+! COMPLETION CODES:
+!
+!   SS$_NORMAL:	    	normal successful completion.
+!
+! SIDE EFFECTS:
+!
+!   None.
+!--
+    BIND
+    	SENDER	= .SENDER_A 	: BLOCK [DSC$K_S_BLN,BYTE],
+    	ROUTE	= .ROUTE_A  	: BLOCK [DSC$K_S_BLN,BYTE];
+
+    BIND
+	sub_command	= %ASCID'@MX_EXE:SITE_DELIVER -',
+	sub_cont	= %ASCID' -';
+
+    LABEL
+    	WAITLOOP;
+
+    LOCAL
+    	STR 	: BLOCK [DSC$K_S_BLN,BYTE],
+    	STR2	: BLOCK [DSC$K_S_BLN,BYTE],
+    	STR3	: BLOCK [DSC$K_S_BLN,BYTE],
+    	TXT 	: REF TXTDEF,
+    	STATUS;
+
+    INIT_DYNDESC (STR, STR2, STR3);
+    IF .SPHANDLE EQL 0 THEN
+    BEGIN
+    	SPTQUE [QUE_L_TAIL] = SPTQUE [QUE_L_HEAD] = SPTQUE [QUE_L_HEAD];
+    	STATUS = SP_OPEN (SPHANDLE, %ASCID'SET NOON', SPRCVR, SPTQUE);
+    	TRACE ('  DELIVER_FILE: Status=!XL spawning subprocess.', .STATUS);
+	!
+	!  Determine the process name, getting the number from our own
+	!  process name, in case multiple SITE agents are running.
+	!
+	STR$COPY_DX (str, %ASCID'SET PROCESS/NAME="MX->SITE');
+	LIB$GETJPI (%REF(JPI$_PRCNAM), 0, 0, 0, str2);
+	STR$RIGHT (str2, str2, %REF(.str2 [DSC$W_LENGTH] - 1));
+	IF (CH$RCHAR(.str2 [DSC$A_POINTER]) EQLU %C'#')
+	THEN
+	    STR$APPEND (str, str2);
+	STR$APPEND (str, %ASCID'"');
+    	SP_SEND (SPHANDLE, str);
+    END;
+
+    WHILE NOT PROTECTED_REMQUE (.SPTQUE [QUE_L_HEAD], TXT) DO FREETXT (TXT);
+
+    QUOTE_STRING (STR2, .SENDER [DSC$W_LENGTH], .SENDER [DSC$A_POINTER]);
+    QUOTE_STRING (STR3, .ROUTE [DSC$W_LENGTH], .ROUTE [DSC$A_POINTER]);
+
+!    STR$CONCAT (STR, %ASCID'@MX_EXE:SITE_DELIVER', %ASCID' ', STR3,
+!    	%ASCID' ', .MSGFILE_A, %ASCID' ', .ADDRFILE_A, %ASCID' ', STR2);
+!    TRACE ('  DELIVER_FILE: Command: !AS', STR);
+
+    !
+    !  Since the command can be longer than 255 characters (the DCL limit
+    !  for a single line of input), break the command up into 5 pieces,
+    !  using continuation characters.  This will allow up to 1024 characters
+    !  for the DCL command.
+    !
+    SP_SEND (SPHANDLE, sub_command);
+    TRACE ('  DELIVER_FILE: Command: !AS', sub_command);
+
+    STR$CONCAT (STR, STR3, sub_cont);
+    SP_SEND (SPHANDLE, STR);
+    TRACE ('  DELIVER_FILE:          !AS', STR);
+
+    STR$CONCAT (STR, .MSGFILE_A, sub_cont);
+    SP_SEND (SPHANDLE, STR);
+    TRACE ('  DELIVER_FILE:          !AS', STR);
+
+    STR$CONCAT (STR, .ADDRFILE_A, sub_cont);
+    SP_SEND (SPHANDLE, STR);
+    TRACE ('  DELIVER_FILE:          !AS', STR);
+
+    SP_SEND (SPHANDLE, STR2);
+    TRACE ('  DELIVER_FILE:          !AS', STR2);
+
+    SP_SEND (SPHANDLE, %ASCID %STRING ('WRITE SYS$OUTPUT ',
+    	'F$FAO("EXIT:!XL",F$INTEGER($STATUS))'));
+
+WAITLOOP: (
+    WHILE 1 DO
+    BEGIN
+    	WHILE NOT PROTECTED_REMQUE (.SPTQUE [QUE_L_HEAD], TXT) DO
+    	BEGIN
+    	    IF .TXT [TXT_W_CODE] EQL SS$_ABORT THEN
+    	    BEGIN
+    	    	FREETXT (TXT);
+    	    	STATUS = SS$_ABORT;
+    	    	LEAVE WAITLOOP;
+    	    END;
+    	    TRACE ('  DELIVER_FILE:  Subprocess says: !AD',
+    	    	.TXT [TXT_W_LEN], TXT [TXT_T_TEXT]);
+    	    IF .TXT [TXT_W_LEN] GTR 5 THEN
+    	    	IF CH$EQL (5, UPLIT ('EXIT:'), 5, TXT [TXT_T_TEXT]) THEN
+    	    	BEGIN
+    	    	    LIB$CVT_HTB (.TXT [TXT_W_LEN]-5,
+    	    	    	CH$PLUS (TXT [TXT_T_TEXT], 5), STATUS);
+    	    	    FREETXT (TXT);
+    	    	    LEAVE WAITLOOP;
+    	    	END;
+    	    FREETXT (TXT);
+    	END;
+    	$HIBER;
+    END);
+
+    FREE_STRINGS (STR, STR2, STR3);
+
+    .STATUS AND NOT STS$M_INHIB_MSG
+
+END; ! DELIVER_FILE
+
+%SBTTL 'SPRCVR'
+ROUTINE SPRCVR (TXTQ_A) =
+BEGIN
+!++
+! FUNCTIONAL DESCRIPTION:
+!
+!   Collects up the output from the subprocess.
+!
+! RETURNS:  	cond_value, longword (unsigned), write only, by value
+!
+! PROTOTYPE:
+!
+!   SPRCVR
+!
+! IMPLICIT INPUTS:  None.
+!
+! IMPLICIT OUTPUTS: None.
+!
+! COMPLETION CODES:
+!
+!   SS$_NORMAL:	    	normal successful completion.
+!
+! SIDE EFFECTS:
+!
+!   None.
+!--
+    BIND
+    	TXTQ = .TXTQ_A : QUEDEF;
+
+    LOCAL
+    	STR : BLOCK [DSC$K_S_BLN,BYTE],
+    	TXT : REF TXTDEF,
+    	STATUS;
+
+    INIT_DYNDESC (STR);
+    WHILE (STATUS = SP_RECEIVE (SPHANDLE, STR)) DO
+    	INSTXT (STR, .TXTQ [QUE_L_TAIL]);
+    FREE_STRINGS (STR);
+    IF .STATUS NEQ SS$_ENDOFFILE THEN
+    BEGIN
+    	TXT = MEM_GETTXT (0);
+    	TXT [TXT_W_LEN] = 0;
+    	TXT [TXT_W_CODE] = .STATUS;
+    	INSQUE (.TXT, .TXTQ [QUE_L_TAIL]);
+    END;
+
+    $WAKE ()
+
+END; ! SPRCVR
+
+END
+ELUDOM

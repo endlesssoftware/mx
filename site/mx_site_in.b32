@@ -1,0 +1,483 @@
+%TITLE 'MX_SITE_IN'
+MODULE MX_SITE_IN (IDENT='V2.1', MAIN=MX_SITE_IN) =
+BEGIN
+!++
+! FACILITY: 	    MX SITE interface
+!
+! ABSTRACT: 	    Routines for processing mail messages coming in
+!   	    	    from "SITE".
+!
+! MODULE DESCRIPTION:
+!
+!   This module handles files that are taken in from the site-defined
+!   mail system.
+!
+!   	$ SITE_IN :== $MX_EXE:MX_SITE_IN
+!   	$ SITE_IN message-file address-list-file sender
+!
+!   The first argument is the name of a file containing an RFC822-compliant
+!   mail message.  The second argument is the name of a file containing
+!   a list of one or more RFC821-compliant addresses, one per line.
+!   The third argument is an RFC821-compliant address identifying the
+!   origin of the message.  This can be omitted, in which case
+!   the origin will be the address of the user running this program.
+!
+! AUTHOR:   	    M. Madison
+!
+! Copyright (c) 2008, Matthew Madison.
+! 
+! All rights reserved.
+! 
+! Redistribution and use in source and binary forms, with or without
+! modification, are permitted provided that the following conditions
+! are met:
+! 
+!     * Redistributions of source code must retain the above
+!       copyright notice, this list of conditions and the following
+!       disclaimer.
+!     * Redistributions in binary form must reproduce the above
+!       copyright notice, this list of conditions and the following
+!       disclaimer in the documentation and/or other materials provided
+!       with the distribution.
+!     * Neither the name of the copyright owner nor the names of any
+!       other contributors may be used to endorse or promote products
+!       derived from this software without specific prior written
+!       permission.
+! 
+! THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
+! "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
+! LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
+! A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
+! OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
+! SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
+! LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
+! DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
+! THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
+! (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
+! OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+!
+! CREATION DATE:    28-JUN-1990
+!
+! MODIFICATION HISTORY:
+!
+!   28-JUN-1990	V1.0	Madison	    Initial coding (from MX_RMAIL).
+!   05-FEB-1991	V1.1	Madison	    G^ refs; received header.
+!   12-MAR-1991	V1.1-1	Madison	    Remove references to SITEHST.
+!   15-NOV-1991	V1.2	Madison	    New RCPTDEF structure.
+!   12-NOV-1993	V1.3	Goatley     Fix STR$TRIM bug.
+!   10-FEB-1994 V1.4	Goatley     Modify to work with FLQ V2.
+!   15-JAN-1997	V1.5	Madison	    Eliminate MDMLIB.
+!   12-APR-1997	V1.5-1	Madison	    Fix file copy problem.
+!   05-MAY-1997	V1.6	Madison	    Automatically add Date header if none present.
+!   29-AUG-1997	V1.7	Madison	    RCPT change.
+!    4-SEP-1997 V1.7-1	Goatley     Include "<>" on ORGADR.
+!   17-SEP-1997 V1.7-2	Goatley     If bad ORGADR, just use "<@>".
+!   12-JUL-1998	V1.8	Madison	    New envelope routines, size check.
+!   23-FEB-2002 V2.0    Madison     Privilege handling.
+!   23-MAR-2003 V2.1    Madison     Fix automatic From: header generation.
+!--
+    LIBRARY 'SYS$LIBRARY:STARLET';
+    LIBRARY 'MX_SRC_COMMON:FLQ';
+    LIBRARY 'MX_SRC_COMMON:MX';
+
+    FORWARD ROUTINE
+    	MX_SITE_IN;
+
+    EXTERNAL ROUTINE
+    	G_HAT (MX_FILE_OPEN, MX_FILE_WRITE, MX_FILE_READ,
+    	       MX_FILE_CLOSE, MX_MKDATE, MEM_GETTXT, DISPOSE_ENVELOPE),
+    	G_HAT (WRITE_ENVELOPE, PARSE_HDRS, WRITE_HDRS, PARSE_MBOX,
+    	       PARSE_ADDRLIST, MX_VERSION, MEM_GETRCPT, MEM_FREERCPT),
+        G_HAT (MX_FMT_LCL_ADDR, PARSE821),
+    	G_HAT (STR$COPY_R, STR$COPY_DX, STR$UPCASE, STR$POSITION,
+    	       STR$CONCAT, STR$APPEND, STR$PREFIX, LIB$SYS_FAO, STR$RIGHT,
+    	       STR$CASE_BLIND_COMPARE, STR$TRIM, STR$FIND_FIRST_NOT_IN_SET,
+    	       STR$LEFT, LIB$GET_FOREIGN, LIB$GETJPI,
+    	       CLI$GET_VALUE, CLI$DCL_PARSE, CLI$PRESENT);
+
+    EXTERNAL
+    	SITE_IN_CLD;
+
+    EXTERNAL LITERAL
+    	CLI$_PRESENT, MX__MSGTOOLARGE,
+        MXIN__QOPENERR, MXIN__QMAXSZERR, MXIN__INVSNDRADDR, MXIN__RCPTFILERR,
+        MXIN__ALLOCERR, MXIN__MTXTFILERR, MXIN__WRTMSGERR, MXIN__MSGENQERR,
+        MXIN__MSGENQUEUED, MXIN__INVRCPTADDR, MXIN__NORECIPIENTS;
+
+%SBTTL 'MX_SITE_IN'
+GLOBAL ROUTINE MX_SITE_IN = 
+BEGIN
+!++
+! FUNCTIONAL DESCRIPTION:
+!
+!   Converts a SITE incoming mail message into something useable by
+!   MX.
+!
+! RETURNS:  	cond_value, longword (unsigned), write only, by value
+!
+! PROTOTYPE:
+!
+!   MX_SITE_IN
+!
+! IMPLICIT INPUTS:  None.
+!
+! IMPLICIT OUTPUTS: None.
+!
+! COMPLETION CODES:
+!
+!   SS$_NORMAL:	    	normal successful completion.
+!
+! SIDE EFFECTS:
+!
+!   None.
+!--
+    LOCAL
+    	envl	    : ENVLDEF,
+    	HDRQ	    : QUEDEF,
+    	HDRQ2	    : QUEDEF,
+        rteq        : QUEDEF,
+    	NEWENT	    : QENTDEF,
+    	HDR 	    : REF TXTDEF,
+    	fromhdr	    : REF TXTDEF,
+        sndrhdr     : REF TXTDEF,
+        msgidhdr    : REF TXTDEF,
+        datehdr     : REF TXTDEF,
+        tohdr       : REF TXTDEF,
+        lastrcvdhdr : REF TXTDEF,
+    	RCPT	    : REF RCPTDEF,
+    	TXT 	    : REF TXTDEF,
+    	STR 	    : BLOCK [DSC$K_S_BLN,BYTE],
+    	STR2	    : BLOCK [DSC$K_S_BLN,BYTE],
+    	STR3	    : BLOCK [DSC$K_S_BLN,BYTE],
+        sdsc        : BLOCK [DSC$K_S_BLN,BYTE],
+    	INPFIL	    : BLOCK [DSC$K_S_BLN,BYTE],
+    	SENDER	    : BLOCK [DSC$K_S_BLN,BYTE],
+    	CURHDR	    : BLOCK [DSC$K_S_BLN,BYTE],
+        tostr       : BLOCK [DSC$K_S_BLN,BYTE],
+    	lnmlst	    : $ITMLST_DECL (ITEMS=1),
+        jpilst      : $ITMLST_DECL (ITEMS=2),
+        prcprv      : BLOCK [PRV$S_PRVDEF,BYTE],
+        priv        : BLOCK [PRV$S_PRVDEF,BYTE],
+        unamebuf    : VECTOR [64,BYTE],
+        unamelen    : WORD,
+        hnamebuf    : VECTOR [256,BYTE],
+        now         : VECTOR [2,LONG],
+        hnamelen    : WORD,
+    	STATUS,
+    	UNIT,
+    	UNIT2,
+    	maxmsgsize,
+    	QCTX;
+
+    $ITMLST_INIT (ITMLST=jpilst,
+        (ITMCOD=JPI$_USERNAME, BUFSIZ=%ALLOCATION (unamebuf),
+            BUFADR=unamebuf, RETLEN=unamelen),
+        (ITMCOD=JPI$_PROCPRIV, BUFSIZ=%ALLOCATION (prcprv), BUFADR=prcprv));
+    status = $GETJPIW (ITMLST=jpilst);
+    IF NOT .status THEN
+        RETURN .status;
+    $SETPRV (ENBFLG=0, PRVADR=UPLIT (-1, -1));
+    $SETPRV (ENBFLG=1, PRVADR=prcprv);
+    CH$FILL (%CHAR (0), %ALLOCATION (priv), priv);
+
+    WHILE .unamelen GTRU 0 AND CH$RCHAR (CH$PLUS (unamebuf, .unamelen-1)) EQL %C' ' DO
+        unamelen = .unamelen - 1;
+    
+    priv [PRV$V_SYSPRV] = 1;
+    priv [PRV$V_SYSLCK] = 1;
+    $SETPRV (ENBFLG=1, PRVADR=priv);
+    STATUS = FLQ_OPEN (FLQ__FULL, QCTX);
+    $SETPRV (ENBFLG=0, PRVADR=priv);
+    $SETPRV (ENBFLG=1, PRVADR=prcprv);
+    IF NOT .STATUS THEN
+        SIGNAL_STOP (MXIN__QOPENERR, 0, .status);
+    status = FLQ_GET_MAXSIZE (qctx, maxmsgsize);
+    IF NOT .status THEN SIGNAL_STOP (MXIN__QMAXSZERR, 0, .status);
+    priv [PRV$V_SYSLCK] = 0;
+
+    INIT_DYNDESC (INPFIL, STR, STR2, STR3, SENDER, CURHDR, tostr);
+
+    CH$FILL (%CHAR (0), ENVL_S_ENVLDEF, envl);
+    INIT_QUEUE (envl [ENVL_Q_RCPTQUE], HDRQ, HDRQ2);
+
+    STATUS = LIB$GET_FOREIGN (STR);
+    IF NOT .STATUS OR .STR [DSC$W_LENGTH] EQL 0 THEN RETURN SS$_NORMAL;
+    STR$PREFIX (STR, %ASCID'SITE_IN ');
+    CLI$DCL_PARSE (STR, SITE_IN_CLD, LIB$GET_FOREIGN, LIB$GET_FOREIGN);
+
+    IF .prcprv [PRV$V_SYSPRV] AND CLI$PRESENT (%ASCID'SENDER') EQL CLI$_PRESENT THEN
+    	CLI$GET_VALUE (%ASCID'SENDER', SENDER)
+    ELSE
+    BEGIN
+        INIT_SDESC (sdsc, .unamelen, unamebuf);
+        MX_FMT_LCL_ADDR (MX__FMT_ENVFROM OR FMT_M_LOWERCASE, sdsc, sender);
+    END;
+    INIT_QUEUE (rteq);
+
+    IF .sender [DSC$W_LENGTH] EQL 2 AND CH$EQL (2, UPLIT ('<>'), 2, .sender [DSC$A_POINTER]) THEN
+        status = SS$_NORMAL
+    ELSE
+        status = PARSE821 (sender, rteq, str, str2);
+    WHILE NOT REMQUE (.rteq [QUE_L_HEAD], txt) DO FREETXT (txt);
+    IF NOT .status THEN
+        SIGNAL_STOP (MXIN__INVSNDRADDR, 1, sender);
+
+    CLI$GET_VALUE (%ASCID'ADDRFILE', STR2);
+    STATUS = MX_FILE_OPEN (MX__FILE_READ, STR2, UNIT);
+    IF NOT .STATUS THEN
+        SIGNAL_STOP (MXIN__RCPTFILERR, 1, %ASCID'opening', .status);
+
+    WHILE (status = MX_FILE_READ (.UNIT, STR3)) DO
+    BEGIN
+        status = PARSE821 (str3, rteq, str, str2);
+        IF NOT .status THEN
+            SIGNAL_STOP (MXIN__INVRCPTADDR, 2, .envl [ENVL_L_RCPTCOUNT]+1, str3);
+    	status = MEM_GETRCPT (RCPT, .str3 [DSC$W_LENGTH]);
+        IF NOT .status THEN
+            SIGNAL_STOP (MXIN__ALLOCERR, 0, .status);
+    	BEGIN
+    	    BIND ra = .rcpt [RCPT_A_ADDR] : TXTDEF;
+    	    CH$MOVE (.ra [TXT_W_LEN], .STR3 [DSC$A_POINTER], ra [TXT_T_TEXT]);
+    	END;
+    	INSQUE_TAIL (.RCPT, envl [ENVL_Q_RCPTQUE]);
+        envl [ENVL_L_RCPTCOUNT] = .envl [ENVL_L_RCPTCOUNT] + 1;
+        IF .tostr [DSC$W_LENGTH] LSSU 1024 THEN
+        BEGIN
+            STR$CONCAT (str3, (IF .tostr [DSC$W_LENGTH] EQL 0 THEN %ASCID'' ELSE %ASCID', '),
+                        str, %ASCID'@', str2);
+            STR$APPEND (tostr, str3);
+        END;
+    END;
+    MX_FILE_CLOSE (.UNIT);
+    IF .status NEQ RMS$_EOF THEN
+        SIGNAL_STOP (MXIN__RCPTFILERR, 1, %ASCID'reading', .status);
+
+    IF .envl [ENVL_L_RCPTCOUNT] EQLU 0 THEN
+        SIGNAL_STOP (MXIN__NORECIPIENTS, 0);
+
+    CLI$GET_VALUE (%ASCID'MSGFILE', INPFIL);
+    STATUS = MX_FILE_OPEN (MX__FILE_READ, INPFIL, UNIT);
+    IF NOT .STATUS THEN
+    BEGIN
+    	FREE_STRINGS (INPFIL, STR, STR2, STR3);
+    	DISPOSE_ENVELOPE (envl);
+    	SIGNAL_STOP (MXIN__MTXTFILERR, 1, %ASCID'opening', .STATUS);
+    END;
+
+    FREE_STRINGS (CURHDR);
+    STATUS = MX_FILE_READ (.UNIT, STR2);
+    STR$TRIM (STR, STR2);
+    WHILE .STATUS AND .STR [DSC$W_LENGTH] GTR 0 DO
+    BEGIN
+    	IF CH$RCHAR (.STR [DSC$A_POINTER]) EQL %C' ' OR
+    	    CH$RCHAR (.STR [DSC$A_POINTER]) EQL %CHAR (9) THEN
+    	BEGIN
+    	    LOCAL I;
+    	    I = MAX (1, STR$FIND_FIRST_NOT_IN_SET (STR,
+    	    	    %ASCID %STRING (' ', %CHAR (9))));
+    	    STR$RIGHT (STR2, STR, I);
+    	    STR$APPEND (CURHDR, %ASCID' ');
+    	    STR$APPEND (CURHDR, STR2);
+    	END
+    	ELSE
+    	BEGIN
+    	    IF .CURHDR [DSC$W_LENGTH] GTR 0 THEN
+    	    	INSTXT (CURHDR, .HDRQ2 [QUE_L_TAIL]);
+    	    STR$COPY_DX (CURHDR, STR);
+    	END;
+    	STATUS = MX_FILE_READ (.UNIT, STR2);
+    	STR$TRIM (STR, STR2);
+    END;
+
+    IF NOT .status AND .status NEQ RMS$_EOF THEN
+        SIGNAL_STOP (MXIN__MTXTFILERR, 1, %ASCID'reading', .status);
+
+    IF .CURHDR [DSC$W_LENGTH] GTR 0 THEN INSTXT (CURHDR, .HDRQ2 [QUE_L_TAIL]);
+    FREE_STRINGS (CURHDR);
+
+    PARSE_HDRS (HDRQ2, HDRQ);
+
+    tohdr = fromhdr = datehdr = lastrcvdhdr = sndrhdr = msgidhdr = 0;
+    hdr = .HDRQ [QUE_L_HEAD];
+    WHILE .hdr NEQA HDRQ DO
+    BEGIN
+        SELECTONE .hdr [TXT_W_CODE] OF
+        SET
+        [MX_K_HDR_FROM]         : fromhdr = .hdr;
+        [MX_K_HDR_DATE]         : datehdr = .hdr;
+        [MX_K_HDR_TO]           : tohdr = .hdr;
+        [MX_K_HDR_RECEIVED]     : lastrcvdhdr = .hdr;
+        [MX_K_HDR_SENDER]       : sndrhdr = .hdr;
+        [MX_K_HDR_MESSAGE_ID]   : msgidhdr = .hdr;
+        TES;
+        hdr = .hdr [TXT_L_FLINK];
+    END;
+
+    IF .prcprv [PRV$V_SYSPRV] THEN
+    BEGIN
+        IF .sender [DSC$W_LENGTH] EQL 2 AND CH$EQL (2, UPLIT ('<>'), 2, .sender [DSC$A_POINTER]) THEN
+            MX_FMT_LCL_ADDR (MX__FMT_FROM, %ASCID'Postmaster', str)
+        ELSE
+        BEGIN
+            PARSE821 (sender, rteq, str2, str3);
+            WHILE NOT REMQUE (.rteq [QUE_L_HEAD], txt) DO FREETXT (txt);
+            STR$CONCAT (str, str2, %ASCID'@', str3);
+        END;
+    END
+    ELSE
+    BEGIN
+        INIT_SDESC (sdsc, .unamelen, unamebuf);
+        MX_FMT_LCL_ADDR (MX__FMT_FROM OR FMT_M_LOWERCASE, sdsc, str);
+    END;
+
+    hdr = (IF .fromhdr NEQA 0 THEN .fromhdr [TXT_L_BLINK] ELSE 0);
+    IF NOT .prcprv [PRV$V_SYSPRV] AND .fromhdr NEQA 0 THEN
+    BEGIN
+        LOCAL prv : REF TXTDEF;
+        IF .sndrhdr NEQA 0 THEN
+        BEGIN
+            prv = .sndrhdr [TXT_L_BLINK];
+            REMQUE (.sndrhdr, sndrhdr);
+        END
+        ELSE
+            prv = .fromhdr [TXT_L_BLINK];
+        hdr = MEM_GETTXT (.str [DSC$W_LENGTH], .str [DSC$A_POINTER]);
+        hdr [TXT_W_CODE] = MX_K_HDR_SENDER;
+        INSQUE (.hdr, .prv);
+        hdr = .hdr [TXT_L_BLINK];
+    END;
+
+    IF .fromhdr EQLA 0 THEN
+    BEGIN
+        IF .hdr EQLA 0 THEN
+            hdr = (IF .tohdr EQLA 0 THEN
+                        IF .sndrhdr EQLA 0 THEN
+                            IF .datehdr EQLA 0 THEN
+                                IF .lastrcvdhdr EQLA 0 THEN hdrq
+                                ELSE .lastrcvdhdr
+                            ELSE .datehdr
+                        ELSE .sndrhdr
+                   ELSE .tohdr [TXT_L_BLINK]);
+        fromhdr = MEM_GETTXT (.str [DSC$W_LENGTH], .str [DSC$A_POINTER]);
+        fromhdr [TXT_W_CODE] = MX_K_HDR_FROM;
+        INSQUE (.fromhdr, .hdr);
+        hdr = .fromhdr [TXT_L_BLINK];
+    END;
+
+    IF .tohdr EQLA 0 AND .tostr [DSC$W_LENGTH] NEQU 0 THEN
+    BEGIN
+        tohdr = MEM_GETTXT (.tostr [DSC$W_LENGTH], .tostr [DSC$A_POINTER]);
+        tohdr [TXT_W_CODE] = MX_K_HDR_TO;
+        INSQUE (.tohdr, .fromhdr);
+    END;
+    FREE_STRINGS (tostr);
+
+    $GETTIM (TIMADR=now);
+    MX_MKDATE (now, str);
+    IF .datehdr EQLA 0 THEN
+        INSTXT (str, .hdr, MX_K_HDR_DATE);
+
+    $ITMLST_INIT (ITMLST=lnmlst,
+        (ITMCOD=LNM$_STRING, BUFSIZ=%ALLOCATION (hnamebuf),
+            BUFADR=hnamebuf, RETLEN=hnamelen));
+    status = $TRNLNM (LOGNAM=%ASCID'MX_NODE_NAME',
+                      TABNAM=%ASCID'LNM$FILE_DEV',
+                      ACMODE=%REF (PSL$C_EXEC), ITMLST=lnmlst);
+    IF .status THEN
+        LIB$SYS_FAO (%ASCID'by !AD (!AS) with SITE; !AS', 0, STR2,
+                        .hnamelen, hnamebuf, MX_VERSION (), STR)
+    ELSE
+        LIB$SYS_FAO (%ASCID'by LOCALHOST (!AS) with SITE; !AS', 0, str2,
+                        MX_VERSION (), str);
+
+    INSTXT (STR2, HDRQ, MX_K_HDR_RECEIVED);
+
+    FLQ_INIT_QENT (NEWENT);
+    NEWENT [QENT_L_STATUS] = FLQ_K_STINP;
+    NEWENT [QENT_V_LOCK] = 1;
+    newent [QENT_L_DSTPRC] = FLQ_K_MX_ROUTER;
+    newent [QENT_L_ORIGIN] = MX_K_ORG_SITE;
+    FREE_STRINGS(str, str2);	!Make them "" in case of PARSE_MBOX error
+    NEWENT [QENT_W_ORGADR] = MIN (.sender [DSC$W_LENGTH], QENT_S_ORGADR);
+    CH$MOVE (.NEWENT [QENT_W_ORGADR], .sender [DSC$A_POINTER], NEWENT [QENT_T_ORGADR]);
+
+    priv [PRV$V_SYSLCK] = 1;
+    $SETPRV (ENBFLG=1, PRVADR=priv);
+    status = FLQ_ADD (QCTX, NEWENT);
+    $SETPRV (ENBFLG=0, PRVADR=priv);
+    $SETPRV (ENBFLG=1, PRVADR=prcprv);
+    IF NOT .status THEN
+        SIGNAL_STOP (MXIN__MSGENQERR, 0, .status);
+    priv [PRV$V_SYSLCK] = 0;
+
+    envl [ENVL_V_ORIGIN] = 1;
+    envl [ENVL_L_ORIGIN] = MX_K_ORG_SITE;
+    envl [ENVL_V_FROMADR] = 1;
+    envl [ENVL_A_FROMADR] = MEM_GETTXT (.sender [DSC$W_LENGTH], .sender [DSC$A_POINTER]);
+
+    IF .msgidhdr EQLA 0 THEN
+    BEGIN
+        LIB$SYS_FAO (%ASCID'!XL.!XL.!UL', 0, sender, .now [1], .now[0], .newent [QENT_L_ENTNUM]);
+        MX_FMT_LCL_ADDR (MX__FMT_ENVFROM, sender, str);
+        msgidhdr = MEM_GETTXT (.str [DSC$W_LENGTH], .str [DSC$A_POINTER]);
+        msgidhdr [TXT_W_CODE] = MX_K_HDR_MESSAGE_ID;
+        IF .tohdr EQLA 0 THEN
+            INSQUE_TAIL (.msgidhdr, hdrq)
+        ELSE
+            INSQUE (.msgidhdr, .tohdr);
+    END;
+
+    priv [PRV$V_EXQUOTA] = 1;
+    $SETPRV (ENBFLG=1, PRVADR=priv);
+    status = WRITE_ENVELOPE (.QCTX, NEWENT, %ASCID'SRC_INFO', envl);
+    IF .status THEN status = WRITE_HDRS (.QCTX, NEWENT, %ASCID'HDR_INFO', HDRQ);
+    IF .status THEN status = FLQ_MAKE_FSPEC (.NEWENT [QENT_L_ENTNUM], %ASCID'MSG_TEXT', STR);
+    IF .status THEN status = MX_FILE_OPEN (MX__FILE_WRITE, STR, UNIT2);
+    IF .status THEN
+    BEGIN
+    	WHILE (status = MX_FILE_READ (.UNIT, STR2)) DO
+    	BEGIN
+    	    status = MX_FILE_WRITE (.UNIT2, STR2);
+    	    IF NOT .status THEN EXITLOOP;
+    	    NEWENT [QENT_L_SIZE] = .NEWENT [QENT_L_SIZE] + .STR2 [DSC$W_LENGTH];
+    	END;
+    END;
+    MX_FILE_CLOSE (.UNIT);
+
+    IF .status AND .maxmsgsize NEQU 0 AND .newent [QENT_L_SIZE] GTRU .maxmsgsize THEN
+    	status = MX__MSGTOOLARGE;
+
+    IF NOT .status AND .status NEQ RMS$_EOF THEN
+    BEGIN
+        newent [QENT_L_STATUS] = FLQ_K_STCAN;
+        MX_FILE_CLOSE (.unit2, 1);
+        priv [PRV$V_SYSLCK] = 1;
+        $SETPRV (ENBFLG=1, PRVADR=priv);
+        FLQ_UPDATE (qctx, newent);
+        $SETPRV (ENBFLG=0, PRVADR=priv);
+        $SETPRV (ENBFLG=1, PRVADR=prcprv);
+        SIGNAL_STOP (MXIN__WRTMSGERR, 0, .status);
+    END;
+
+    MX_FILE_CLOSE (.unit2);
+    NEWENT [QENT_L_STATUS] = FLQ_K_STRDY;
+    priv [PRV$V_SYSLCK] = 1;
+    $SETPRV (ENBFLG=1, PRVADR=priv);
+    status = FLQ_UPDATE (QCTX, NEWENT);
+    $SETPRV (ENBFLG=0, PRVADR=priv);
+    $SETPRV (ENBFLG=1, PRVADR=prcprv);
+    IF NOT .status THEN
+        SIGNAL_STOP (MXIN__MSGENQERR, 0, .status);
+
+    DISPOSE_ENVELOPE (envl);
+    WHILE NOT REMQUE (.HDRQ [QUE_L_HEAD], HDR) DO FREETXT (HDR);
+    FREE_STRINGS (STR, STR2, STR3, INPFIL, SENDER, CURHDR);
+
+    SIGNAL (MXIN__MSGENQUEUED, 1, .newent [QENT_L_ENTNUM]);
+
+    MXIN__MSGENQUEUED
+
+END; ! MX_SITE_IN
+
+END
+ELUDOM

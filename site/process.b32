@@ -1,0 +1,339 @@
+%TITLE 'PROCESS'
+MODULE PROCESS (IDENT='V3.2') =
+BEGIN
+!++
+! FACILITY: 	    MX_SITE
+!
+! ABSTRACT: 	    Main processing routines for MX SITE agent.
+!
+! MODULE DESCRIPTION:
+!
+!   This module contains the standard MX processing agent's INIT and
+!   PROCESS routines, for processing of messages destined for the
+!   local system or cluster.
+!
+! AUTHOR:   	    M. Madison
+!
+! Copyright (c) 2008, Matthew Madison.
+! 
+! All rights reserved.
+! 
+! Redistribution and use in source and binary forms, with or without
+! modification, are permitted provided that the following conditions
+! are met:
+! 
+!     * Redistributions of source code must retain the above
+!       copyright notice, this list of conditions and the following
+!       disclaimer.
+!     * Redistributions in binary form must reproduce the above
+!       copyright notice, this list of conditions and the following
+!       disclaimer in the documentation and/or other materials provided
+!       with the distribution.
+!     * Neither the name of the copyright owner nor the names of any
+!       other contributors may be used to endorse or promote products
+!       derived from this software without specific prior written
+!       permission.
+! 
+! THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
+! "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
+! LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
+! A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
+! OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
+! SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
+! LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
+! DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
+! THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
+! (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
+! OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+!
+! CREATION DATE:    28-JUN-1990
+!
+! MODIFICATION HISTORY:
+!
+!   28-JUN-1990	V1.0	Madison	    Initial coding (from UUCP interface).
+!   24-SEP-1990	V1.0-1	Madison	    IPC update.
+!   12-MAR-1991	V1.0-2	Madison	    Remove references to SITEHST.
+!   28-OCT-1991	V2.0	Madison	    RCPTDEF, SITE param, one-per, err cts.
+!   15-NOV-1991	V2.0-1	Madison	    New MEM RCPT rtns.
+!   07-FEB-1992	V2.0-2	Madison	    Wrong type of INFO file written on retry.    	IF NOT .SHUTDOWN_FLAG THEN
+!   10-FEB-1994 V2.1	Goatley     Modify to work with FLQ V2.
+!    4-DEC-1995 V3.0	Goatley     Beef up error-handling some.
+!   15-JAN-1997	V3.1	Madison	    Eliminate MDMLIB.
+!   28-JUL-1997 V3.1-1	Goatley     Fix TRACE messages added in V3.0.
+!   12-JUL-1998	V3.2	Madison	    DSN support.
+!--
+
+    LIBRARY 'SYS$LIBRARY:STARLET';
+    LIBRARY 'MX_SRC_COMMON:FLQ';
+    LIBRARY 'MX_SRC_COMMON:MX';
+    LIBRARY 'MX_SRC_COMMON:MX_LCLDEFS';
+    LIBRARY 'MX_SRC_COMMON:AGENT';
+
+    FORWARD ROUTINE
+    	INIT,
+    	PROCESS;
+
+    EXTERNAL ROUTINE
+    	DELIVER,
+    	G_HAT (READ_ENVELOPE, WRITE_ENVELOPE, READ_HDRS, PARSE_ADDRLIST,
+    	    CHECK_REFS_ZERO, LOAD_MXCONFIG, MEM_FREERCPT, DISPOSE_ENVELOPE),
+    	G_HAT (DSN_REPORT_INIT, DSN_REPORT_ADD_RCPT, DSN_REPORT_SEND),
+    	G_HAT (STR$COPY_R, STR$COPY_DX,
+    	    LIB$DELETE_FILE, STR$CASE_BLIND_COMPARE, STR$APPEND);
+
+    EXTERNAL
+    	CONFIG	    : CFGDEF,
+    	SHUTDOWN_FLAG;
+
+    GLOBAL
+    	SITE_INFO   : SITEDEF,
+    	LCLHST	    : BLOCK [DSC$K_S_BLN,BYTE];
+
+    TRACE_DECLARATIONS (GLOBAL);
+
+    OWN
+    	LCLHSTBUF   : VECTOR [256,BYTE];
+
+%SBTTL 'INIT'
+GLOBAL ROUTINE INIT (REINIT) = 
+BEGIN
+!++
+! FUNCTIONAL DESCRIPTION:
+!
+!   Initialization routine.
+!
+! RETURNS:  	cond_value, longword (unsigned), write only, by value
+!
+! PROTOTYPE:
+!
+!   INIT
+!
+! IMPLICIT INPUTS:  None.
+!
+! IMPLICIT OUTPUTS: None.
+!
+! COMPLETION CODES:
+!
+!   SS$_NORMAL:	    	normal successful completion.
+!
+! SIDE EFFECTS:
+!
+!   None.
+!--
+    BIND RSTMSK = REINIT : RSTDEF;
+    LOCAL
+    	lnmlst	: $ITMLST_DECL (ITEMS=1),
+    	STATUS;
+
+    STATUS = SS$_NORMAL;
+
+    IF NOT .REINIT OR .RSTMSK [RST_V_CONFIG] THEN
+    BEGIN
+    	INIT_SDESC (lclhst, 0, lclhstbuf);
+    	$ITMLST_INIT (ITMLST=lnmlst, 
+    	    (ITMCOD=LNM$_STRING, BUFSIZ=%ALLOCATION (lclhstbuf),
+    	     BUFADR=lclhstbuf, RETLEN=lclhst [DSC$W_LENGTH]));
+    	status = $TRNLNM (LOGNAM=%ASCID'MX_NODE_NAME', TABNAM=%ASCID'LNM$SYSTEM',
+    	    	    	  ACMODE=%REF (PSL$C_EXEC), ITMLST=lnmlst);
+    	IF .STATUS THEN STATUS = LOAD_MXCONFIG (%ASCID'MX_CONFIG',
+    	    	%ASCID'MX_DIR:.MXCFG', 0, CFG_M_SITEINFO);
+    END;
+
+    .STATUS
+
+END; ! INIT
+
+%SBTTL 'PROCESS'
+GLOBAL ROUTINE PROCESS (QCTX, QENT_A) = 
+BEGIN
+!++
+! FUNCTIONAL DESCRIPTION:
+!
+!   Processes a single queue entry.
+!
+! RETURNS:  	cond_value, longword (unsigned), write only, by value
+!
+! PROTOTYPE:
+!
+!   PROCESS  qctx, qent
+!
+! IMPLICIT INPUTS:  None.
+!
+! IMPLICIT OUTPUTS: None.
+!
+! COMPLETION CODES:
+!
+!   SS$_NORMAL:	    	normal successful completion.
+!
+! SIDE EFFECTS:
+!
+!   None.
+!--
+    BIND
+    	QENT	= .QENT_A   : QENTDEF;
+
+    LOCAL
+    	DLVRQUE	: QUEDEF,
+    	envl	: ENVLDEF,
+    	HDRQ	: QUEDEF,
+    	RETRY	: QUEDEF,
+    	REFENT	: QENTDEF,
+    	RCPT	: REF RCPTDEF,
+    	TXT 	: REF TXTDEF,
+    	TXT2	: REF TXTDEF,
+    	USR 	: BLOCK [DSC$K_S_BLN,BYTE],
+    	STR 	: BLOCK [DSC$K_S_BLN,BYTE],
+    	STR2	: BLOCK [DSC$K_S_BLN,BYTE],
+    	INTBUF	: BLOCK [8,BYTE],
+    	NOWTIM	: BLOCK [8,BYTE],
+    	dsnctx,
+    	MSG_SIZE,
+    	STATUS;
+
+    INIT_DYNDESC (STR, USR, STR2);
+    CH$FILL (%CHAR (0), ENVL_S_ENVLDEF, envl);
+    INIT_QUEUE (envl [ENVL_Q_RCPTQUE], HDRQ, RETRY);
+
+    TRACE_INIT ('site', 'site');
+    TRACE ('===================================================');
+    TRACE ('Processing queue entry number !UL.', .QENT [QENT_L_ENTNUM]);
+
+    status = 0;
+    IF (.qent [MXQ_L_BACKREF] NEQU 0)
+    THEN
+	status = FLQ_READ (qctx, .qent [MXQ_L_BACKREF], refent);
+
+    IF NOT(.status)
+    THEN
+	BEGIN
+	ALARM ('MX SITE: error reading BACKREF !UL for entry !UL: !XL',
+			.qent [MXQ_L_BACKREF], .qent [QENT_L_ENTNUM], .status);
+	!
+	!  Cancel this entry and return
+	!
+	TRACE ('Cancelling entry---invalid BACKREF !UL', .qent [MXQ_L_BACKREF]);
+	qent [QENT_L_STATUS] = FLQ_K_STCAN;
+	FLQ_UPDATE (qctx, qent);
+	RETURN (SS$_NORMAL);
+	END
+    ELSE
+	status = FLQ_UPDATE (qctx, refent);
+
+    !
+    !  Now read the SITE_INFO file.
+    !
+    status = READ_ENVELOPE (.qctx, qent, %ASCID'SITE_INFO', envl);
+    IF NOT(.status)
+    THEN
+	BEGIN
+	ALARM ('MX SITE: error reading SITE_INFO file for entry !UL: !XL',
+			.qent [QENT_L_ENTNUM], .status);
+	TRACE ('%PROCESS, error reading SITE_INFO file for entry !UL: !XL',
+			.qent [QENT_L_ENTNUM], .status);
+	END
+    ELSE
+	BEGIN
+	status = READ_HDRS (.qctx, refent, %ASCID'HDR_INFO', hdrq);
+	IF NOT(.status)
+	THEN
+	    BEGIN
+	    ALARM ('MX SITE: error reading HDR_INFO file for entry !UL: !XL',
+			.refent [QENT_L_ENTNUM], .status);
+	    TRACE ('%PROCESS, error reading HDR_INFO file for entry !UL: !XL',
+			.refent [QENT_L_ENTNUM], .status);
+	    END;
+	END;
+
+    IF NOT(.status) OR .envl [ENVL_L_RCPTCOUNT] EQL 0
+    THEN
+	BEGIN
+	!
+	!  Eliminate pointer to this LOCAL entry and CANCEL the Router
+	!  entry if there are no other forward pointers.
+	!
+	refent [MXQ_L_SITEREF] = 0;
+	IF CHECK_REFS_ZERO (refent)	!If there are no other forwards....
+	THEN
+	    BEGIN
+	    ALARM ('MX SITE: HOLDing Router entry !UL', .refent [QENT_L_ENTNUM]);
+	    refent [QENT_L_STATUS] = FLQ_K_STOPH;
+	    END;
+
+	status = FLQ_UPDATE (qctx, refent);
+	qent [QENT_L_STATUS] = FLQ_K_STCAN;	!Cancel this entry
+	status = FLQ_UPDATE (qctx, qent);
+	FREE_STRINGS (str);
+	RETURN (SS$_NORMAL);
+	END;
+
+    MSG_SIZE = .QENT [QENT_L_SIZE] / .envl [ENVL_L_RCPTCOUNT];
+
+    DSN_REPORT_INIT (dsnctx, envl);
+
+    DELIVER (QENT, envl, HDRQ, RETRY, .dsnctx);
+
+    DSN_REPORT_SEND (dsnctx, .qctx, MX_K_ORG_SITE, hdrq, refent, envl);
+
+    IF .RETRY [QUE_L_HEAD] EQLA RETRY THEN
+    BEGIN
+    	STATUS = FLQ_READ (QCTX, .QENT [MXQ_L_BACKREF], REFENT);
+    	REFENT [MXQ_L_SITEREF] = 0;
+    	IF CHECK_REFS_ZERO (REFENT) THEN REFENT [QENT_L_STATUS] = FLQ_K_STFIN;
+    	FLQ_UPDATE (QCTX, REFENT);
+    	QENT [QENT_L_STATUS] = FLQ_K_STFIN;
+    	FLQ_UPDATE (QCTX, QENT);
+    END
+    ELSE
+    BEGIN
+    	LOCAL
+    	    NOWTIM  : VECTOR [2,LONG],
+    	    INTBUF  : VECTOR [2,LONG];
+
+    	EXTERNAL ROUTINE G_HAT (LIB$SUBX);
+
+    	IF NOT QUEUE_EMPTY (envl [ENVL_Q_RCPTQUE]) THEN
+    	BEGIN
+    	    TRACE ('... original recipient queue not empty when setting up retry queue??');
+    	    WHILE NOT REMQUE_HEAD (envl [ENVL_Q_RCPTQUE], rcpt) DO MEM_FREERCPT (rcpt);
+    	END;
+
+    	envl [ENVL_L_RCPTCOUNT] = 0;
+    	WHILE NOT REMQUE (.RETRY [QUE_L_HEAD], RCPT) DO
+    	BEGIN
+    	    RCPT [RCPT_W_CNT1] = .RCPT [RCPT_W_CNT1] + 1;
+    	    INSQUE_TAIL (.RCPT, envl [ENVL_Q_RCPTQUE]);
+    	    envl [ENVL_L_RCPTCOUNT] = .envl [ENVL_L_RCPTCOUNT] + 1;
+    	END;
+   	status = WRITE_ENVELOPE (.QCTX, QENT, %ASCID'SITE_INFO', envl);
+	IF NOT(.status)
+	THEN
+	    ALARM ('MX SITE: error writing new SITE_INFO file for entry !UL: !XL',
+			.qent [QENT_L_ENTNUM], status);
+
+    	QENT [QENT_L_STATUS] = FLQ_K_STRDY;
+    	QENT [QENT_L_SIZE] = .MSG_SIZE * .envl [ENVL_L_RCPTCOUNT];
+    	QENT [QENT_V_DELAY] = 1;
+    	QENT [QENT_V_LOCK] = 0;
+
+    	$GETTIM (TIMADR=NOWTIM);
+    	LIB$SUBX (NOWTIM, SITE_INFO [SITE_Q_RETRY], QENT [QENT_Q_DLYDT]);
+
+    	TRACE ('  !UL rcpts need retry, next try !%D', .envl [ENVL_L_RCPTCOUNT], QENT [QENT_Q_DLYDT]);
+
+    	FLQ_UPDATE (QCTX, QENT);
+
+    END;
+
+    WHILE NOT REMQUE (.HDRQ [QUE_L_HEAD], TXT) DO FREETXT (TXT);
+    DISPOSE_ENVELOPE (envl);
+
+    FREE_STRINGS (STR, USR, STR2);
+
+    TRACE_CLOSE;
+
+    SS$_NORMAL
+
+END; ! PROCESS
+
+END
+ELUDOM
